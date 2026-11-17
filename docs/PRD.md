@@ -40,7 +40,11 @@ This product is not a Claude/Anthropic clone and should not copy protected asset
 
 Design pattern: left sidebar / primary session / collapsible right evidence panel. Terminal and editor are embedded or delegated to the developer's IDE; do not build a full IDE in MVP.
 
-## 6. Functional requirements and versions
+## 6. Full-workflow language control (zh-TW / en-US)
+
+AgentDock must support **switching the language of the entire developer-facing workflow**: UI, agent explanations, task plans, advisor/subagent/reviewer prompts, skill output styles, GitHub PR/Issue narratives, CI explanations and Session Sentinel updates. This is separate from source code language, which should not change because a UI locale changed. Initial locales: Traditional Chinese (Taiwan, `zh-TW`) and English (`en-US`), with global/project/session overrides and an optional explicit per-task locale. Apply only through supported, trusted context APIs; do not silently rewrite external `SKILL.md`, `CLAUDE.md`, `AGENTS.md` or opaque vendor system prompts. Expose capability-based applied/pending/best-effort/unsupported status. Requirements and safety tests: [Language Policy](architecture/language-policy.md), [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
+
+## 7. Functional requirements and versions
 
 ### MVP — usable, safe desktop client
 
@@ -70,9 +74,10 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 - Event-driven background status reporting; polls should not incur model fees.
 - Token/cache statistics and controllable API budgets; subscription quotas marked unknown.
 - Scheduler, bounded concurrency, resume on provider throttling, explicit task deadlines.
+- A future adaptive execution selector inspired by [Copilot Fusion](research/copilot-fusion.md): Single, bounded Cascade and read-only Critique; allow explicit Manual mode and provider-owned Fusion tiers via a supported SDK adapter. Do not claim vendor internals are configurable.
 - Objective benchmarks comparing baseline with orchestrated agent configurations.
 
-## 7. Non-functional requirements
+## 8. Non-functional requirements
 
 - No hidden tool execution or secret exfiltration. Scope tools to allowed workspaces.
 - UI closure must not silently cancel *remote, explicitly persistent* work; local process lifecycle should be explicit.
@@ -82,7 +87,7 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 - Avoid runtime versions that unnecessarily require heavyweight system-wide modifications.
 - Accessibility: keyboard-first navigation and labels, non-color-only status cues.
 
-## 8. Product exclusions for MVP
+## 9. Product exclusions for MVP
 
 - Reimplementing Claude Code, Codex, or Octomind internals.
 - Full IDE or cross-platform mobile client.
@@ -90,7 +95,7 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 - Guaranteed 24/7 cloud infrastructure or exact subscription quota measurement.
 - Rebranding or copying proprietary Claude UI artwork/assets.
 
-## 9. Success gates
+## 10. Success gates
 
 - Two independently configured agents can complete a scripted task end-to-end.
 - Concurrent tasks in distinct worktrees cannot accidentally overwrite each other.

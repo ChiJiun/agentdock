@@ -27,13 +27,21 @@ flowchart TB
 
 The UI does not launch arbitrary shell commands. It calls typed Rust commands. All tool execution, approvals, task scopes and session transitions are mediated by the relevant backend boundary.
 
+## Multilingual instruction and context boundary
+
+The host will own a configurable [Language Policy / Context Composition Layer](architecture/language-policy.md). Distinguish deterministic `uiLocale`, response `workflowLocale`, and generated-prose `artifactLocale`; initially support `zh-TW` and `en-US`. When an external ACP/SDK agent advertises compatible instruction capabilities, pass the effective language preference without replacing hidden system prompts or mutating Skills. Unavailable capabilities must be disclosed; raw tool output, code, commands and repository-specific instructions remain intact. Session Sentinel's UI language updates must not trigger paid model calls.
+
 ## Runtime split
 
 **External ACP agents:** Claude Code, Codex, Octomind, etc. remain owners of their proprietary/native prompt loops, model usage, context, internal tools and authentication. ACP capabilities are negotiated per adapter; no promise to override opaque model routing.
 
 **AgentDock orchestration:** project/worktree selection, task history, UI timeline, approvals for host-controlled operations, independent review, CI flow, work scheduling and remote connectivity.
 
+**Copilot SDK-backed adapter (research only):** evaluate the official MIT-licensed Rust Copilot SDK as a distinct integration path for the separately distributed Copilot Runtime and Copilot Fusion tiers. This does not grant control over Fusion's internal model orchestration or permission to copy the proprietary runtime source. See [Copilot Fusion research](research/copilot-fusion.md).
+
 **Optional native agent:** future extension only if ACP agents cannot satisfy cost routing/observability; never a prerequisite for the MVP.
+
+**Language context boundary:** resolve effective `zh-TW` / `en-US` preferences at Global → Project → Session → Task scopes, pass bounded language overlays only through supported Agent capabilities, and never rewrite raw Skill source or backend permission instructions. See [Language Policy](architecture/language-policy.md) and [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
 
 ## Rust module plan (initial)
 

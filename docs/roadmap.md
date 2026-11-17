@@ -16,14 +16,22 @@ Status: proposal; not a promise of completion dates.
 ## Initial work order
 
 1. License/provenance / precise upstream migration decision.
-2. Define UX states + design tokens and screen map.
+2. Define UX states + design tokens and screen map, including zh-TW/en-US labels and the [Language Policy](architecture/language-policy.md) for task/skill/prompt outputs.
 3. Rust & Tauri scaffold with typed front/back boundary.
 4. ACP mock first and supported real adapter compatibility matrix.
 5. Storage and approval gates before unrestricted real-agent tools.
 6. Worktree and change review.
 7. GitHub integration with human confirmation before pushes/merges.
 8. Remote worker after reliable local tasks.
-9. Provider routing & advanced token optimizations after metrics.
+9. Provider routing & advanced token optimizations after metrics, informed by [Copilot Fusion research](research/copilot-fusion.md) (Single/Cascade/Critique, cache-aware context, independent review). Prototype the optional Rust Copilot SDK adapter separately before considering deeper runtime reuse.
+
+## Language release gate
+
+- UI can switch between `zh-TW` and `en-US` without reloading agent state or triggering LLM calls.
+- Owned role templates and simulated Session Sentinel summaries use the selected workflow locale.
+- External ACP/SDK language policy is only reported as applied if the adapter confirms compatible support; prompt/Skill overrides are never assumed.
+- Source code, raw CI logs, commands and original Skill files remain unchanged by language switching.
+- A language preference change never changes authorization/approval rules.
 
 ## MVP Definition of Done
 

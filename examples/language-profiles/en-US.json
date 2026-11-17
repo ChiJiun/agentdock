@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "English",
+  "uiLocale": "en-US",
+  "workflowLocale": "en-US",
+  "outputs": {
+    "codeComments": "preserve-original"
+  },
+  "skills": {
+    "mode": "preserve-source-with-overlay",
+    "allowModifySource": false
+  }
+}

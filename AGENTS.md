@@ -8,6 +8,7 @@
 - Never copy Claude/Anthropic proprietary source or brand assets. UX may be inspired by interaction patterns.
 - Do not import AGPL-3.0 Forge source or adapt it into project files without explicit licensing decision.
 - Respect ACP external agent runtime ownership: no fake subscription quota metrics, no hidden model or tool interception.
+- Support `zh-TW` and `en-US` throughout agent-facing output where the chosen adapter allows it; read `docs/architecture/language-policy.md`. Do not rewrite raw Skill, CLAUDE.md or AGENTS.md content just to localize. Localizing prose must not alter code identifiers, logs, tool permissions or safety instructions.
 - Privileged tool operations and scope restrictions belong in Rust/backend policy; do not rely only on Prompt or frontend control.
 - No automatic merge, destructive Git operations, deployment or production side effects unless explicitly approved.
 - Do not read or print `.env`, credentials, SSH private keys or access tokens.

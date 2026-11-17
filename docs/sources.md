@@ -22,6 +22,7 @@ Snapshot: 2026-11-17. Repository HEADs and licenses were checked from GitHub API
 | [Octos](https://github.com/octos-org/octos) | `d1863004f8c0` | Apache-2.0 | Remote/daemon scheduling and durable workflow reference |
 | [Aether](https://github.com/contextbridge/aether) | `b847dc863bed` | MIT | Embeddable Rust agent/context modules reference |
 | [ACP Rust SDK](https://github.com/agentclientprotocol/rust-sdk) | `6a4a95cabed1` | Apache-2.0 | Preferred protocol implementation candidate |
+| [Copilot SDK (transitioning to Microsoft)](https://github.com/github/copilot-sdk) | `bc4f9a19d190` (Microsoft org API, 2026-11-17) | MIT SDK code | **Alternate, SDK-managed Copilot Runtime**; vendor runtime artifact licensing/redistribution must be reviewed separately |
 
 These are short commit prefixes for orientation; pin and record **full SHA** when actually vendoring.
 
@@ -52,6 +53,10 @@ These are short commit prefixes for orientation; pin and record **full SHA** whe
 | 3 | [Forge `crates/forge-core/`](https://github.com/Adulari/forge/tree/main/crates/forge-core) | Read for routing/queue inspiration | **Research only** due AGPL |
 | 3 | [Forge `crates/forge-provider/`](https://github.com/Adulari/forge/tree/main/crates/forge-provider) | Provider fallback ideas | **Research only** due AGPL |
 
+## Additional research: Copilot Fusion and SDK
+
+The [Copilot Fusion research](research/copilot-fusion.md) compares Single, Cascade and Critique routing, vendor-managed Standard/High/Max tiers, cache-aware escalation and the public Rust Copilot SDK. This is a candidate **external/SDK-backed harness**, not an Acpira component and not proof that the proprietary Rust Copilot runtime can be copied or modified. The SDK has a separately managed/bundled runtime binary whose redistribution conditions must be checked before packaging.
+
 ## License and compatibility guardrails
 
 - MIT: retain the upstream copyright and license notices for copied material.
@@ -72,6 +77,17 @@ These are short commit prefixes for orientation; pin and record **full SHA** whe
 - OS support and security review
 - Tests (unit/integration/e2e) and CI result
 - Upstream tracking and update owner
+
+## Model orchestration research references
+
+- [GitHub Copilot Fusion (GA, 2026-10-28)](https://github.blog/changelog/2026-10-28-route-and-orchestrate-models-with-github-copilot-fusion/) — three dynamic execution patterns; this is not a standalone open-source coding harness.
+- [Official Copilot Fusion runtime and cost documentation](https://docs.github.com/en/copilot/concepts/models/copilot-fusion) — per-prompt workflow routing, cache-aware switching, scoped reviewer context, provider health and per-leg costs.
+- [GitHub Project HydraFusion technical article](https://github.blog/ai-and-ml/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) — bounded legs, independent read-only critique, no patch on failed validation, and complete cost attribution.
+- [Claude Code Advisor](https://code.claude.com/docs/en/advisor) — experimental server-side consultation with full transcript; separate from multi-model orchestration.
+- [Claude Code custom subagents](https://code.claude.com/docs/en/sub-agents) — scoped context, independent model/tool restrictions and usage accounting.
+- [AgentDock research synthesis and proposed design](research/model-orchestration-claude-advisor-copilot-fusion.md).
+
+These are design references, **not source-code migration candidates**. Do not copy GitHub/Anthropic proprietary internals; use public APIs and ACP, preserving each external runtime's authority.
 
 ## UX and protocol references
 
