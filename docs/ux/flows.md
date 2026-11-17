@@ -44,9 +44,10 @@ Rules: no shortcut approves; inbox rows cannot approve; after restart a pending 
 1. Main session “Implement attention inbox popover” spawns three background agents (explore, write tests, independent review). They appear nested under it with the layers glyph.
 2. “Write unit tests…” finishes → status **Done · new**, badge +1, polite announcement “Background agent finished: …”. Collapsed parent shows “1 new”.
 3. User opens it (from inbox, switcher or tree) and reads the result → it is now *viewed*.
-4. User navigates anywhere else → the sub-task is archived, toast “Archived sub-task … · Undo”. Parent shows “Show 3 archived sub-tasks”.
+4. User navigates anywhere else → the sub-task is archived, toast “Archived sub-task … · Undo”. Parent shows “Show 3 archived sub-tasks”. Undo puts focus on the restored row; the archived sub-task’s own header also offers **Unarchive**. A restored sub-task is not auto-archived again.
 5. A **failed** sub-task (“Collect capability flags…”) stays visible until the user retries or archives it.
 6. The main session is never archived automatically, even when all sub-tasks are done.
+7. Bulk path: in the inbox, “Mark completed as reviewed (N)” clears completed/cancelled rows from “to review” (Undo in a toast) but archives nothing — those sub-tasks stay under the parent as “Done” until the user opens them and moves on. Failed and interrupted rows stay in the inbox.
 
 Prototype: open “Explore existing session model”, then any other session → archived with Undo. The tests sub-task finishes by itself ~25 s after load.
 

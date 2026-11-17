@@ -9,7 +9,7 @@ Status: Draft for issue #2. Terms follow `docs/architecture.md` (`Project`, `Tas
 | Repository / project | `Project` | A local Git repository (or a remote path on a worker). Grouping key in the sidebar. |
 | Task | `Task` | One objective with one worktree and branch. The user mostly sees it through its **main session**. |
 | Main session | first `Session` of a `Task` | The conversation the user steers. Never auto-archived; new instructions can be added at any time. |
-| Sub-task | additional `Session`s of the same `Task` (implementation helpers, explorer, tester, independent reviewer) | Shown nested under the main session as **background agents**. Auto-archive after their result is viewed (see [states-and-indicators.md §5](states-and-indicators.md#5-main-sessions-sub-tasks-and-archiving)). |
+| Sub-task | additional `Session`s of the same `Task` (implementation helpers, explorer, tester, independent reviewer) | Shown nested under the main session as **background agents**. Auto-archive after their result has been opened and the user moves on (see [states-and-indicators.md §5](states-and-indicators.md#5-main-sessions-sub-tasks-and-archiving)). |
 | Change set | worktree diff vs base branch | Shown in the review panel; never edited in place (no IDE). |
 | Check | `Check` | Evidence from commands the workbench ran; agent prose is not evidence. |
 | Approval | `Approval` | A blocking decision with operation, scope, rule and result. |
@@ -68,10 +68,10 @@ Purpose: start work and see what needs you across all projects.
 Repository metadata (path, base branch, dirty files), **runtime selection** (default agent, local vs remote target), **worktrees** table (path, branch, sessions, state; cleanup requires explicit confirmation, V1.0), sessions list (including sub-tasks).
 
 ### Session
-- **Header**: breadcrumb (project / branch · worktree · “Sub-task of …” link), title, chips (status, kind, agent + model *as reported by the adapter*), actions (Stop while running, **Changes +a −d** toggles the review panel).
-- **Sticky attention banner**: only while a pending approval/question card is scrolled out of view; “Show” scrolls to and focuses the card (not its Approve button).
+- **Header**: breadcrumb (project / branch · worktree · “Sub-task of …” link), title, chips (status, kind, agent + model *as reported by the adapter*, “Archived” when archived), actions (**Unarchive** when archived, Stop while running, **Changes +a −d** toggles the review panel).
+- **Sticky attention banner**: only while a pending approval/question card is scrolled out of view; “Show” scrolls to and focuses the card (not its Approve button). The banner is only a pointer: its one-line text may be truncated (full text in a tooltip); the **full command is shown only in the approval card**, which is what the user approves.
 - **Timeline** (`role="log"`): user messages, agent text, plan card, collapsible tool events (collapsed by default, output in monospace), approval cards, question cards, notices (interrupted, quota, remote, cancelled), completion card with “Review changes · N files +a −d” and check summary.
-- **Composer**: suggestion chips (“Suggested next”), ghost text for the first suggestion, Tab inserts it (only when the composer is empty and the ghost is visible), Enter sends / steers while running, Stop. Drafts are kept per session.
+- **Composer**: suggestion chips (“Suggested next”), ghost text for the first suggestion, Tab or → inserts it (only when the composer is empty and the ghost is visible), Enter sends / steers while running, Stop (placed after Send/Steer in focus order). Drafts are kept per session.
 
 ### Review panel / drawer
 Header: worktree vs base, file count, `+a −d`. Tabs: **Changes** (file list with status letter A/M/D/R + counts → diff), **Checks** (commands the workbench ran, pass/fail with text), **Findings** (reviewer output tagged *Blocking* / *Suggestion*). Footer: “Comment to the agent” → posts into the session. No auto-push, no merge buttons in MVP; PR/CI rows appear in V1.0.

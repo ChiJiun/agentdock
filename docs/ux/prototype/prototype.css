@@ -369,7 +369,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--ad-text-xs)
 .pop-section + .pop-section { border-top: 1px solid var(--ad-border-subtle); }
 .pop-section h3 { font-size: var(--ad-text-xs); color: var(--ad-text-secondary); padding: var(--ad-space-3) var(--ad-space-4); display: flex; align-items: center; gap: var(--ad-space-3); }
 .pop-section h3 .count { font-variant-numeric: tabular-nums; }
-.pop-section h3 .btn { margin-left: auto; }
+.pop-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ad-space-3); padding: var(--ad-space-2) var(--ad-space-4) 0; font-size: var(--ad-text-2xs); }
 .pop-sub { font-size: var(--ad-text-2xs); color: var(--ad-text-tertiary); padding: var(--ad-space-2) var(--ad-space-4); display: flex; gap: var(--ad-space-2); align-items: center; }
 .inbox-row { width: 100%; display: flex; align-items: flex-start; gap: var(--ad-space-4); padding: var(--ad-space-3) var(--ad-space-4); border: 0; border-radius: var(--ad-radius-sm); background: transparent; text-align: left; }
 .inbox-row:hover { background: var(--ad-bg-hover); }

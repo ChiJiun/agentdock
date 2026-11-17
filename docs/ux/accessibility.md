@@ -7,7 +7,7 @@ Status: Draft for issue #2. Target: **WCAG 2.2 AA** on Windows (Narrator, NVDA) 
 | Action | Shortcut | Notes |
 | --- | --- | --- |
 | Quick switcher (switch session / search) | **Ctrl+K** | Pressing again closes it and restores focus. Not opened while another modal is open. |
-| Inbox | **Ctrl+Shift+J** | Toggles; focus goes to the first row. |
+| Inbox | **Ctrl+Shift+J** | Toggles; focus goes to the first row (never to a header action such as “Mark completed as reviewed”); with no rows, to the popover. |
 | Next item that needs you | **Ctrl+J** | First “Needs reply” (excluding the one on screen), else first “New result”. Announces “Nothing needs you right now” otherwise. |
 | Pinned session 1–9 | **Alt+1 … Alt+9** | Focus lands in the composer. |
 | Next / previous region | **F6 / Shift+F6** | Top bar → sidebar → conversation → composer → review panel (skips hidden regions). |
@@ -17,8 +17,8 @@ Status: Draft for issue #2. Target: **WCAG 2.2 AA** on Windows (Narrator, NVDA) 
 | Keyboard shortcuts | **Ctrl+/** | Dialog listing everything here. |
 | Close topmost overlay | **Esc** | Order: dialog → popover → drawer → review overlay. Esc never cancels an agent. |
 | Send / steer | **Enter** in composer | Shift+Enter = newline. Ignored during IME composition. |
-| Insert suggested prompt | **Tab** in composer | Only while the composer is empty **and** the ghost suggestion is visible; otherwise Tab moves focus normally (no trap). Esc hides the ghost for this session. |
-| Stop agent | Stop button | Deliberately no global shortcut in MVP (destructive to work in progress). |
+| Insert suggested prompt | **Tab** in composer (secondary: **→**) | Only while the composer is empty **and** the ghost suggestion is visible; otherwise Tab moves focus normally (no trap) and → moves the caret. Esc hides the ghost for this session. Tab is kept because the owner asked for it; Ctrl+Space is **not** used because it toggles the input method on Windows Chinese IMEs. |
+| Stop agent | Stop button | Deliberately no global shortcut in MVP (destructive to work in progress). In the composer, Stop comes **after** Send/Steer in focus order, so Tab from the composer reaches Steer first and Tab+Enter never cancels the run. |
 | Approve / deny | **No shortcut** | Requires focusing the button in the approval card. Prevents approving by accident or by a keystroke meant for another window. |
 
 Shortcuts are listed in `aria-keyshortcuts` on their controls and in tooltips. All are remappable later (Settings → Keyboard); none use AltGr-prone Ctrl+Alt combinations.
@@ -40,7 +40,7 @@ Shortcuts are listed in `aria-keyshortcuts` on their controls and in tooltips. A
 - Does not open while another modal dialog is open; other modal shortcuts do nothing while it is open.
 
 ### Inbox and usage popovers (non-modal `dialog`)
-- Open: focus first row (inbox) or the popover itself (usage). ↑/↓/Home/End move between inbox rows; Tab cycles inside; Esc closes and returns focus to the trigger button; clicking outside closes without stealing focus.
+- Open: focus the first row (inbox) — never a section action such as “Mark completed as reviewed”, which comes after the rows — or the popover itself (usage, or an inbox with no rows). ↑/↓/Home/End move between inbox rows; Tab cycles inside (and stays on the popover when it has no controls); Esc closes and returns focus to the trigger button; clicking outside closes without stealing focus.
 - `aria-expanded` on the trigger reflects state.
 
 ### Review panel
@@ -48,7 +48,7 @@ Shortcuts are listed in `aria-keyshortcuts` on their controls and in tooltips. A
 - Opening moves focus to the panel heading; closing returns focus to the control that opened it (or the header “Changes” button).
 
 ### Drawers (narrow layouts)
-- Sidebar and review drawers are modal: content behind is `inert` and covered by a scrim; Esc or scrim click closes and restores focus. Choosing a session in the sidebar drawer closes it and focuses the session heading.
+- Sidebar and review drawers are modal: everything behind them — **including the top bar** — is `inert` and covered by a scrim; F6 stays inside the open drawer; Esc, Ctrl+B / Ctrl+Shift+G or scrim click closes and restores focus. Choosing a session in the sidebar drawer closes it and focuses the session heading.
 
 ### Overlays — one at a time
 Opening the switcher closes popovers; dialogs block global shortcuts except Esc; the inbox cannot open over the switcher.
@@ -104,4 +104,25 @@ Not covered by the script: colours composited over the semi-transparent scrim, s
 - **Text size**: UI text size setting scales all `--ad-text-*` tokens together (badge included).
 - **Language**: `lang` set on the document; CJK text uses the prose line-height token (1.6). UI copy in English first; strings externalised for zh-TW (later issue).
 - **Screen-reader names** for icon-only buttons; decorative SVGs are `aria-hidden`.
-- **Timeouts**: toasts with actions stay ≥ 8 s and are also reachable via the session/inbox; nothing important exists only in a toast.
+- **Timeouts**: toasts with actions stay ≥ 8 s and are also reachable via the session/inbox; nothing important exists only in a toast (archive → **Unarchive** in the session header; “Mark completed as reviewed” → the sessions stay in the sidebar and Ctrl+K). A toast that disappears while focused, or whose action removes it, moves focus to a meaningful target (restored row or session heading), never to the page body.
+
+## 7. Shortcut conflicts in the WebView2 host (hand-off to issue #4)
+
+The prototype runs in a browser, where several of these keys belong to the browser. In the Tauri app on Windows the page runs in WebView2, which by default also handles some browser accelerator keys. Keys at risk:
+
+| Key | Chromium / Edge default | AgentDock use |
+| --- | --- | --- |
+| Ctrl+J | Downloads | Next item that needs you |
+| Ctrl+Shift+J | DevTools console (when DevTools are enabled) | Inbox |
+| Ctrl+Shift+G | Find previous | Toggle review panel |
+| F6 | Focus address bar / cycle browser panes | Next region |
+| Ctrl+K | Search (address bar) | Quick switcher |
+| Ctrl+N | New window | New task |
+| Ctrl+F, Ctrl+P, F5, Ctrl+R | Find, print, reload | Not used (reload must be blocked in the app) |
+
+Requirements for issue #4:
+
+1. Disable browser accelerator keys for the main window (WebView2 `CoreWebView2Settings.AreBrowserAcceleratorKeysEnabled = false`, through whatever Tauri/wry option exposes it for the pinned version) and disable DevTools in release builds.
+2. Register application shortcuts in one place (later remappable in Settings → Keyboard), not ad hoc per component.
+3. Add a **shortcut smoke test** in the real WebView2 window: each key in [§1](#1-keyboard-map) performs the AgentDock action and does not trigger the browser default; Esc, Tab, Enter and the IME keys behave as specified; Ctrl+Space and Shift (IME toggles) are left to the OS.
+4. If a key cannot be reclaimed reliably, change the AgentDock binding and update §1 rather than shipping a conflict. Tab-to-accept stays (owner requirement); → remains the secondary accept key.

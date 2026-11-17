@@ -13,8 +13,8 @@ Several scenarios are adapted from review rounds of an earlier experiment (ChiJi
 | ID | Criterion | Prototype |
 | --- | --- | --- |
 | UX-01 | At ≥ 1280 px the shell shows top bar, sidebar, main column and a docked review panel at the same time. | V |
-| UX-02 | Between 960 and 1279 px the review panel opens as an overlay drawer with a scrim; content behind is inert. | V |
-| UX-03 | Below 960 px the sidebar is a modal drawer (Ctrl+B / ≡); choosing a session closes it and focuses the session heading; Esc restores the previous focus. | V |
+| UX-02 | Between 960 and 1279 px the review panel opens as an overlay drawer with a scrim; everything behind it, including the top bar, is inert and F6 stays inside the drawer. | V |
+| UX-03 | Below 960 px the sidebar is a modal drawer (Ctrl+B / ≡); the top bar and main column are inert while it is open (Tab and F6 stay in the drawer); choosing a session closes it and focuses the session heading; Esc restores the previous focus. | V |
 | UX-04 | At 375 px width there is no horizontal page scrolling (code/diff blocks may scroll internally). | V |
 | UX-05 | There is no row of per-session tab buttons; switching uses sidebar tree, pinned shortcuts, inbox and quick switcher. | V |
 | UX-06 | Pinned sessions are reachable with Alt+1…9 and appear once (Pinned group only). | D |
@@ -25,12 +25,14 @@ Several scenarios are adapted from review rounds of an earlier experiment (ChiJi
 | ID | Criterion | Prototype |
 | --- | --- | --- |
 | UX-10 | Inbox lists exactly three sections — Needs your reply, New results to review, Running in background — each with heading, glyph and count. | V |
-| UX-11 | Badge count = needs reply + new results; background work never increases it; hidden at 0; `99+` above 99. | D (0 and 99+ not exercised) |
+| UX-11 | Badge count = needs reply + new results; background work never increases it; hidden at 0; `99+` above 99. | V (count, hidden at 0 with background still running); D (99+ not exercised) |
 | UX-12 | When anything needs a reply, the bell glyph changes and the badge becomes square with a “!” prefix (distinguishable in greyscale). | V |
 | UX-13 | Approval/question sessions count as “needs reply” even when they are the session on screen; other states of the on-screen session are not listed. | D |
 | UX-14 | Failed/interrupted/cancelled/completed sessions stay in “to review” until viewed; “viewed” is persisted across restarts. | D (persistence S) |
-| UX-15 | Archived sessions and sessions of removed projects are never listed; sidebar collapse or filters do not hide inbox items. | D (removed projects S) |
-| UX-16 | Inbox opens with focus on the first row; ↑/↓/Home/End move; Enter opens the session and closes the inbox; Esc closes and returns focus to the bell. | V |
+| UX-15 | Archived sessions and sessions of removed projects are never listed — except an archived session that is awaiting the user, which is listed under Needs reply (and unarchived by the app); sidebar collapse or filters do not hide inbox items. | D (rule order in `classify`; no prototype data path makes an archived session wait); S (auto-unarchive, removed projects) |
+| UX-16 | Inbox opens with focus on the first row — also when “Needs your reply” is empty, and never on a section action; with no rows at all, on the popover; ↑/↓/Home/End move; Enter opens the session and closes the inbox; Esc closes and returns focus to the bell. | V (incl. empty Needs-reply after deny + answer); D (no-rows case) |
+| UX-21 | “Mark completed as reviewed (N)” comes after the review rows, affects only completed/cancelled results (failed, quota, auth and interrupted stay), archives nothing, keeps focus in the inbox on the first remaining row, and offers Undo in a toast. | V |
+| UX-22 | A remote session that is disconnected with a last known awaiting state stays in Needs reply, labelled “disconnected — last known”, with Approve/Deny disabled until the worker confirms on reconnect. | S |
 | UX-17 | Inbox rows cannot approve or deny; they only open the session. | V |
 | UX-18 | Ctrl+J opens the next item that needs the user (reply first, then review). | D |
 | UX-19 | The inbox’s accessible name states all three counts; count labels avoid locale plural forms. | D |
@@ -55,12 +57,14 @@ Several scenarios are adapted from review rounds of an earlier experiment (ChiJi
 
 | ID | Criterion | Prototype |
 | --- | --- | --- |
-| UX-40 | Main sessions are never archived automatically. | V |
-| UX-41 | A completed/cancelled sub-task is archived only after its result was viewed and the user navigated away; a toast offers Undo for ≥ 8 s. | V |
+| UX-40 | Main sessions are never archived automatically; manual archive is offered only in a terminal state. | V (auto); S (manual archive) |
+| UX-41 | A completed/cancelled sub-task is archived only after its result was opened and the user navigated away; a toast offers Undo for ≥ 8 s; Undo moves focus to the restored row (or the session heading), never to the page body; a restored sub-task is not auto-archived again. | V |
 | UX-42 | Failed and interrupted sub-tasks are never auto-archived. | D |
 | UX-43 | A collapsed main session summarises its sub-tasks (“n need you · n new · n running”) and shows the attention glyph if any child needs a reply. | V |
 | UX-44 | Archived sub-tasks are listed behind “Show N archived sub-tasks” under the parent. | V |
 | UX-45 | Rows never disappear while focused, hovered or on screen. | D |
+| UX-46 | Every archived session shows an “Archived” chip and an **Unarchive** button in its header; Unarchive moves focus to the session heading and the session is not auto-archived again. | V |
+| UX-47 | An archived session that enters an awaiting state is unarchived automatically. | S |
 
 ## Session view and long transcripts
 
@@ -70,9 +74,10 @@ Several scenarios are adapted from review rounds of an earlier experiment (ChiJi
 | UX-51 | While the user is at the bottom, new events auto-follow; when scrolled up, the view stays put and a “N new below · Jump to latest” pill appears. | D (auto-follow V; pill logic present) |
 | UX-52 | Streaming text is not announced token by token (`role="log"`, `aria-live="off"`); turn completions and background completions are announced politely; approvals assertively. | D (approval announcement S) |
 | UX-53 | Tool events are collapsed by default and expandable by keyboard. | D |
-| UX-54 | A pending approval/question that is scrolled out of view shows a sticky banner; “Show” scrolls to and focuses the card, not its Approve button. | V |
+| UX-54 | A pending approval/question that is scrolled out of view shows a sticky banner; “Show” scrolls to and focuses the card, not its Approve button. The banner may truncate (full text as tooltip); the full command appears only in the card. | V |
 | UX-55 | ≥ 400 events render without layout breakage in the prototype; the app virtualises and stays responsive at 10,000 events (input lag < 100 ms). | V (≈410 events) / S (10k) |
-| UX-56 | Composer: Enter sends/steers, Shift+Enter newline; Tab inserts the ghost suggestion only when the composer is empty and the ghost is shown, otherwise moves focus; Esc hides the ghost. | V |
+| UX-56 | Composer: Enter sends/steers, Shift+Enter newline; Tab (or →) inserts the ghost suggestion only when the composer is empty and the ghost is shown, otherwise Tab moves focus and → moves the caret; Esc hides the ghost. | V |
+| UX-59 | While running, the next Tab stop after the composer is Steer, then Stop; no key combination from the composer reaches Stop first. | V |
 | UX-57 | Up to three “Suggested next” prompts appear per session state and never cost model tokens unless the adapter supplies them. | D |
 | UX-58 | Drafts are kept per session when switching. | D |
 
@@ -119,5 +124,11 @@ Several scenarios are adapted from review rounds of an earlier experiment (ChiJi
 
 | ID | Criterion | Prototype |
 | --- | --- | --- |
-| UX-90 | No Claude/Anthropic logos, icons, illustrations, fonts, colour palette, copywriting or source code are used; product names appear only as plain-text adapter labels with neutral monograms. | V (by authoring; reviewer to confirm) |
+| UX-90 | No Claude/Anthropic logos, icons, illustrations, fonts, colour palette, copywriting or source code are used; product names appear only as plain-text adapter labels with neutral monograms. | D (author’s self-check; to be confirmed by an independent reviewer) |
 | UX-91 | Third-party icon/library licences are recorded before adoption (Lucide: ISC AND MIT). | V |
+
+## Desktop host (hand-off to issue #4)
+
+| ID | Criterion | Prototype |
+| --- | --- | --- |
+| UX-95 | In the Tauri/WebView2 window, every shortcut in [accessibility.md §1](accessibility.md#1-keyboard-map) performs the AgentDock action and not the browser default (browser accelerator keys disabled; see [§7](accessibility.md#7-shortcut-conflicts-in-the-webview2-host-hand-off-to-issue-4)); a shortcut smoke test covers it. | S |

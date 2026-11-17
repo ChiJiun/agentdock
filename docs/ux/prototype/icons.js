@@ -2,7 +2,7 @@
  * AgentDock prototype icons: original placeholder glyphs drawn for this
  * repository (16x16 grid, 1.5px stroke, currentColor). They are NOT copied
  * from any icon library or from Claude/Anthropic products. The production app
- * is expected to use Lucide (ISC); see docs/ux/design-system.md#icons.
+ * is expected to use Lucide (ISC AND MIT); see docs/ux/design-system.md#6-icons.
  */
 (function () {
   'use strict';

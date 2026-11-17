@@ -18,6 +18,7 @@ A user with no colour perception, in Windows High Contrast, or reading a greysca
 | --- | --- | --- | --- | --- |
 | `running` | open circle with a rotating arc (static three-quarter arc when reduced motion) | Running | `status-running` | Background (if not on screen) |
 | `queued` | outlined clock | Queued | `status-neutral` | Background |
+| `paused` (architecture `Paused`) | outlined clock | Paused | `status-neutral` | Background (labelled “Paused”; not counted) |
 | `awaiting-approval` | **filled diamond with “!”** | Needs approval | `status-attention` | **Needs reply** |
 | `awaiting-input` (agent asked a question) | **filled speech bubble with “?”** | Needs reply | `status-attention` | **Needs reply** |
 | `completed`, not yet viewed | **filled circle with check** | Done · new | `status-success` | Needs review |
@@ -27,10 +28,10 @@ A user with no colour perception, in Windows High Contrast, or reading a greysca
 | `failed` + auth | key | Sign-in needed | `status-danger` | Needs review until viewed |
 | `interrupted` | dashed circle with pause bars | Interrupted | `status-neutral` | Needs review until viewed |
 | `cancelled` | circle with slash | Cancelled | `status-neutral` | Needs review until viewed |
-| disconnected (remote, overlay) | signal arcs with slash | Disconnected · last known: *state* | `status-neutral` | unchanged from last known |
+| disconnected (remote, overlay) | signal arcs with slash | Disconnected · last known: *state* | `status-neutral` | Classified by the last known state (see §4, rule 1a) |
 | archived | archive box | Archived | `status-neutral` | — |
 
-Mapping to the architecture state machine (`docs/architecture.md`): `Queued`/`Preparing` → queued; `Running`/`Verifying`/`Review`/`PR`/`CI` → running with a phase sub-label (e.g. “Running · CI”); `AwaitingApproval` → awaiting-approval; `Complete` → completed; `Interrupted`/`Failed`/`Cancelled` → same names; `Paused` → queued glyph with label “Paused”. `awaiting-input` is a UI-level split of “agent is blocked on the human” that the session/event model must expose separately from approvals (open question for issue #4 / contracts).
+Mapping to the architecture state machine (`docs/architecture.md`): `Queued`/`Preparing` → queued; `Running`/`Verifying`/`Review`/`PR`/`CI` → running with a phase sub-label (e.g. “Running · CI”); `AwaitingApproval` → awaiting-approval; `Complete` → completed; `Interrupted`/`Failed`/`Cancelled` → same names; `Paused` → `paused` (queued glyph with label “Paused”). `awaiting-input` is a UI-level split of “agent is blocked on the human” that the session/event model must expose separately from approvals (open question for issue #4 / contracts).
 
 Glyphs live in [`prototype/icons.js`](prototype/icons.js) as original placeholders; production icons follow [design-system.md → Icons](design-system.md#6-icons).
 
@@ -58,16 +59,24 @@ Remote connection sub-states (overlay on any status): `connected · last event N
 
 Classification is a pure function of session data plus “which session is on screen”. Evaluated in order; first match wins:
 
-1. Archived → not listed.
-2. `awaiting-approval` or `awaiting-input` → **Needs reply** — *including the session currently on screen*, because the card may be scrolled away and the agent is blocked.
+1. `awaiting-approval` or `awaiting-input` → **Needs reply** — *including the session currently on screen* (the card may be scrolled away and the agent is blocked) and *including an archived session*. Entering an awaiting state also unarchives the session (§5), so in practice an archived session never waits silently; this rule is the safety net if the two events race.
+   - 1a. **Remote and disconnected** with last known state `awaiting-*` → still **Needs reply** and counted, with the subtitle “Approval · disconnected — last known”. Opening it shows the card with Approve/Deny **disabled** and the text “Reconnect to respond. The worker decides what is still pending.” On reconnect the card refreshes from the worker before any button is enabled; an approval that the worker no longer reports is shown as “No longer pending”, never as approved.
+2. Archived → not listed.
 3. The session on screen → not listed (you are looking at it).
 4. Terminal state (`completed`, `failed`, `interrupted`, `cancelled`) and **not viewed** → **New results to review**.
-5. `running` or `queued` → **Running in background**.
+5. `running`, `queued` or `paused` → **Running in background** (paused rows carry the “Paused” label; a disconnected remote row says “last known: Running”).
 6. Otherwise → not listed.
 
 Scope: sessions of projects that are registered in AgentDock (removed projects excluded), all projects regardless of sidebar collapse or filter state, sub-tasks included (row subtitle names the parent).
 
-“Viewed” means: the session was opened while the window had focus and its latest output was rendered, or the user chose **Mark reviewed** / **Mark all reviewed**. It is persisted (SQLite), so errors stay in “to review” until seen, not “until the next success”.
+“Viewed” means: the session was opened while the window had focus and its latest output was rendered, or the user chose **Mark reviewed** (one row) / **Mark completed as reviewed** (bulk). It is persisted (SQLite), so errors stay in “to review” until seen, not “until the next success”.
+
+**Bulk “Mark completed as reviewed”** (in the inbox, replaces the earlier “Mark all reviewed”):
+
+- applies only to `completed` and `cancelled` results; `failed` (including quota and auth) and `interrupted` results stay listed until opened, because they need a decision (retry, switch agent, start from history);
+- **never archives** anything — a sub-task is archived only after its result was actually opened (§5), so marked sub-tasks stay visible under their parent as “Done”;
+- is never the initial focus of the inbox (the first row is; see [accessibility.md](accessibility.md#inbox-and-usage-popovers-non-modal-dialog));
+- confirms with a toast “Marked as reviewed: N” with **Undo** (8 s), and announces politely. Undo restores the rows to “to review”. The toast is not the only way back: the same sessions remain reachable in the sidebar and through Ctrl+K.
 
 ### Badge semantics (top-bar inbox button)
 
@@ -84,16 +93,19 @@ Scope: sessions of projects that are registered in AgentDock (removed projects e
 
 ### Inbox popover contents
 
-Three sections in fixed order, each with a heading, glyph and count: **Needs your reply**, **New results to review** (with “Mark all reviewed”), **Running in background** (grouped by kind). Rows: status glyph, title, relative time, subtitle “*reason* · *project* › *parent*”. Activating a row opens the session and closes the popover. Approve/deny is **not** offered in the inbox: approvals need the full command, scope and rule, which only the session card shows.
+Three sections in fixed order, each with a heading, glyph and count: **Needs your reply**, **New results to review** (followed by “Mark completed as reviewed (N)” when N ≥ 1), **Running in background** (grouped by kind). Opening the inbox focuses the first row; with no rows at all, the popover itself. Rows: status glyph, title, relative time, subtitle “*reason* · *project* › *parent*”. Activating a row opens the session and closes the popover. Approve/deny is **not** offered in the inbox: approvals need the full command, scope and rule, which only the session card shows.
 
 ## 5. Main sessions, sub-tasks and archiving
 
-- **Main sessions never auto-archive.** They can receive new tasks at any time. Archive is a manual action with confirmation, and an archived main session is still searchable (Ctrl+K, ranked lower, tagged “archived”).
+- **Main sessions never auto-archive.** They can receive new tasks at any time. Archive is a manual action with confirmation, **offered only in a terminal state** (`completed`, `failed`, `interrupted`, `cancelled`); a running, queued, paused or awaiting session must be stopped first. An archived main session is still searchable (Ctrl+K, ranked lower, tagged “archived”).
+- **Waiting always wins over archived.** If an archived session (main or sub-task) enters `awaiting-approval` or `awaiting-input` — for example a remote worker resumes it — AgentDock unarchives it, shows it in **Needs reply**, and announces it like any other approval. The inbox rule order (§4, rule 1 before rule 2) is the safety net.
 - **Sub-tasks (background agents) auto-archive** only when all hold:
   1. state is `completed` or `cancelled`;
-  2. the result has been viewed (opened, or “Mark reviewed”);
-  3. the user navigates away from it (a row never disappears while focused, hovered or on screen).
-  A toast confirms with **Undo** (8 s) and announces politely.
+  2. the result has been **opened** (rendered on screen). “Mark reviewed” / “Mark completed as reviewed” clear the inbox entry but do **not** satisfy this condition — “collapse only after the result has been seen” means actually seen;
+  3. the user navigates away from it (a row never disappears while focused, hovered or on screen);
+  4. the user has not restored it before (Undo or Unarchive). An explicitly restored sub-task is never auto-archived again; it can still be archived manually.
+  A toast confirms with **Undo** (8 s) and announces politely. After Undo, focus moves to the restored row in the sidebar (or to the session heading if the sidebar is hidden), never to the page body.
+- **Undo is not the only way back.** Every archived session has an **Unarchive** button in its session header (reach it through “Show N archived sub-tasks” or Ctrl+K). A toast that disappears while focused moves focus to the session heading.
 - `failed` and `interrupted` sub-tasks **never auto-archive**; they stay under the parent until the user retries or archives them.
 - Under each expanded main session: live sub-tasks, then a “Show N archived sub-tasks” toggle row. A collapsed main session summarises its children inline: “1 need you · 2 new · 3 running”, plus the attention glyph if any child needs a reply.
 

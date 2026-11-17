@@ -16,12 +16,12 @@ Status: Draft for issue #2. Low-fidelity layout and behaviour. Visual detail liv
 | 6 | Sub-tasks + “Show N archived” | Background agents nested under their main session; viewed completed ones auto-archive. |
 | 7 | “N archived — search with Ctrl+K” | Archived main sessions leave the tree but stay searchable. |
 | 8 | Session header | Breadcrumb, title, status/kind/agent chips, Stop, **Changes +a −d**. |
-| 9 | Sticky attention banner | Only while a pending approval/question card is scrolled away. |
+| 9 | Sticky attention banner | Only while a pending approval/question card is scrolled away. A pointer only: it may truncate; the full command is shown only in the card. |
 | 10 | Tool event cards | Collapsed by default; one line of result; expandable output. |
 | 11 | Approval card | Operation, exact command (wraps), effect, scope, rule; Approve once / Deny; no shortcut. |
 | 12 | Jump-to-latest pill | Appears when new events arrive while scrolled up; shows the count. |
 | 13 | Suggested next prompts | Up to 3 chips; first one also shown as ghost text in the empty composer. |
-| 14 | Composer | Enter send/steer, Shift+Enter newline, **Tab inserts the ghost suggestion** (only when empty), Stop while running. |
+| 14 | Composer | Enter send/steer, Shift+Enter newline, **Tab (or →) inserts the ghost suggestion** (only when empty), Stop while running — placed after Steer so the next Tab stop is never Stop. |
 | 15 | Review tabs | Changes · Checks (n failed) · Findings (n blocking). |
 | 16 | Diff | Unified diff; “+/−” sign column; file header sticky. |
 | 17 | Comment to agent | Posts the review comment into the same session. |
@@ -52,7 +52,7 @@ Status: Draft for issue #2. Low-fidelity layout and behaviour. Visual detail liv
 │◒× Benchmark…     30m │Suggested next: (Focus on…) (Explain…) (…)     │[                       ]  │
 │                      │┌─────────────────────────────────────────────┐│[Send to session]          │
 │                      ││ Focus on the failing test first  [Tab]      ││                           │
-│                      ││                         [■ Stop] [↑ Steer]  ││                           │
+│                      ││                         [↑ Steer] [■ Stop]  ││                           │
 │                      │└─────────────────────────────────────────────┘│                           │
 └──────────────────────┴───────────────────────────────────────────────┴───────────────────────────┘
 Glyph key: ◌ running · ◷ queued · ◆! needs approval · ▣? needs reply · ●✓ done·new · ○✓ done

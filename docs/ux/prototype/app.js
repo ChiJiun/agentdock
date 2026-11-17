@@ -80,10 +80,11 @@
   /* Attention classification (inbox + switcher ordering)               */
   /* ------------------------------------------------------------------ */
   function classify(s) {
-    if (s.archived) return null;
-    // Blocking states always count, even for the session on screen: the
-    // approval card may be scrolled away, and the agent is stalled.
+    // Blocking states always count, even for the session on screen (the
+    // approval card may be scrolled away) and even if the session is archived
+    // (the app unarchives it; this order is the safety net).
     if (s.state === 'awaiting-approval' || s.state === 'awaiting-input') return 'reply';
+    if (s.archived) return null;
     if (s.id === state.currentId && state.view === 'session') return null;
     if (TERMINAL.has(s.state) && !s.viewed) return 'review';
     if (s.state === 'running' || s.state === 'queued') return 'background';
@@ -353,10 +354,12 @@
               <span class="chip" data-tone="${st.tone}">${stIcon(s)}${esc(st.label)}</span>
               <span class="chip">${kindIcon(s)}${esc(k.label)}</span>
               <span class="chip">${monogram(s.agent)}${esc(s.agent)}${s.model ? ' · model ' + esc(s.model) : ''}</span>
+              ${s.archived ? `<span class="chip"><span class="st" data-tone="neutral">${icon('stArchived')}</span>Archived</span>` : ''}
             </div>
           </div>
           <div class="head-actions">
-            ${running ? `<button class="btn" type="button" data-stop>${icon('stop')} Stop</button>` : ''}
+            ${s.archived ? `<button class="btn" type="button" data-unarchive="${s.id}">${icon('archive')} Unarchive</button>` : ''}
+            ${running ?`<button class="btn" type="button" data-stop>${icon('stop')} Stop</button>` : ''}
             ${d ? `<button class="btn" type="button" data-toggle-review aria-expanded="${state.reviewOpen}" aria-controls="review" aria-keyshortcuts="Control+Shift+G">${icon('sidebarRight')} Changes <span class="diffstat-add">+${d.add}</span><span class="diffstat-del">−${d.del}</span></button>` : `<button class="btn" type="button" data-toggle-review aria-expanded="${state.reviewOpen}" aria-controls="review">${icon('sidebarRight')} Changes · none</button>`}
           </div>
         </header>
@@ -375,10 +378,10 @@
               <textarea id="composer-input" rows="2" aria-label="Message to ${esc(s.agent)}" aria-describedby="composer-hint"
                 placeholder="">${esc(state.drafts[s.id] || '')}</textarea>
               <div class="composer-foot">
-                <span id="composer-hint">Enter to send · Shift+Enter for a new line · Tab inserts the suggestion</span>
+                <span id="composer-hint">Enter to send · Shift+Enter for a new line · Tab or → inserts the suggestion</span>
                 <span class="spacer"></span>
-                ${running ? `<button class="btn btn-sm" type="button" data-stop>${icon('stop')} Stop</button>` : ''}
                 <button class="btn btn-primary btn-sm" type="submit">${icon('send')} ${running ? 'Steer' : 'Send'}</button>
+                ${running ? `<button class="btn btn-sm" type="button" data-stop>${icon('stop')} Stop</button>` : ''}
               </div>
             </div>
           </div>
@@ -400,8 +403,7 @@
 
   function renderSuggestions() {
     const s = byId(state.currentId);
-    const key = s.state === 'completed' && !s.changes ? 'completed' : s.state;
-    const list = (AD.suggestions[key] || []).slice(0, 3);
+    const list = (AD.suggestions[s.state] || []).slice(0, 3);
     const row = $('#suggest-row');
     if (!row) return;
     row.innerHTML = list.length ? `<span class="suggest-label" id="suggest-label">Suggested next:</span>` + list.map(t => `<button class="suggest-chip" type="button" data-suggest="${esc(t)}" aria-describedby="suggest-label">${esc(t)}</button>`).join('') : '';
@@ -432,7 +434,9 @@
     let visible = false;
     if (target) { const r = target.getBoundingClientRect(), v = tl.getBoundingClientRect(); visible = r.bottom > v.top && r.top < v.bottom; }
     banner.hidden = visible;
-    banner.innerHTML = `<span class="st">${icon(pending.t === 'approval' ? 'stApproval' : 'stQuestion')}</span><p><strong>${pending.t === 'approval' ? 'Approval required' : 'Question for you'}:</strong> ${esc(pending.t === 'approval' ? pending.cmd : pending.text)}</p><button class="btn btn-sm" type="button" data-jump-pending>Show</button>`;
+    // The banner is only a pointer and may truncate; the full command is shown
+    // only in the approval card ("Show" jumps there).
+    banner.innerHTML = `<span class="st">${icon(pending.t === 'approval' ? 'stApproval' : 'stQuestion')}</span><p title="${esc(pending.t === 'approval' ? pending.cmd : pending.text)}"><strong>${pending.t === 'approval' ? 'Approval required' : 'Question for you'}:</strong> ${esc(pending.t === 'approval' ? pending.cmd : pending.text)}</p><button class="btn btn-sm" type="button" data-jump-pending>Show</button>`;
   }
 
   function appendEvent(s, e) {
@@ -551,19 +555,42 @@
     const t = document.createElement('div');
     t.className = 'toast';
     t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button class="btn btn-sm" type="button">${esc(action.label)}</button>` : ''}`;
-    if (action) t.querySelector('button').addEventListener('click', () => { action.run(); t.remove(); });
+    // A toast never takes focus with it when it disappears.
+    const remove = () => { const had = t.contains(document.activeElement); t.remove(); if (had) focusFallback(); };
+    if (action) t.querySelector('button').addEventListener('click', () => { action.run(); remove(); });
     $('#toasts').appendChild(t);
-    setTimeout(() => t.remove(), 8000);
+    setTimeout(() => { if (t.isConnected) remove(); }, 8000);
+  }
+  function focusFallback() {
+    const h = $('#session-title') || $('#main h1');
+    (h || $('#main')).focus();
+  }
+  const treeVisible = () => mqNarrow.matches ? state.drawer === 'sidebar' : $('#app').dataset.sidebar !== 'closed';
+  function focusRowOf(id) {
+    const r = $('#row-' + id);
+    if (!r || !treeVisible()) return false;
+    visibleRows().forEach(x => { x.tabIndex = -1; });
+    r.tabIndex = 0; state.focusRow = r.id; r.focus();
+    return true;
+  }
+  function unarchive(s) {
+    s.archived = false;
+    s.keepUnarchived = true; // an explicit restore is never undone by auto-archive
+    if (s.parentId) state.expanded.add(s.parentId);
   }
 
   function leaveSession(prev) {
     // Sub-task archive rule: completed/cancelled sub-tasks are archived only
-    // after their result has been viewed, and only when the user navigates
-    // away (rows never disappear under the user's focus).
-    if (!prev || !prev.parentId || prev.archived) return;
+    // after their result has been opened, and only when the user navigates
+    // away (rows never disappear under the user's focus). "Mark reviewed"
+    // alone never archives, and a sub-task the user restored stays restored.
+    if (!prev || !prev.parentId || prev.archived || prev.keepUnarchived) return;
     if ((prev.state === 'completed' || prev.state === 'cancelled') && prev.viewed) {
       prev.archived = true;
-      toast(`Archived sub-task “${prev.title}”`, { label: 'Undo', run: () => { prev.archived = false; refresh(); } });
+      toast(`Archived sub-task “${prev.title}”`, {
+        label: 'Undo',
+        run: () => { unarchive(prev); refresh(); if (!focusRowOf(prev.id)) focusFallback(); announce('Sub-task restored: ' + prev.title); },
+      });
     }
   }
 
@@ -645,6 +672,8 @@
     const reviewOverlay = state.reviewOpen && mqMedium.matches && !$('#review').hidden;
     $('#scrim').hidden = !(state.drawer === 'sidebar' || reviewOverlay);
     // Overlay drawers are modal: content underneath is inert (not focusable, not read).
+    $('#topbar').inert = state.drawer === 'sidebar' || reviewOverlay;
+    $('.skip-link').inert = state.drawer === 'sidebar' || reviewOverlay;
     $('#main').inert = state.drawer === 'sidebar' || reviewOverlay;
     $('#sidebar').inert = reviewOverlay;
     $('#review').inert = state.drawer === 'sidebar';
@@ -677,18 +706,23 @@
     const kinds = ['local', 'background', 'remote'];
     const bgGroups = kinds.map(k => ({ k, items: m.background.filter(s => s.kind === k) })).filter(g => g.items.length);
     const pop = $('#inbox-pop');
-    const focusedOpen = pop.contains(document.activeElement) ? document.activeElement.dataset.open : null;
+    const hadFocus = pop.contains(document.activeElement);
+    const focusedOpen = hadFocus ? document.activeElement.dataset.open : null;
+    // "Mark reviewed" applies to completed/cancelled results only: failures and
+    // interruptions need a decision, so they stay until opened.
+    const markable = m.review.filter(s => s.state === 'completed' || s.state === 'cancelled').length;
     pop.innerHTML = `
       <div class="pop-head"><h2 id="inbox-title">Inbox</h2><span class="muted">${m.reply.length + m.review.length} need attention</span></div>
       <div class="pop-section" role="group" aria-labelledby="ib-reply"><h3 id="ib-reply"><span class="st" data-tone="attention">${icon('stApproval')}</span>Needs your reply <span class="count">(${m.reply.length})</span></h3>
         ${m.reply.length ? m.reply.map(s => row(s, replySub(s))).join('') : '<p class="pop-empty">No agent is waiting for you.</p>'}</div>
-      <div class="pop-section" role="group" aria-labelledby="ib-review"><h3 id="ib-review"><span class="st" data-tone="success">${icon('stDoneNew')}</span>New results to review <span class="count">(${m.review.length})</span>${m.review.length ? '<button class="btn btn-quiet btn-sm" type="button" data-mark-all>Mark all reviewed</button>' : ''}</h3>
-        ${m.review.length ? m.review.map(s => row(s, statusOf(s).label + ' · ' + proj(s))).join('') : '<p class="pop-empty">You have seen every result.</p>'}</div>
+      <div class="pop-section" role="group" aria-labelledby="ib-review"><h3 id="ib-review"><span class="st" data-tone="success">${icon('stDoneNew')}</span>New results to review <span class="count">(${m.review.length})</span></h3>
+        ${m.review.length ? m.review.map(s => row(s, statusOf(s).label + ' · ' + proj(s))).join('') : '<p class="pop-empty">You have seen every result.</p>'}
+        ${markable ? `<div class="pop-actions"><button class="btn btn-quiet btn-sm" type="button" data-mark-all>Mark completed as reviewed (${markable})</button><span class="muted">Failed and interrupted stay until opened</span></div>` : ''}</div>
       <div class="pop-section" role="group" aria-labelledby="ib-bg"><h3 id="ib-bg"><span class="st st-spin" data-tone="running">${icon('stRunning')}</span>Running in background <span class="count">(${m.background.length})</span></h3>
         ${bgGroups.length ? bgGroups.map(g => `<div class="pop-sub">${icon({ local: 'kindLocal', background: 'kindBackground', remote: 'kindRemote' }[g.k])} ${{ local: 'Local tasks', background: 'Background agents', remote: 'Remote tasks' }[g.k]}</div>` + g.items.map(s => row(s, statusOf(s).label + ' · ' + kindOf(s).label + ' · ' + proj(s))).join('')).join('') : '<p class="pop-empty">Nothing is running.</p>'}</div>
       <div class="pop-foot"><kbd>Ctrl</kbd>+<kbd>J</kbd> opens the next item that needs you · <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Esc</kbd> close</div>`;
-    if (focusedOpen !== null) {
-      const again = pop.querySelector(`[data-open="${focusedOpen}"]`) || pop.querySelector('.inbox-row') || pop;
+    if (hadFocus) {
+      const again = (focusedOpen && pop.querySelector(`[data-open="${focusedOpen}"]`)) || pop.querySelector('.inbox-row') || pop;
       again.focus();
     }
   }
@@ -698,8 +732,13 @@
     if (id === 'inbox-pop') renderInbox(); else renderUsage();
     $('#' + id).hidden = false;
     $('#' + btnId).setAttribute('aria-expanded', 'true');
-    const first = $('#' + id).querySelector('.inbox-row, button, [tabindex]');
-    (first || $('#' + id)).focus();
+    focusPopover(id);
+  }
+  // Inbox: first row, never a header action. No rows (or usage): the popover itself.
+  function focusPopover(id) {
+    const pop = $('#' + id);
+    const first = id === 'inbox-pop' ? pop.querySelector('.inbox-row') : null;
+    (first || pop).focus();
   }
   function closePopovers(restore) {
     let closed = false;
@@ -833,7 +872,7 @@
   const SHORTCUTS = [
     ['Navigation', [['Switch session / search', 'Ctrl+K'], ['Open inbox', 'Ctrl+Shift+J'], ['Next item that needs you', 'Ctrl+J'], ['Pinned session 1–9', 'Alt+1 … Alt+9'], ['Next / previous region', 'F6 / Shift+F6'], ['Toggle sidebar', 'Ctrl+B'], ['Toggle review panel', 'Ctrl+Shift+G'], ['New task (Home)', 'Alt+N  (app: Ctrl+N)'], ['Close popover, dialog or drawer', 'Esc']]],
     ['Sidebar tree', [['Move', '↑ ↓ Home End'], ['Expand / collapse', '→ ←'], ['Open session', 'Enter']]],
-    ['Composer', [['Send (or steer while running)', 'Enter'], ['New line', 'Shift+Enter'], ['Insert suggested prompt', 'Tab (only while the suggestion is shown)'], ['Hide suggestion', 'Esc']]],
+    ['Composer', [['Send (or steer while running)', 'Enter'], ['New line', 'Shift+Enter'], ['Insert suggested prompt', 'Tab or → (only while the suggestion is shown)'], ['Hide suggestion', 'Esc']]],
     ['This dialog', [['Show shortcuts', 'Ctrl+/']]],
   ];
   let helpReturn = null;
@@ -854,9 +893,11 @@
   }
   // F6 regions: top bar → sidebar → conversation → composer → review panel.
   function regions() {
+    // A modal drawer is the only region while it is open.
+    if (state.drawer === 'sidebar') return [{ el: $('#sidebar'), focus: focusTree }];
+    if (state.reviewOpen && mqMedium.matches && !$('#review').hidden) return [{ el: $('#review'), focus: () => $('#review-title').focus() }];
     const out = [{ el: $('#topbar'), focus: () => $('#btn-sidebar').focus() }];
-    const sidebarVisible = mqNarrow.matches ? state.drawer === 'sidebar' : $('#app').dataset.sidebar !== 'closed';
-    if (sidebarVisible) out.push({ el: $('#sidebar'), focus: focusTree });
+    if (treeVisible()) out.push({ el: $('#sidebar'), focus: focusTree });
     if (state.view === 'session') {
       out.push({ el: $('#main'), excl: $('#composer'), focus: () => $('#timeline').focus() });
       out.push({ el: $('#composer'), focus: () => $('#composer-input').focus() });
@@ -894,7 +935,18 @@
     if (t.id === 'btn-usage') return $('#usage-pop').hidden ? openPopover('usage-pop', 'btn-usage') : closePopovers(true);
     if (d.close === 'help') return closeHelp();
     if (d.open) { closePopovers(false); return openSession(d.open, { focus: 'title' }); }
-    if (d.markAll !== undefined) { inboxModel().review.forEach(s => { s.viewed = true; s.unread = 0; if (s.parentId && (s.state === 'completed' || s.state === 'cancelled')) s.archived = true; }); refresh(); $('#btn-inbox').focus(); closePopovers(false); announce('All results marked as reviewed'); return; }
+    if (d.markAll !== undefined) {
+      // Marks completed/cancelled results as reviewed. It never archives:
+      // archiving needs the result to have been opened (states §5).
+      const done = inboxModel().review.filter(s => s.state === 'completed' || s.state === 'cancelled').map(s => ({ s, unread: s.unread }));
+      done.forEach(({ s }) => { s.viewed = true; s.unread = 0; });
+      refresh();
+      focusPopover('inbox-pop');
+      announce(`Marked as reviewed: ${done.length}. Failed and interrupted results stay in the list.`);
+      toast(`Marked as reviewed: ${done.length}`, { label: 'Undo', run: () => { done.forEach(({ s, unread }) => { s.viewed = false; s.unread = unread; }); refresh(); $('#btn-inbox').focus(); announce('Restored to the review list'); } });
+      return;
+    }
+    if (d.unarchive) { const s = byId(d.unarchive); unarchive(s); refresh(); $('#session-title').focus(); announce('Unarchived: ' + s.title); return; }
     if (d.toggleReview !== undefined) return toggleReview();
     if (d.closeReview !== undefined) return toggleReview(false);
     if (d.openReview !== undefined) return toggleReview(true);
@@ -982,7 +1034,7 @@
   });
   $('#usage-pop').addEventListener('keydown', e => { if (e.key === 'Tab') { e.preventDefault(); } });
   function trapTab(e, items) {
-    if (!items.length) return;
+    if (!items.length) { e.preventDefault(); return; }
     const i = items.indexOf(document.activeElement);
     if (e.shiftKey && i <= 0) { e.preventDefault(); items[items.length - 1].focus(); }
     else if (!e.shiftKey && i === items.length - 1) { e.preventDefault(); items[0].focus(); }
@@ -1019,7 +1071,8 @@
     if (e.target.id !== 'composer-input') return;
     const ta = e.target;
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Tab' && !e.shiftKey && ta.dataset.ghost && ta.value === '') { e.preventDefault(); ta.value = ta.dataset.ghost; updateGhost(); announce('Suggestion inserted. Edit it or press Enter to send.'); return; }
+    // → is a secondary way to accept (empty input, so it never moves a caret).
+    if ((e.key === 'Tab' && !e.shiftKey || e.key === 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.altKey) && ta.dataset.ghost && ta.value === '') { e.preventDefault(); ta.value = ta.dataset.ghost; updateGhost(); announce('Suggestion inserted. Edit it or press Enter to send.'); return; }
     if (e.key === 'Escape' && ta.dataset.ghost) { e.preventDefault(); e.stopPropagation(); state.ghostOff[state.currentId] = true; updateGhost(); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); }
   });
