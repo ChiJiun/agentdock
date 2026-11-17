@@ -116,7 +116,7 @@ Three sections in fixed order, each with a heading, glyph and count: **Needs you
   1. state is `completed` or `cancelled`;
   2. **after it entered that terminal state**, its latest output has been **opened** (rendered on screen while the window had focus; §4). Timing matters:
      - an opening that happened *before* the state was entered does not count — watching a sub-task run and leaving before it finishes is not seeing its result;
-     - a result that arrives while the sub-task is on screen counts at that moment (if the window is not focused, when it regains focus with the sub-task still on screen);
+     - a result that arrives while the sub-task is on screen counts at that moment (if the window is not focused, when it regains focus with the sub-task still on screen — the prototype does not model window focus and treats “on screen” as enough);
      - “Mark completed as reviewed” clears the inbox entry but does **not** satisfy this condition — “collapse only after the result has been seen” means actually seen;
   3. the user navigates away from it (a row never disappears while focused, hovered or on screen);
   4. the user has not restored it before with **Undo** or **Unarchive** (the “restored by user” flag). An explicitly restored sub-task is never auto-archived again; it can still be archived manually. The automatic unarchive of a waiting session (above) does not set this flag.
@@ -163,7 +163,7 @@ This is a **session-level mode**, orthogonal to status (§2) and kind (§3). It 
 
 | Enforcement | When | Label | Cues |
 | --- | --- | --- | --- |
-| **Requests routed** (default) | The agent is in a mode in which it asks before acting, as set by AgentDock at launch or reported by the adapter. | *No chip.* Session details say “The agent asks before it acts; AgentDock rules decide each request.” | — |
+| **Requests routed** (default) | The agent is in a mode in which it sends permission requests, as set by AgentDock at launch or reported by the adapter. | *No chip.* Session details say “The agent is in a mode in which it sends permission requests; AgentDock rules decide each request it receives.” (Not “the agent always asks”: AgentDock cannot guarantee that.) | — |
 | **Not enforced** | The agent runs in its own bypass / full-access mode — set by the user through AgentDock, or reported by the adapter. | **Policy not enforced** | Shield-with-slash glyph + text + dashed outline; `status-danger` colour as the secondary cue |
 | **Unknown** | The adapter does not report its permission mode and AgentDock did not set it. | **Policy coverage unknown** | “?” prefix + text + dashed outline, neutral colour (same treatment as an unknown usage source, §8) |
 

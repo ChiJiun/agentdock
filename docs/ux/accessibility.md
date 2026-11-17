@@ -48,7 +48,7 @@ Shortcuts are listed in `aria-keyshortcuts` on their controls and in tooltips. A
 - Opening moves focus to the panel heading; closing returns focus to the control that opened it (or the header “Changes” button).
 
 ### Drawers (narrow layouts)
-- Sidebar and review drawers are modal: everything behind them — **including the top bar** — is `inert` and covered by a scrim; F6 stays inside the open drawer; Esc, Ctrl+B / Ctrl+Shift+G or scrim click closes and restores focus. Choosing a session in the sidebar drawer closes it and focuses the session heading.
+- Sidebar and review drawers are modal: everything behind them — **including the top bar** — is `inert` and covered by a scrim (the scrim covers the top bar too); F6 stays inside the open drawer; Esc, Ctrl+B / Ctrl+Shift+G or a click anywhere on the scrim closes and restores focus. Choosing a session in the sidebar drawer closes it and focuses the session heading.
 - The two drawers are **never open together**, and a drawer is never open together with a popover (next section). Because the top bar is inert under a drawer, shortcuts are the only way to reach the inbox, the other drawer or another session from inside one — so those shortcuts must work, not be swallowed.
 
 ### Overlays — one at a time
@@ -68,7 +68,7 @@ Three classes: **modal dialogs** (quick switcher, shortcuts dialog; later the qu
 | Ctrl+/ | opens dialog | closes popover, opens | opens above | opens above | ignored |
 | Ctrl+Shift+J | opens inbox | closes it (inbox) or replaces it (usage) | closes drawer, opens inbox | closes drawer, opens inbox | ignored |
 | Ctrl+B | toggles sidebar | closes popover, toggles | closes the drawer | closes drawer, then toggles the sidebar | ignored |
-| Ctrl+Shift+G | toggles review | closes popover, opens | closes drawer, opens review | closes the drawer | ignored |
+| Ctrl+Shift+G (session view only; does nothing on Home, Project and Settings, where there is no review panel) | toggles review | closes popover, opens | closes drawer, opens review | closes the drawer | ignored |
 | Ctrl+J, Alt+1…9, Ctrl+N | navigates | closes popover, navigates | closes drawer, navigates | closes drawer, navigates | ignored |
 | F6 | cycles regions | closes popover, cycles | stays in the drawer | stays in the drawer | ignored |
 | Esc | — | closes popover | closes drawer | closes drawer | closes dialog |
@@ -76,9 +76,9 @@ Three classes: **modal dialogs** (quick switcher, shortcuts dialog; later the qu
 ### Focus return
 
 - Every overlay remembers a return target when it opens: a popover its trigger button, a drawer or dialog the element that had focus.
-- An overlay that **replaces** another inherits the replaced overlay’s return target. The element that was focused *inside* the replaced overlay is not a valid target: it is hidden as soon as that overlay closes.
+- A **drawer** that replaces a popover or the other drawer inherits the replaced overlay’s return target. The element that was focused *inside* the replaced overlay is not a valid target: it is hidden as soon as that overlay closes. A popover that replaces something still returns to its own trigger button (previous point).
 - On close, if the return target cannot take focus — removed from the page, hidden, inside an `inert` region, or inside a closed drawer — focus goes to the **fallback**: into the modal drawer that is still open (current tree row, or the review heading), otherwise to the session heading (the view’s `h1` on Home, Project and Settings). Focus restore never ends on `body`.
-- The same fallback applies when focus would be stranded by a layout change: collapsing the docked sidebar while focus is inside it, or resizing across 1280 px so that an open review panel becomes a modal drawer (focus moves into the drawer).
+- The same fallback applies when focus would be stranded by a layout change: collapsing the docked sidebar while focus is inside it; widening past 960 px while the sidebar drawer is open (the drawer closes; focus stays in the tree if the sidebar is docked open, otherwise it goes to the fallback); or narrowing below 1280 px so that an open review panel becomes a modal drawer (an open popover is closed first — rule 6 — then focus moves into the drawer).
 
 ## 3. Long transcripts
 
@@ -134,8 +134,10 @@ Not covered by the script: colours composited over the semi-transparent scrim, s
 - **Language**: `lang` set on the document; CJK text uses the prose line-height token (1.6). UI copy in English first; strings externalised for zh-TW (later issue).
 - **Screen-reader names** for icon-only buttons; decorative SVGs are `aria-hidden`.
 - **Timeouts**: toasts with actions stay ≥ 8 s. A toast that disappears while focused, or whose action removes it, moves focus to a meaningful target (restored row or session heading), never to the page body.
-  - **Known limit — keyboard users can rarely reach a toast’s Undo in time.** The toast is the last Tab stop of the document and no shortcut or F6 region leads to it. In the prototype that is 22 Tab presses from the session heading in a short session and several hundred in a long transcript (counted from the DOM order, not timed with real key presses). With 8 s on the clock, Undo is in practice a pointer-only action today.
-  - What that means per action: **archive** has a full keyboard equivalent — **Unarchive** in the archived session’s header (reach it through “Show N archived sub-tasks” or Ctrl+K), which also sets the restored flag. **“Mark completed as reviewed” has no keyboard equivalent for the marker itself**: the sessions stay in the sidebar and in Ctrl+K and can still be opened, but only Undo puts them back under “to review”. For keyboard users the bulk action is therefore not reversible in the prototype.
+  - **Known limit — a toast’s Undo is hard to reach from the keyboard in time.** The toast is the last Tab stop of the document; no shortcut or F6 region leads to it, and its announcement does not say how to get there. Measured in the prototype with real key presses (1400 px, short session `s1`):
+    - *Archive toast.* It appears after the user navigates away. When that navigation puts focus in the composer (Alt+1…9, a switcher pick), Undo is **4 Tab presses** away and Enter restores the sub-task — reachable. When focus lands on the session heading instead (Ctrl+J, choosing a row), it is 13 Tab presses in `s1` (counted from the DOM order, not pressed), plus one for every tool event in the transcript — hundreds in a long one.
+    - *“Marked as reviewed” toast.* Focus stays inside the inbox popover, whose Tab order wraps, so Undo cannot be reached without leaving it: Esc, then **19 Tab presses** — or Esc, F6 three times (to the composer), then 4 Tab presses. Both routes finished inside 8 s when the keys were sent by a script. A person who has not memorised the route, or who uses a screen reader or switch input, should not be expected to manage it.
+  - What that means per action: **archive** has a full keyboard equivalent — **Unarchive** in the archived session’s header (reach it through “Show N archived sub-tasks” or Ctrl+K), which also sets the restored flag. **“Mark completed as reviewed” has no keyboard equivalent for the marker itself**: the sessions stay in the sidebar and in Ctrl+K and can still be opened, but only Undo puts them back under “to review”. For keyboard users the bulk action is therefore not reliably reversible in the prototype.
   - Requirement for the app (issue #4 onward, not in the prototype): while a toast with an action is visible it is an **F6 region**, its timer **pauses while it contains focus or the pointer**, and its announcement names the way to reach it (“Marked as reviewed: 3. Press F6 for Undo”). Acceptance: [UX-48](acceptance-criteria.md). Until that ships, do not add further toast-only Undo actions.
 
 ## 7. Shortcut conflicts in the WebView2 host (hand-off to issue #4)

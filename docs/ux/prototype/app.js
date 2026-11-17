@@ -436,6 +436,7 @@
 
   function onTimelineScroll() {
     const tl = $('#timeline');
+    if (!tl) return; // a queued scroll event can arrive after the view changed
     if (atBottom(tl)) { state.newBelow = 0; $('#jump-pill').hidden = true; }
     updateBanner();
   }
@@ -723,7 +724,7 @@
     drawerReturn = carry || document.activeElement;
     state.drawer = which;
     $('#app').dataset.drawer = which;
-    if (which === 'sidebar') { $('#btn-sidebar').setAttribute('aria-expanded', 'true'); setTimeout(focusTree, 20); }
+    if (which === 'sidebar') { $('#btn-sidebar').setAttribute('aria-expanded', 'true'); setTimeout(() => { if (state.drawer === 'sidebar') focusTree(); }, 20); } // skip if the drawer was closed again meanwhile
     syncScrim();
   }
   function closeDrawer(restore) {
@@ -769,10 +770,13 @@
       restoreFocus(canFocus(reviewReturn) ? reviewReturn : $('[data-toggle-review]'));
     }
   }
-  mqNarrow.addEventListener('change', () => { if (!mqNarrow.matches && state.drawer) closeDrawer(false); $('#btn-sidebar').setAttribute('aria-expanded', String(!mqNarrow.matches && $('#app').dataset.sidebar !== 'closed')); });
+  // Widening past 960 px closes the sidebar drawer. Focus stays in the tree when
+  // the sidebar is docked; if the docked sidebar is collapsed, use the fallback.
+  mqNarrow.addEventListener('change', () => { if (!mqNarrow.matches && state.drawer) { closeDrawer(false); if (!canFocus(document.activeElement)) focusFallback(); } $('#btn-sidebar').setAttribute('aria-expanded', String(!mqNarrow.matches && $('#app').dataset.sidebar !== 'closed')); });
   // Crossing 1280 px turns a docked review panel into a modal drawer (or back):
   // whatever had focus behind it is now inert, so move focus into the drawer.
-  mqMedium.addEventListener('change', () => { syncScrim(); if (reviewIsOverlay() && !$('#review').contains(document.activeElement) && $('#switcher-overlay').hidden && $('#help-overlay').hidden) $('#review-title').focus(); });
+  // A popover open at that moment is closed: never a drawer plus a popover.
+  mqMedium.addEventListener('change', () => { if (reviewIsOverlay()) closePopovers(false); syncScrim(); if (reviewIsOverlay() && !$('#review').contains(document.activeElement) && $('#switcher-overlay').hidden && $('#help-overlay').hidden) $('#review-title').focus(); });
 
   /* ------------------------------------------------------------------ */
   /* Inbox popover                                                       */

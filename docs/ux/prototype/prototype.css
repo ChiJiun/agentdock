@@ -434,7 +434,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--ad-text-xs)
 .toasts { position: fixed; left: var(--ad-space-6); bottom: var(--ad-space-6); z-index: var(--ad-z-toast); display: grid; gap: var(--ad-space-4); }
 .toast { display: flex; align-items: center; gap: var(--ad-space-5); padding: var(--ad-space-4) var(--ad-space-5); background: var(--ad-bg-raised); border: 1px solid var(--ad-border-strong); border-radius: var(--ad-radius-md); box-shadow: var(--ad-shadow-2); max-width: 420px; }
 
-.scrim { position: fixed; inset: var(--ad-topbar-h) 0 0 0; background: var(--ad-bg-scrim); z-index: calc(var(--ad-z-drawer) - 1); }
+/* Covers the top bar too: it is inert under a modal drawer, and a click there closes the drawer. */
+.scrim { position: fixed; inset: 0; background: var(--ad-bg-scrim); z-index: calc(var(--ad-z-drawer) - 1); }
 
 /* ---------- Responsive: medium (review becomes a drawer) ---------- */
 @media (max-width: 1279px) {
