@@ -1,6 +1,6 @@
 # Language Profile resolver proof of concept
 
-This prototype resolves a user's preferred **whole-workflow language** across `Global → Project → Session → Task`, offers an independent language overlay and preserves the raw bytes of an English Skill. It is **not integrated with a real Harness**.
+This prototype resolves a user's preferred **whole-workflow language** across `Global → Project → Session → Task`, applies `outputs.<stage>` → `artifactLocale` (prose artifacts only) → `workflowLocale` within each scope, offers an independent language overlay, preserves the raw bytes of an English Skill, rejects unsupported locale tags instead of substituting them, and reports adapter language capability as `owned` / `confirmed` / `best-effort` / `unsupported`. It is **not integrated with a real Harness**.
 
 Run using Node 22+ without installing additional dependencies:
 

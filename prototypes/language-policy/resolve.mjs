@@ -6,17 +6,26 @@
 const LOCALES = new Set(['zh-TW', 'en-US']);
 const OVERRIDE_VALUES = new Set(['zh-TW', 'en-US', 'inherit', 'preserve-original']);
 const PRESERVED = new Set(['codeComments']);
+// Prose artifacts follow `artifactLocale` before `workflowLocale`.
+const ARTIFACT_STAGES = new Set(['issue', 'pullRequest', 'commitMessage', 'documentation']);
 const STAGES = new Set(['ui', 'conversation', 'plan', 'review', 'issue', 'pullRequest',
   'commitMessage', 'documentation', 'codeComments', 'sessionSummary', 'notification', 'skillExplanation']);
 const LAYERS = ['task', 'session', 'project', 'global'];
+export const POLICY_VERSION = 'agentdock-language-v1';
 
-function validLocale(value) { return LOCALES.has(value); }
+/** Unsupported tags (for example zh-CN) are rejected, never substituted. */
+function assertLocale(value, where) {
+  if (value != null && !LOCALES.has(value)) {
+    throw new Error(`Unsupported locale in ${where}: ${value}`);
+  }
+}
 
 export function effectiveLanguage(scopes, stage) {
   if (!STAGES.has(stage)) throw new Error(`Unsupported output stage: ${stage}`);
   const global = scopes?.global ?? {};
   if (stage === 'ui') {
-    return validLocale(global.uiLocale) ? global.uiLocale : 'en-US';
+    assertLocale(global.uiLocale, 'global.uiLocale');
+    return global.uiLocale ?? 'en-US';
   }
 
   for (const layer of LAYERS) {
@@ -30,7 +39,17 @@ export function effectiveLanguage(scopes, stage) {
 
     // Code comments follow repository conventions unless explicitly overridden.
     if (PRESERVED.has(stage)) continue;
-    if (validLocale(profile.workflowLocale)) return profile.workflowLocale;
+
+    if (ARTIFACT_STAGES.has(stage)) {
+      const artifact = profile.artifactLocale;
+      if (artifact != null && !OVERRIDE_VALUES.has(artifact)) {
+        throw new Error(`Unsupported artifact locale value in ${layer}: ${artifact}`);
+      }
+      if (artifact && artifact !== 'inherit') return artifact;
+    }
+
+    assertLocale(profile.workflowLocale, `${layer}.workflowLocale`);
+    if (profile.workflowLocale) return profile.workflowLocale;
   }
   return PRESERVED.has(stage) ? 'preserve-original' : 'en-US';
 }
@@ -53,9 +72,9 @@ const INSTRUCTIONS = {
 export function languageOverlay(scopes, stage) {
   const locale = effectiveLanguage(scopes, stage);
   if (locale === 'preserve-original') {
-    return { locale, instruction: '', status: 'no-rewrite' };
+    return { locale, instruction: '', status: 'no-rewrite', policyVersion: POLICY_VERSION };
   }
-  return { locale, instruction: INSTRUCTIONS[locale], status: 'preference-only' };
+  return { locale, instruction: INSTRUCTIONS[locale], status: 'preference-only', policyVersion: POLICY_VERSION };
 }
 
 /** Preserve source bytes; attach a separate language preference only. */
@@ -68,9 +87,14 @@ export function skillContext(scopes, skillSource) {
   };
 }
 
-/** Language support must be learned from the adapter, not inferred from a profile. */
+/**
+ * Language support must be learned from the adapter, not inferred from a profile.
+ * The four states describe whether the instruction was legitimately delivered,
+ * not how well a model follows it.
+ */
 export function languageCapability(adapter) {
-  if (adapter?.supportsLocaleInstructions === true) return 'native';
-  if (adapter?.supportsPrompt === true) return 'best-effort';
+  if (adapter?.ownedPromptComposer === true) return 'owned';
+  if (adapter?.acceptsLocaleInstructions === true) return 'confirmed';
+  if (adapter?.supportsUserPrompt === true) return 'best-effort';
   return 'unsupported';
 }

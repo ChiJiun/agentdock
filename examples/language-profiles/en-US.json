@@ -3,6 +3,7 @@
   "name": "English",
   "uiLocale": "en-US",
   "workflowLocale": "en-US",
+  "artifactLocale": "inherit",
   "outputs": {
     "codeComments": "preserve-original"
   },

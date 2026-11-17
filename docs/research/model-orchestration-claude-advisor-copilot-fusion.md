@@ -48,7 +48,7 @@ The post's approximate **99% reduction** refers to a particular reported *backgr
 | Cost | Additional advisor token usage | Sum of every stage (including rejected/failed legs) |
 | Visibility | Consulted/declined/unavailable | Show stage/model/status and final validated output, avoid presenting drafts as final |
 
-**Single** is the baseline, not a failure of orchestration. More reviewers on every prompt can cost more and add latency. Copilot Fusion's Standard/High/Max correspond to a *quality/cost effort intent*, not user-selectable raw model mappings. AgentDock can expose comparable **Efficiency / Balanced / Thorough** policies without using GitHub's trademarked labels in the product.
+**Single** is the baseline, not a failure of orchestration. More reviewers on every prompt can cost more and add latency. Copilot Fusion's Standard/High/Max correspond to a *quality/cost effort intent*, not user-selectable raw model mappings. AgentDock can expose comparable **Economy / Balanced / Quality** policies (plus **Manual**; the same names as [Copilot Fusion research](copilot-fusion.md) and Issue #17) instead of reusing GitHub's Standard/High/Max tier names for AgentDock-owned routing.
 
 ## Proposed architecture
 
@@ -86,7 +86,7 @@ Component responsibility:
 
 ```ts
 type Strategy = "single" | "cascade" | "critique" | "advisor" | "external-managed";
-type Effort = "efficiency" | "balanced" | "thorough";
+type Effort = "economy" | "balanced" | "quality" | "manual";
 
 type RoutingInput = {
   taskId: string;
@@ -112,9 +112,10 @@ These are intent contracts, **not** a claim that external ACP agents can be forc
 
 ## Default policy proposal (test before enabling)
 
-- **Efficiency**: Single unless a deterministic gate fails or the user requests review. Prefer local/deterministic tools for search/status.
+- **Economy**: Single unless a deterministic gate fails or the user requests review. Prefer local/deterministic tools for search/status.
 - **Balanced**: Single first; Cascade if a cheap executor has a reproducible uncertain result; a one-pass independent Critique for substantial changes when evidence warrants it.
-- **Thorough**: Evaluate critique or advisory escalation for high-risk code; bounded independent review plus required tests, never unlimited parallel judges.
+- **Quality**: Evaluate critique or advisory escalation for high-risk code; bounded independent review plus required tests, never unlimited parallel judges.
+- **Manual**: the user fixes model/provider, review and escalation decisions; no automatic strategy selection.
 - **Human-in-the-loop**: changes to default/protected branches, deletion, force push, release, external publication, irreversible actions require explicit approval regardless of strategy.
 - **Stop**: budget exceeded, reviewer disagreements unresolved, context is insufficient, policy denies a tool, or model/provider unavailable without approved fallback.
 
