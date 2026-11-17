@@ -5,11 +5,11 @@ import {
   X, XCircle,
 } from 'lucide-react';
 import {
-  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, decideRuntimeApproval, dismissAttention, getAttention,
-  getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces,
+  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, createWorktree, decideRuntimeApproval, dismissAttention, getAttention,
+  getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces, getWorktrees,
   gitDiff, gitStatus, sendRuntimePrompt,
   type RuntimeAdapter, type RuntimeApproval, type RuntimeEvent, type RuntimeSession,
-  type RuntimeWorkspace, type LiveAttentionItem,
+  type RuntimeWorkspace, type RuntimeWorktree, type LiveAttentionItem,
 } from '../live/api';
 import { compileLanguageOverlay, type LanguageSettings } from '../i18n/language';
 import { useLocale } from '../i18n/context';
@@ -59,6 +59,8 @@ export function LiveWorkspace({ settings, onBack }: {
   const [sessions, setSessions] = useState<RuntimeSession[]>([]);
   const [adapters, setAdapters] = useState<RuntimeAdapter[]>([]);
   const [roots, setRoots] = useState<RuntimeWorkspace[]>([]);
+  const [worktrees, setWorktrees] = useState<RuntimeWorktree[]>([]);
+  const [worktreeNotice, setWorktreeNotice] = useState('');
   const [adapter, setAdapter] = useState('mock');
   const [cwd, setCwd] = useState('');
   const [activeId, setActiveId] = useState('');
@@ -85,11 +87,12 @@ export function LiveWorkspace({ settings, onBack }: {
     const initialize = async () => {
       try {
         await getHealth();
-        const [available, paths, existing] = await Promise.all([getAdapters(), getWorkspaces(), getSessions()]);
+        const [available, paths, existing, isolated] = await Promise.all([getAdapters(), getWorkspaces(), getSessions(), getWorktrees()]);
         if (cancelled) return;
         setHealth('online');
         setAdapters(available);
         setRoots(paths);
+        setWorktrees(isolated);
         if (paths.length) setCwd(paths[0].path);
         setSessions(existing);
         if (existing.length) setActiveId(existing[0].id);
@@ -148,6 +151,23 @@ export function LiveWorkspace({ settings, onBack }: {
     setApprovals([]);
     setGitEvidence({});
     setError('');
+  }
+
+  async function newWorktree() {
+    // Only an explicit click creates a Git branch/worktree. No cleanup or push.
+    if (!cwd || submitting || worktrees.some(w => w.path === cwd)) return;
+    setSubmitting(true);
+    setError('');
+    setWorktreeNotice('');
+    try {
+      const item = await createWorktree(cwd);
+      const [paths, isolated] = await Promise.all([getWorkspaces(), getWorktrees()]);
+      setRoots(paths);
+      setWorktrees(isolated);
+      setCwd(item.path);
+      setWorktreeNotice(ui(`已建立獨立 Worktree：${item.branch}，原始分支未修改。`,`New isolated worktree: ${item.branch}. Source branch unchanged.`));
+    } catch (e) { setError(String((e as Error).message)); }
+    finally { setSubmitting(false); }
   }
 
   async function startSession() {
@@ -219,7 +239,9 @@ export function LiveWorkspace({ settings, onBack }: {
         <div className="live-setup">
           <div className="live-side-heading">{ui("建立工作階段","START A SESSION")}</div>
           <label htmlFor="live-root">{ui("已核准的工作目錄","Approved workspace")}</label>
-          <select id="live-root" value={cwd} onChange={e=>setCwd(e.target.value)}>{roots.map(item=><option key={item.path} value={item.path}>{item.path}</option>)}</select>
+          <select id="live-root" value={cwd} onChange={e=>{setCwd(e.target.value);setWorktreeNotice("");}}>{roots.map(item=><option key={item.path} value={item.path}>{worktrees.some(w=>w.path===item.path) ? `[Worktree] ${item.path}` : item.path}</option>)}</select>
+          <button className="live-worktree-create" type="button" onClick={()=>void newWorktree()} disabled={!cwd || submitting || worktrees.some(w => w.path === cwd)}><FolderGit2 size={14}/>{ui("建立獨立 Git Worktree（新分支）","Create isolated Git worktree (new branch)")}</button>
+          {worktreeNotice && <div className="live-worktree-notice" role="status">{worktreeNotice}</div>}
           <label htmlFor="live-adapter">{ui("已設定的 ACP Agent","Configured ACP agent")}</label>
           <select id="live-adapter" value={adapter} onChange={e=>setAdapter(e.target.value)}>{adapters.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select>
           <button onClick={()=>void startSession()} disabled={!cwd || submitting} className="live-primary"><Play size={14}/> {ui("啟動 ACP 工作階段","Start ACP session")}</button>

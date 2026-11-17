@@ -7,6 +7,7 @@ import { AcpHost } from './acp-host.mjs';
 import { DEFAULT_MOCK, ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
+import { WorktreeManager } from './worktrees.mjs';
 
 const MAX_BODY = 20_000;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
@@ -51,9 +52,13 @@ export function createRuntimeServer({
   roots = [process.cwd()],
   dbPath = resolve('.local', 'agentdock.db'),
   adapters = loadAdapters(process.env.AGENTDOCK_ADAPTER_CONFIG),
+  worktreeRoot = resolve('.local', 'worktrees'),
 } = {}) {
-  const allowedRoots = roots.map(root => realpathSync(root));
+  const sourceRoots = roots.map(root => realpathSync(root));
+  const allowedRoots = [...sourceRoots];
   const store = new SessionStore(dbPath);
+  const worktrees = new WorktreeManager({store,sourceRoots,worktreeRoot});
+  allowedRoots.push(...worktrees.permittedWorkspacePaths());
   const host = new AcpHost({ store, roots: allowedRoots, adapters });
   const server = createServer(async (request, response) => {
     try {
@@ -66,6 +71,15 @@ export function createRuntimeServer({
       if (method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true, mode: 'local-development', protocol: 'ACP v1', storage: 'sqlite' });
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
+      if (method === 'GET' && pathname === '/api/worktrees') return json(response, 200, worktrees.list());
+      if (method === 'POST' && pathname === '/api/worktrees') {
+        const payload = await readJson(request);
+        // This endpoint creates only a new branch and worktree after explicit user action.
+        // Never deletes/cleans, force-pushes or modifies the base branch.
+        const item = await worktrees.create({repoPath: payload.repoPath});
+        allowedRoots.push(item.path);
+        return json(response, 201, item);
+      }
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
       if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
       const dismissMatch = /^\/api\/attention\/([^/]+)\/dismiss$/.exec(pathname);
@@ -138,7 +152,7 @@ export function createRuntimeServer({
     }
   });
   return {
-    server, store, host, allowedRoots,
+    server, store, host, worktrees, allowedRoots,
     async listen(port = PORT) {
       return await new Promise((resolveListen, rejectListen) => {
         server.once('error', rejectListen);

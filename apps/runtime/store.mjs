@@ -50,6 +50,10 @@ export class SessionStore {
       CREATE TABLE IF NOT EXISTS attention_dismissals (
         id TEXT PRIMARY KEY, dismissed_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS worktrees (
+        id TEXT PRIMARY KEY, source_repo TEXT NOT NULL, path TEXT NOT NULL UNIQUE,
+        branch TEXT NOT NULL, created_at TEXT NOT NULL
+      );
     `);
     // There are no automatically resumed agent connections at process restart.
     this.db.prepare(`UPDATE sessions SET status='interrupted',updated_at=? WHERE status IN ('starting','ready','running','awaiting_approval')`)
@@ -83,6 +87,14 @@ export class SessionStore {
   events(id, after = 0) {
     const rows = this.db.prepare('SELECT * FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 300').all(id, after);
     return rows.map(r => ({ seq: r.seq, sessionId: r.session_id, kind: r.kind, data: JSON.parse(r.data), createdAt: r.created_at }));
+  }
+  createWorktree({ id, sourceRepo, path, branch }) {
+    const createdAt = new Date().toISOString();
+    this.db.prepare('INSERT INTO worktrees(id,source_repo,path,branch,created_at) VALUES(?,?,?,?,?)')
+      .run(id,sourceRepo,path,branch,createdAt);
+  }
+  listWorktrees() {
+    return this.db.prepare('SELECT id,source_repo,path,branch,created_at FROM worktrees ORDER BY created_at DESC LIMIT 200').all();
   }
   latestEvent(sessionId) {
     const row = this.db.prepare('SELECT seq,kind,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);
