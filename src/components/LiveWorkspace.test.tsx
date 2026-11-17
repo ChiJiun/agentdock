@@ -30,6 +30,9 @@ function mockedFetch(path: string | URL | Request, options?: RequestInit): Promi
   if (uri.endsWith('/api/health')) return Promise.resolve(returnJson({ok:true,protocol:'ACP v1',mode:'local-development'}));
   if (uri.endsWith('/api/adapters')) return Promise.resolve(returnJson([{id:'mock',label:'ACP mock'}]));
   if (uri.endsWith('/api/attention')) return Promise.resolve(returnJson(attentionItems));
+  if (uri.includes('/api/github/issues')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',items:[{number:9,title:'GitHub issue fixture',url:'https://github.com/ChiJiun/agentdock/issues/9',state:'open'}]}));
+  if (uri.includes('/api/github/pulls')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',items:[{number:25,title:'GitHub PR fixture',url:'https://github.com/ChiJiun/agentdock/pull/25',state:'open',headSha:'a'.repeat(40)}]}));
+  if (uri.includes('/api/github/checks')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',items:[]}));
   if (uri.endsWith('/api/workspaces')) return Promise.resolve(returnJson([{path:'/mock/project'}]));
   if (uri.endsWith('/api/worktrees') && method === 'GET') return Promise.resolve(returnJson([]));
   if (uri.endsWith('/api/worktrees') && method === 'POST') return Promise.resolve(returnJson({id:'wt1',source_repo:'/mock/project',path:'/mock/project/.local/worktrees/wt1',branch:'agentdock/task-123456789abc',created_at:new Date().toISOString(),exists:true},201));
@@ -137,6 +140,21 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect(ui.textContent).toContain('已建立獨立 Worktree');
     // Creating a worktree must not automatically execute an agent prompt.
     expect(requests.some(r=>r.path.includes('/prompt')&&r.method==='POST')).toBe(false);
+  });
+
+  it('reads GitHub Issues/PRs/checks without invoking remote mutations or claiming missing CI passed', async () => {
+    const ui=await render();
+    const tab=[...ui.querySelectorAll<HTMLButtonElement>('.live-tabs button')].find(b=>b.textContent?.includes('GitHub'));
+    expect(tab).not.toBeNull();
+    expect(requests.some(r=>r.path.includes('/github/'))).toBe(false);
+    await act(async()=>tab?.click());
+    expect(ui.textContent).toContain('GitHub issue fixture');
+    expect(ui.textContent).toContain('GitHub PR fixture');
+    expect(requests.filter(r=>r.path.includes('/github/') && r.method!=='GET')).toHaveLength(0);
+    const checks=[...ui.querySelectorAll<HTMLButtonElement>('.live-github-pull button')][0];
+    await act(async()=>checks?.click());
+    expect(ui.textContent).toContain('不代表通過');
+    expect(requests.some(r=>r.path.includes('/api/github/checks') && r.method==='GET')).toBe(true);
   });
 
   it('requires deliberate one-time approval and never auto-accepts tools', async () => {

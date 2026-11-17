@@ -8,6 +8,7 @@ import { DEFAULT_MOCK, ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
 import { WorktreeManager } from './worktrees.mjs';
+import { GitHubReader } from './github-reader.mjs';
 
 const MAX_BODY = 20_000;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
@@ -60,6 +61,7 @@ export function createRuntimeServer({
   const worktrees = new WorktreeManager({store,sourceRoots,worktreeRoot});
   allowedRoots.push(...worktrees.permittedWorkspacePaths());
   const host = new AcpHost({ store, roots: allowedRoots, adapters });
+  const github = new GitHubReader({ roots: allowedRoots });
   const server = createServer(async (request, response) => {
     try {
       const method = request.method;
@@ -79,6 +81,15 @@ export function createRuntimeServer({
         const item = await worktrees.create({repoPath: payload.repoPath});
         allowedRoots.push(item.path);
         return json(response, 201, item);
+      }
+      if (method === 'GET' && pathname === '/api/github/issues') {
+        return json(response, 200, github.issues(url.searchParams.get('cwd') || ''));
+      }
+      if (method === 'GET' && pathname === '/api/github/pulls') {
+        return json(response, 200, github.pulls(url.searchParams.get('cwd') || ''));
+      }
+      if (method === 'GET' && pathname === '/api/github/checks') {
+        return json(response, 200, github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
       }
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
       if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
@@ -152,7 +163,7 @@ export function createRuntimeServer({
     }
   });
   return {
-    server, store, host, worktrees, allowedRoots,
+    server, store, host, worktrees, github, allowedRoots,
     async listen(port = PORT) {
       return await new Promise((resolveListen, rejectListen) => {
         server.once('error', rejectListen);

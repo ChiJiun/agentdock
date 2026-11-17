@@ -1462,3 +1462,16 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
 .live-attention-copy em{display:flex;align-items:center;gap:4px;color:#c7dca7;font-size:10px;font-style:normal;line-height:1.5}
 .live-attention-dismiss{position:absolute;right:6px;top:8px;border:0;background:transparent;color:#b2c3b3;display:flex;align-items:center;padding:4px;border-radius:5px}
 .live-attention-dismiss:hover{background:#526251}
+
+/* Read-only GitHub evidence panel. Links are restricted to github.com by the backend. */
+.live-github-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 11px}
+.live-github-header strong{color:#e0ebde;font-size:15px}
+.live-github-refresh,.live-github-pull button{padding:7px 10px;color:#d6e7ce;background:#35483a;border:1px solid #59715b;border-radius:7px;font-size:11px}
+.live-github-warning{font-size:11px;line-height:1.6;padding:10px 12px;background:#2d392f;border:1px solid #415446;border-radius:7px;color:#adc8ab}
+.live-github-section{border-top:1px solid #354438;padding:15px 0}
+.live-github-section h3{font-size:13px;color:#e2eedd;margin:0 0 12px}
+.live-github-section>p{font-size:11px;color:#a4b4a9}
+.live-github-section>a,.live-github-pull>a,.live-github-check>a{display:block;color:#a3cde4;font-size:11px;line-height:1.5;text-decoration:none;margin:7px 0;overflow-wrap:anywhere}
+.live-github-section>a:hover,.live-github-pull>a:hover,.live-github-check>a:hover{text-decoration:underline}
+.live-github-pull,.live-github-check{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #354339;padding:7px 0}
+.live-github-pull>a{max-width:75%}.live-github-check>span{color:#bbcabe;font-size:11px}

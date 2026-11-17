@@ -6,10 +6,10 @@ import {
 } from 'lucide-react';
 import {
   cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, createWorktree, decideRuntimeApproval, dismissAttention, getAttention,
-  getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces, getWorktrees,
+  getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces, getWorktrees, getGithubIssues, getGithubPulls, getGithubChecks,
   gitDiff, gitStatus, sendRuntimePrompt,
   type RuntimeAdapter, type RuntimeApproval, type RuntimeEvent, type RuntimeSession,
-  type RuntimeWorkspace, type RuntimeWorktree, type LiveAttentionItem,
+  type RuntimeWorkspace, type RuntimeWorktree, type LiveAttentionItem, type GithubIssue, type GithubPull, type GithubCheck,
 } from '../live/api';
 import { compileLanguageOverlay, type LanguageSettings } from '../i18n/language';
 import { useLocale } from '../i18n/context';
@@ -75,7 +75,12 @@ export function LiveWorkspace({ settings, onBack }: {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [gitEvidence, setGitEvidence] = useState<{ status?: string; diff?: string }>({});
-  const [inspectorTab, setInspectorTab] = useState<'activity' | 'git' | 'approvals'>('activity');
+  const [inspectorTab, setInspectorTab] = useState<'activity' | 'git' | 'approvals' | 'github'>('activity');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [issues, setIssues] = useState<GithubIssue[]>([]);
+  const [pulls, setPulls] = useState<GithubPull[]>([]);
+  const [checks, setChecks] = useState<GithubCheck[]>([]);
+  const [githubLoading, setGithubLoading] = useState(false);
   const latest = useRef(0);
   const active = sessions.find(item => item.id === activeId);
   const effective = active
@@ -150,6 +155,10 @@ export function LiveWorkspace({ settings, onBack }: {
     setHistory([]);
     setApprovals([]);
     setGitEvidence({});
+    setGithubRepo('');
+    setIssues([]);
+    setPulls([]);
+    setChecks([]);
     setError('');
   }
 
@@ -214,6 +223,31 @@ export function LiveWorkspace({ settings, onBack }: {
     } catch(e) { setError(String((e as Error).message)); }
   }
 
+  async function inspectGithub() {
+    if (!active || githubLoading) return;
+    setInspectorTab('github');
+    setGithubLoading(true);
+    setError('');
+    try {
+      const [foundIssues, foundPulls] = await Promise.all([getGithubIssues(active.cwd), getGithubPulls(active.cwd)]);
+      setGithubRepo(foundIssues.repo);
+      setIssues(foundIssues.items);
+      setPulls(foundPulls.items);
+      setChecks([]);
+    } catch(e) { setError(String((e as Error).message)); }
+    finally { setGithubLoading(false); }
+  }
+  async function inspectChecks(sha: string) {
+    if (!active || githubLoading) return;
+    setGithubLoading(true);
+    setError('');
+    try {
+      const evidence = await getGithubChecks(active.cwd, sha);
+      setChecks(evidence.items);
+    } catch(e) { setError(String((e as Error).message)); }
+    finally { setGithubLoading(false); }
+  }
+
   async function cancel() {
     if (!active) return;
     try { await cancelRuntimePrompt(active.id); }
@@ -260,10 +294,17 @@ export function LiveWorkspace({ settings, onBack }: {
       {health === 'online' && active && <>
         <div className="live-main-header"><div><h2><Terminal size={20}/> {active.adapter} · {active.id.slice(0,8)}</h2><span className="live-agent-badge" style={{ color: badge?.color }}>{badge?.label}</span><span className="live-cwd">{active.cwd}</span></div><div className="live-actions"><button title={ui("重新讀取 Git 狀態與差異","Refresh Git status and diff")} onClick={()=>void inspectGit()}><FileDiff size={16}/> Git</button><button onClick={()=>void cancel()} disabled={active.status !== 'running' && active.status !== 'awaiting_approval'}><Square size={14}/> {ui("取消","Cancel")}</button><button onClick={()=>void closeSession()} disabled={active.status==='closed'||active.status==='interrupted'}><X size={15}/> {ui("關閉工作階段","Close")}</button></div></div>
         <div className="live-notice"><ShieldCheck size={15}/> {ui("真實 ACP 工作階段 · 語言偏好","Real ACP session · Language")}: {effective.locale} ({ui("盡力遵循","best effort")}). {ui("此 Host 只能控制 ACP 傳回的審批請求，不能攔截外部 Harness 內部的隱藏工具。","This host only approves ACP permission requests, not hidden tool execution inside an external harness.")}</div>
-        <div className="live-tabs"><button className={inspectorTab==='activity'?'active':''} onClick={()=>setInspectorTab('activity')}>{ui("工作階段事件","Session events")}</button><button className={inspectorTab==='approvals'?'active':''} onClick={()=>setInspectorTab('approvals')}>{ui("待批准事項","Approvals")} {approvals.length ? `(${approvals.length})` : ''}</button><button className={inspectorTab==='git'?'active':''} onClick={()=>{setInspectorTab('git');void inspectGit();}}>{ui("Git 證據","Git evidence")}</button></div>
+        <div className="live-tabs"><button className={inspectorTab==='activity'?'active':''} onClick={()=>setInspectorTab('activity')}>{ui("工作階段事件","Session events")}</button><button className={inspectorTab==='approvals'?'active':''} onClick={()=>setInspectorTab('approvals')}>{ui("待批准事項","Approvals")} {approvals.length ? `(${approvals.length})` : ''}</button><button className={inspectorTab==='git'?'active':''} onClick={()=>{setInspectorTab('git');void inspectGit();}}>{ui("Git 證據","Git evidence")}</button><button className={inspectorTab==='github'?'active':''} onClick={()=>void inspectGithub()}>{ui("GitHub（唯讀）","GitHub (read only)")}</button></div>
         {inspectorTab==='activity' && <div className="live-history" aria-label="Real ACP events">{timeline.map(e=><div key={e.seq} className={`live-event live-event-${e.kind}`}><small>#{e.seq} · {e.kind} · {new Date(e.createdAt).toLocaleTimeString()}</small><p>{e.label}</p></div>)}{timeline.length===0 && <p className="live-no-events">{ui("已連線，等待你傳送第一段 Prompt。","Connected. Waiting for your first prompt.")}</p>}</div>}
         {inspectorTab==='approvals' && <div className="live-history">{approvals.length===0 && <p className="live-no-events">{ui("目前沒有待處理的 ACP 權限請求。","No pending ACP permission requests.")}</p>}{approvals.map(p=><section key={p.id} className="live-approval"><h3><LockKeyhole size={18}/> {ui("需要權限批准","Approval requested")}</h3><p>{p.title}</p><small>{ui("到期時間","Expires")}: {new Date(p.expires_at).toLocaleString()}</small><div><button onClick={()=>void approve(p,'deny')}><XCircle size={15}/> {ui("拒絕","Deny")}</button><button className="live-allow" onClick={()=>void approve(p,'allow_once')} disabled={!p.choices.some(o=>o.kind==='allow_once')}><Check size={15}/> {ui("僅允許一次","Allow once")}</button></div></section>)}</div>}
         {inspectorTab==='git' && <div className="live-history"><div className="live-code-title"><FolderGit2 size={15}/> {ui("Git 狀態（唯讀）","Git status (read-only)")}</div><pre>{gitEvidence.status ?? ui("尚未讀取 Git 狀態。","No Git status loaded.")}</pre><div className="live-code-title"><FileDiff size={15}/> {ui("工作目錄差異（唯讀）","Working tree diff (read-only)")}</div><pre>{gitEvidence.diff ?? ui("尚未讀取 Git 差異。","No Git diff loaded.")}</pre></div>}
+        {inspectorTab==='github' && <div className="live-history live-github-evidence">
+          <div className="live-github-header"><strong>{githubRepo || ui('GitHub Repo','GitHub repo')}</strong><button className="live-github-refresh" disabled={githubLoading} onClick={()=>void inspectGithub()}>{githubLoading?ui('讀取中…','Loading…'):ui('重新讀取','Refresh')}</button></div>
+          <p className="live-github-warning">{ui('資料來自已登入的 GitHub CLI。此介面只讀取資訊，不會建立 PR、推送或合併。','Data comes from your authenticated GitHub CLI. This panel is read-only and cannot create, push or merge PRs.')}</p>
+          <div className="live-github-section"><h3>{ui('開啟中的 Issues','Open Issues')} ({issues.length})</h3>{issues.length===0 && <p>{ui('沒有資料或尚未讀取。','No results or not loaded.')}</p>}{issues.map(item=><a key={item.number} href={item.url || undefined} target="_blank" rel="noreferrer noopener">#{item.number} · {item.title}</a>)}</div>
+          <div className="live-github-section"><h3>{ui('開啟中的 PR','Open Pull Requests')} ({pulls.length})</h3>{pulls.length===0 && <p>{ui('沒有資料或尚未讀取。','No results or not loaded.')}</p>}{pulls.map(item=><div className="live-github-pull" key={item.number}><a href={item.url || undefined} target="_blank" rel="noreferrer noopener">#{item.number} · {item.title} ({item.state})</a><button disabled={githubLoading || !/^[a-f0-9]{40}$/.test(item.headSha)} onClick={()=>void inspectChecks(item.headSha)}>{ui('查看 CI Checks','View CI checks')}</button></div>)}</div>
+          <div className="live-github-section"><h3>{ui('CI Checks','CI Checks')} ({checks.length})</h3>{checks.length===0 && <p>{ui('尚未讀取，或此 Commit 沒有 Checks；不代表通過。','No checks loaded or reported. This does not imply success.')}</p>}{checks.map(c=><div key={c.id} className="live-github-check"><span>{c.name}: {c.status} / {c.conclusion??'unknown'}</span>{c.url && <a href={c.url} target="_blank" rel="noreferrer noopener">{ui('查看執行紀錄','View run')}</a>}</div>)}</div>
+        </div>}
         <div className="live-composer"><textarea aria-label={ui("傳給真實 ACP Agent 的 Prompt","Prompt to real ACP agent")} placeholder={ui("輸入要交給 ACP Agent 的任務…","Prompt the selected ACP agent…")} rows={3} value={prompt} onChange={e=>setPrompt(e.target.value)} disabled={active.status!=='ready'}/><div className="live-compose-footer"><small>{active.supports_load ? ui('Agent 宣告支援載入 Session','Agent advertises session load') : ui('重啟後僅能讀取歷史；不能宣稱 Agent 已重新接上','Historical session only after restart; no claimed reattach')}</small><button onClick={()=>void submit()} disabled={!prompt.trim() || submitting || active.status!=='ready'}>{ui("傳送 Prompt","Send prompt")}</button></div></div>
       </>}
       {error && <div role="alert" className="live-error"><AlertTriangle size={14}/>{error}<button onClick={()=>setError('')} aria-label="Dismiss error"><X size={15}/></button></div>}
