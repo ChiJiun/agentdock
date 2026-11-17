@@ -78,7 +78,7 @@
       "enum": ["queued", "preparing", "running", "awaiting_approval", "verifying", "review", "pr", "ci", "completed", "interrupted", "failed", "cancelled"]
     },
     "ResumePhase": {
-      "description": "Workflow phase, ordered running < verifying < review < pr < ci. Used for the phase an interrupted task had reached (Interruption.phase) and the phase it re-enters after preparing (resume_phase), which may never be later than the phase reached.",
+      "description": "Workflow phase, ordered running < verifying < review < pr < ci. Used for the phase an interrupted task had reached (Interruption.phase) and the phase it re-enters after preparing (resume_phase), which may never be later than the phase reached. A retry (failed -> queued) carries no resume_phase and always restarts from running.",
       "type": "string",
       "enum": ["running", "verifying", "review", "pr", "ci"]
     },
@@ -88,7 +88,7 @@
       "enum": ["running", "pr", "ci"]
     },
     "ActorKind": {
-      "description": "Who caused a fact. 'adapter' means a signal from an ACP agent process interpreted by the host; an agent never changes task state directly.",
+      "description": "Who caused a fact. 'adapter' is AgentDock's own adapter component recording a protocol fact it observed from an ACP agent process (never the agent itself); an agent never changes task state directly. 'recovery' may only write the events listed in checkpoint-and-replay.md (crash recovery). operation.succeeded/failed and check results come only from 'orchestrator' or 'integration'.",
       "type": "string",
       "enum": ["user", "orchestrator", "policy", "adapter", "integration", "recovery"]
     },
@@ -748,7 +748,8 @@
         { "if": { "properties": { "to": { "const": "awaiting_approval" } } }, "then": { "required": ["return_state", "approval_id"] } },
         { "if": { "properties": { "from": { "const": "awaiting_approval" } } }, "then": { "required": ["approval_id"] } },
         { "if": { "properties": { "from": { "const": "preparing" }, "to": { "enum": ["verifying", "review", "pr", "ci"] } } }, "then": { "required": ["resume_phase"] } },
-        { "if": { "properties": { "from": { "const": "interrupted" }, "to": { "const": "queued" } } }, "then": { "required": ["resume_phase"] } }
+        { "if": { "properties": { "from": { "const": "interrupted" }, "to": { "const": "queued" } } }, "then": { "required": ["resume_phase"] } },
+        { "if": { "properties": { "from": { "const": "failed" }, "to": { "const": "queued" } } }, "then": { "not": { "required": ["resume_phase"] } } }
       ]
     },
     "TaskCheckpointRecordedPayload": {
@@ -862,6 +863,7 @@
         { "if": { "properties": { "trigger": { "enum": ["prompt_submitted", "continue_prompt"] } } }, "then": { "required": ["turn_id"] } },
         { "if": { "properties": { "trigger": { "const": "permission_requested" } } }, "then": { "required": ["approval_id"] } },
         { "if": { "properties": { "to": { "enum": ["closed", "failed"] } } }, "then": { "required": ["outcome"] } },
+        { "if": { "properties": { "to": { "const": "failed" } } }, "then": { "properties": { "outcome": { "enum": ["failed", "cancelled"] } } } },
         { "if": { "properties": { "from": { "const": "awaiting_permission" }, "to": { "const": "active" } } }, "then": { "required": ["approval_id"] } }
       ]
     },

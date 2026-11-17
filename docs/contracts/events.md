@@ -39,7 +39,7 @@ The UI never writes events. It calls typed Rust commands (`create_task`, `resolv
 | `session_id` | Required for `session.*` and `usage.*`; optional for `approval.*` (host-policy approvals are task-scoped). |
 | `type` | `<entity>.<past_tense_verb>`; closed enum per `schema_version`. |
 | `actor` | Who caused it (`user`, `orchestrator`, `policy`, `adapter`, `integration`, `recovery`). `recovery` ⇔ `provenance: recovery`. |
-| `provenance` | `live`; `acp_replay` (history re-sent by an agent during `session/load` — only `session.message_delta`, `session.tool_call`, `session.plan_updated`, and only while that load is in progress); `recovery` (written by crash recovery). |
+| `provenance` | `live`; `acp_replay` (history re-sent by an agent during `session/load` — only `session.message_delta`, `session.tool_call`, `session.plan_updated`, only while that load is in progress, and only after a `session.capabilities_detected` of the process started for this load advertises `loadSession`); `recovery` (written by crash recovery). |
 | `causation_id`, `correlation_id` | Optional links (the event that caused this one; the turn/operation it belongs to). |
 | `redaction` | Always present. Payloads are redacted **before** they are written; there is no unredacted copy in the event store. |
 | `tombstone` | Only on events of a deleted task, rewritten in place after `task.deleted` (`{reason: task_deleted, at}`); the payload is then `{}`. See Retention. |
@@ -52,27 +52,27 @@ Retention class: **D** = durable (kept for the task's lifetime, never compacted)
 | Type | Class | Notes |
 | --- | --- | --- |
 | `task.created` | D | First state `queued` (T01). |
-| `task.state_changed` | D | `from`, `to`, `trigger`; `interruption` iff `to=interrupted`; `failure` iff `to=failed`; `return_state` + `approval_id` when entering `awaiting_approval`; `resume_phase` on resume paths. |
+| `task.state_changed` | D | `from`, `to`, `trigger`; `interruption` iff `to=interrupted`; `failure` iff `to=failed`; `return_state` + `approval_id` when entering `awaiting_approval`; `resume_phase` on resume paths (`T44` and `T05`–`T08`); never on a retry (`T47`), which restarts from `running`. |
 | `task.checkpoint_recorded` | D | See [checkpoint-and-replay.md](checkpoint-and-replay.md#checkpoints). |
 | `task.outcome_acknowledged` | D | User viewed a `completed`/`cancelled`/`failed`/`interrupted` result; `method` = `opened`, `marked_reviewed` or `bulk_marked_reviewed` (bulk only for `completed`/`cancelled`, UX section 4). Drives attention. |
 | `task.policy_updated` | D | User changed `auto_resume_policy`. Turning a flag off disarms an armed interruption; turning it on never arms one retroactively. |
 | `task.deleted` | D | User deleted a `completed`/`cancelled`/`failed` task: `final_state`, `events_tombstoned`. See Retention. |
 | `session.created` | D | `role`, `parent_session_id?`, `adapter_id`, `launch_method`, `supersedes_session_id?`, `handoff_summary_id?`. |
 | `session.capabilities_detected` | D | `CapabilitySnapshot` for this process (after every `initialize`). |
-| `session.state_changed` | D | See state machine. Carries ACP `stop_reason` on `turn_ended`. |
+| `session.state_changed` | D | See state machine. Carries ACP `stop_reason` on `turn_ended`; `outcome` when entering `closed`/`failed` (`failed` only with outcome `failed` or `cancelled`). |
 | `session.prompt_submitted` | T | Turn start; `origin` = `user`, `orchestrator` or `handoff` (summary-seeded restart). |
 | `session.message_delta` | T | Coalesced ACP `agent_message_chunk` / `agent_thought_chunk` / `user_message_chunk`. |
 | `session.tool_call` | T | ACP `tool_call` / `tool_call_update` (status, kind, title, locations). `rawInput`/`rawOutput` never inline; only a redacted `raw_io` artifact. |
 | `session.plan_updated` | T | ACP `plan` entries. |
 | `session.summary_recorded` | D | Interruption / handoff / completion summary; `source` = `agent_generated`, `host_generated`, `user_written`. |
 | `session.output_limited` | D | A per-turn output cap was hit; content truncated or turn cancelled (`turn_cancelled` requires `turn_id`; attention shows `output_limited`). |
-| `session.result_acknowledged` | D | User viewed a finished session's result; `method` as above (bulk only for outcome `succeeded`/`cancelled`). Only `opened` counts as seen for auto-archive. |
+| `session.result_acknowledged` | D | User viewed a finished session's result; `method` as above (bulk only for a `closed` session with outcome `succeeded`/`cancelled`). Only `opened` counts as seen for auto-archive. |
 | `session.archived` / `session.unarchived` | D | UX archive (`docs/ux/states-and-indicators.md` section 5). `archived{by: auto}` and `unarchived{by: system}` only under the rules in [state-machines.md](state-machines.md#archiving-sessions); `unarchived{by: user}` marks the session restored. |
 | `approval.requested` / `approval.resolved` | D | See ADR "Approvals". `return_state` only on blocking approvals; at most one blocking approval per task is pending. ACP permissions carry `operation_kind: tool_call` and the backend's `classified_kind`. An approved but unused host-policy grant may later be `invalidated`. |
-| `operation.recorded` / `.started` / `.succeeded` / `.failed` / `.outcome_unknown` / `.reconciled` / `.abandoned` | D | Non-repeatable side effects. `outcome_unknown` carries `cause` (`host_crash` by recovery, `killed` by the orchestrator; a started `pr_merge` is never killed). `abandoned` ends a never-started operation. See [checkpoint-and-replay.md](checkpoint-and-replay.md#non-repeatable-operations). |
-| `check.started` / `check.finished` | D | Local or CI checks; logs go to an artifact. |
+| `operation.recorded` / `.started` / `.succeeded` / `.failed` / `.outcome_unknown` / `.reconciled` / `.abandoned` | D | Non-repeatable side effects. `succeeded`/`failed` are written only by the `orchestrator` or `integration` that ran the operation (never by `adapter`, `policy`, `user` or `recovery`). `outcome_unknown` carries `cause` (`host_crash` by recovery, `killed` by the orchestrator; a started `pr_merge` is never killed). `abandoned` ends a never-started operation. See [checkpoint-and-replay.md](checkpoint-and-replay.md#non-repeatable-operations). |
+| `check.started` / `check.finished` | D | Local or CI checks; logs go to an artifact. A result is written by `orchestrator` or `integration`; `outcome_unknown` only by `recovery`. |
 | `usage.reported` | D | One `Usage` observation with its `source`. |
-| `system.recovery_started` / `system.recovery_completed` | D | Bracket crash recovery. |
+| `system.recovery_started` / `system.recovery_completed` | D | Bracket crash recovery; both are written by the `recovery` actor, which writes nothing outside the bracket. |
 
 Mapping from ACP v1 (`session/update` variants and methods) is in [acp-capabilities.md](acp-capabilities.md#acp-v1-to-agentdock-event-mapping).
 

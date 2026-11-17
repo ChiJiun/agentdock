@@ -11,7 +11,8 @@ The machine-readable source of truth is [`transitions.json`](transitions.json); 
 - **Durability** (see [checkpoint-and-replay.md](checkpoint-and-replay.md#durability-ordering)):
   - `persist_then_report`: commit the event before any subscriber, UI or agent observes the new state. No optimistic UI for durable state.
   - `persist_then_act`: commit the event *before* performing the side effect it authorizes (spawning a process, answering `session/request_permission`, starting an operation, sending `session/cancel`).
-- **Actors**: `user` (a human action in AgentDock), `orchestrator` (workflow engine), `policy` (host approval gate), `adapter` (signal from an ACP agent process), `integration` (Git/GitHub/CI), `recovery` (startup crash recovery; may only move things *towards* a safe stop).
+- **Actors**: `user` (a human action in AgentDock), `orchestrator` (workflow engine), `policy` (host approval gate), `adapter` (AgentDock's adapter component reporting a protocol fact it observed from an ACP agent process; never the agent itself), `integration` (Git/GitHub/CI), `recovery` (startup crash recovery; may only write the events listed in [checkpoint-and-replay.md](checkpoint-and-replay.md#crash-recovery-host-restart), all of which move things *towards* a safe stop).
+- **Why `adapter` appears on task transitions.** `T12` (the agent sent `session/request_permission`) and `T09`/`T14`/`T20`/`T30` (the agent process reported a quota limit, a rate limit or an authentication requirement, exited, or refused a reattach) are written by the adapter component because each is the mechanical consequence of a protocol fact and is committed in the same transaction as the session event it belongs to. They only stop or block a task; no adapter-written transition moves a task forward.
 
 ## Task states
 
@@ -30,7 +31,7 @@ The machine-readable source of truth is [`transitions.json`](transitions.json); 
 | `failed` | The workflow cannot proceed without a human decision; can be retried. Carries a `Failure`. | no |
 | `cancelled` | Stopped by the user for good. | yes |
 
-`failed` is deliberately not terminal: "retry" (`T47`) is a user decision, never automatic.
+`failed` is deliberately not terminal: "retry" (`T47`) is a user decision, never automatic. **A retry always restarts from `running`**: `T47` carries no `resume_phase` (the schema rejects it), so the only way out of `preparing` afterwards is `T04`, and the task passes verification, review and PR creation again.
 
 **Paused** (mentioned in `architecture.md`) is not a separate state: it is `interrupted` with `reason = user_paused`. This keeps one resume path. See "Open questions" in the ADR.
 
@@ -137,7 +138,7 @@ stateDiagram-v2
 | T44 | `interrupted` | `queued` | user, orchestrator | `resume_requested`, `scheduled_resume` | persist_then_act | `orchestrator_only_if_auto_resume_armed_and_due`, `resume_phase_within_interrupted_phase` |
 | T45 | `interrupted` | `failed` | user, orchestrator | `abandoned` | persist_then_report | — |
 | T46 | `interrupted` | `cancelled` | user | `user_cancel` | persist_then_report | — |
-| T47 | `failed` | `queued` | user | `retry_requested` | persist_then_act | `no_unreconciled_operations` |
+| T47 | `failed` | `queued` | user | `retry_requested` | persist_then_act | `no_unreconciled_operations`, `retry_restarts_from_running` |
 
 `T39` with actor `user` is the user accepting a green CI run. With actor `integration` it requires merge evidence: a `pr_merge` operation of the task that `succeeded` (or was `reconciled_applied`). AgentDock's own `pr_merge` is an approval-gated operation inside `ci` (`T40`/`T19`), and only the user can grant that approval (see [checkpoint-and-replay.md](checkpoint-and-replay.md#rules)). A merge done by a human directly on GitHub is observed by the user, who completes the task with actor `user`.
 
@@ -147,7 +148,7 @@ Rules checked on **every** `task.state_changed`, in addition to the per-edge con
 - No operation of the task may still be `recorded` once its approval was `denied`, `expired`, `cancelled` or `invalidated`; it must be `operation.abandoned` first.
 - An operation that is `recorded` or `started` may stay open only if `to` is a state in which its kind may run (or `awaiting_approval`). The allowed states per kind are listed in [checkpoint-and-replay.md](checkpoint-and-replay.md#classification).
 
-Interruption phase: every `Interruption` records `phase`, the furthest phase the task can be resumed into. It is the state being left if that is a phase (`running`, `verifying`, `review`, `pr`, `ci`); the `return_state` when leaving `awaiting_approval`; and, when leaving `preparing`, the `resume_phase` being restored (or `running`). `T44` may only choose a `resume_phase` at or before it, in the order `running < verifying < review < pr < ci`. Resuming never skips verification, review or PR creation.
+Interruption phase: every `Interruption` records `phase`, the furthest phase the task can be resumed into. It is the state being left if that is a phase (`running`, `verifying`, `review`, `pr`, `ci`); the `return_state` when leaving `awaiting_approval`; and, when leaving `preparing`, the `resume_phase` being restored (or `running`). `T44` may only choose a `resume_phase` at or before it, in the order `running < verifying < review < pr < ci`. Resuming never skips verification, review or PR creation. `resume_phase` exists only on this resume path: a retry (`T47`) has none and restarts from `running`.
 
 Cancelling or interrupting while an operation is `started` (not a crash): the orchestrator kills the operation and records `operation.outcome_unknown{cause: killed}` first, then the transition. The operation is reconciled later by a live read-only probe. A `recorded` operation is `operation.abandoned` instead.
 
@@ -159,7 +160,8 @@ Reconciliation gates: `no_unreconciled_operations` guards every way back into, o
 
 | Condition | Meaning |
 | --- | --- |
-| `resume_phase_equals_to` | `payload.resume_phase == to`, and equals the `resume_phase` recorded when the task left `interrupted` (`T44` requires `resume_phase`). |
+| `resume_phase_equals_to` | `payload.resume_phase == to`, and equals the `resume_phase` recorded when the task left `interrupted` (`T44` requires `resume_phase`). After a retry (`T47`) nothing is recorded, so `T05`–`T08` are rejected and only `T04` is possible. |
+| `retry_restarts_from_running` | `T47` carries no `resume_phase` (also a schema rule): a retry always restarts from `running`. |
 | `no_unreconciled_operations` | No operation of the task is `recorded`, `started` or `outcome_unknown`. Used on `T07`, `T08`, `T28`, `T29`, `T34`, `T39`, `T47`. |
 | `no_open_operations` | No operation of the task is `recorded` or `started`, and no host-policy approval of the task is `approved` but unused. Abandon recorded operations, invalidate unused grants, and kill started operations (`outcome_unknown{cause: killed}`) before leaving the phase; a started `pr_merge` cannot be killed, so the transition waits for its result. |
 | `resume_phase_within_interrupted_phase` | `resume_phase` is at or before `interruption.phase` (`running < verifying < review < pr < ci`). |
@@ -188,7 +190,7 @@ A Session is one conversation with one ACP agent process lineage. A Task has man
 | `suspended` | The task was interrupted (quota, pause); the process may still be alive. |
 | `disconnected` | The process is gone (exited, crashed, host crashed). The external session may or may not be reattachable. |
 | `closed` | Finished; carries `outcome` (`succeeded`, `failed`, `cancelled`, `superseded`, `abandoned`). |
-| `failed` | Could not start or broke the protocol; carries `outcome`. |
+| `failed` | Could not start or broke the protocol; carries `outcome` `failed`, or `cancelled` when the launch failed because the task was being cancelled (schema rule: no other outcome). |
 
 `closed` and `failed` are terminal for that `session_id`. A task-level restart creates a **new** Session with `supersedes_session_id`.
 
@@ -229,6 +231,7 @@ Additional session rules:
 - `S10` requires the ACP permission to be persisted as a pending `Approval` first (`persist_then_act`: AgentDock must be able to show it after a crash).
 - When a turn is cancelled, every pending `session/request_permission` is answered `cancelled` (ACP v1 requirement) and recorded as `approval.resolved{state: cancelled}` before the session leaves `awaiting_permission` (also before `S23`).
 - `S03` with `attach_rejected`: the agent refused `session/load` / `session/resume`. The task is then interrupted with `reason: session_unavailable` (`T09`), so the user decides whether to restart with a new session.
+- History re-sent by the agent during `session/load` (`provenance: acp_replay`) is accepted only while the session is `starting` with launch method `load`, only after a `session.capabilities_detected` recorded for this launch advertises `loadSession` (the snapshot of the previous process, which `S20` looks at, is not enough), and only as `session.message_delta`, `session.tool_call` or `session.plan_updated`.
 - `S22`–`S24`: a protocol error can happen while idle, while asking for permission, or while suspended. `S25` closes a session that is still starting (for example when the task is cancelled during `preparing`).
 - Late prompt response after `S11`: if the agent answers the cancelled `session/prompt` while the session is `suspended`, the session stays `suspended`; the `stopReason` and `turn_id` are recorded on the next transition out of `suspended` (`stop_reason` is allowed on any `session.state_changed`). It never moves the session back to `idle` on its own.
 - `session.output_limited{action: turn_cancelled}` sends `session/cancel`; the turn then ends with `stopReason: cancelled`. Attention shows it as `output_limited`, not as a user cancel.
@@ -237,10 +240,10 @@ Additional session rules:
 
 These rules implement the merged UX spec (`docs/ux/states-and-indicators.md` section 5, acceptance criteria UX-40 to UX-47). "Archived" in the UX is `Session.archived` here; the events are `session.archived{by}` and `session.unarchived{by}`.
 
-- **Viewed vs opened.** `session.result_acknowledged{method}` records that the user viewed a result: `opened` (rendered on screen while the window had focus), `marked_reviewed` (one row) or `bulk_marked_reviewed` ("Mark completed as reviewed", only for outcome `succeeded`/`cancelled`). Any method clears the needs-review item; only `opened` satisfies the auto-archive rule.
-- **Automatic archive** (`by: auto`, actor `orchestrator`) is allowed only when all hold: the session has a `parent_session_id`; it is `closed`/`failed` with outcome `succeeded` or `cancelled`; its result was `opened` after it finished; and the user never restored it. The UI emits it only after the user navigated away (rows never disappear while focused, hovered or on screen; that part is a UI rule and not checkable from events).
-- **Never automatically archived:** a session without a parent (the main session, UX-40), a child with outcome `failed` (including a protocol error), `superseded` or `abandoned` (UX-42), and a child the user restored (UX-41, UX-46).
-- **Manual archive** (`by: user`, actor `user`) only in a terminal state: a child that is `closed`/`failed`; a main session when its task is `completed`, `failed`, `interrupted` or `cancelled` (UX-40).
+- **Viewed vs opened.** `session.result_acknowledged{method}` records that the user viewed a result: `opened` (rendered on screen while the window had focus), `marked_reviewed` (one row) or `bulk_marked_reviewed` ("Mark completed as reviewed", only for a `closed` session with outcome `succeeded`/`cancelled`). Any method clears the needs-review item; only `opened` satisfies the auto-archive rule.
+- **Automatic archive** (`by: auto`, actor `orchestrator`) is allowed only when all hold: the session has a `parent_session_id`; it is in state `closed` with outcome `succeeded` or `cancelled` (the UX states `completed`/`cancelled`); its result was `opened` after it finished; and the user never restored it. The UI emits it only after the user navigated away (rows never disappear while focused, hovered or on screen; that part is a UI rule and not checkable from events).
+- **Never automatically archived:** a session without a parent (the main session, UX-40), a child in state `failed` whatever its outcome (a protocol error, a failed launch or attach; this is the UX state `failed`, UX-42), a `closed` child with outcome `failed`, `superseded` or `abandoned` (UX-42), and a child the user restored (UX-41, UX-46). Requiring state `closed` is the rule; in addition the schema lets a session enter `failed` only with outcome `failed` or `cancelled`. Forcing the outcome to `failed` was not possible, because a launch that fails while its task is being cancelled is `failed` with outcome `cancelled` (fixture 03).
+- **Manual archive** (`by: user`, actor `user`) only in a terminal state: a child that is `closed`/`failed`; a main session when its task is `completed`, `failed`, `cancelled`, or `interrupted` for a reason other than `user_paused` (UX-40 and UX section 5: a running, queued, paused or awaiting session must be stopped first). "Paused" is `interrupted{user_paused}`, so it is excluded although it is an `interrupted` task; `queued`, `preparing`, `running`, `awaiting_approval`, `verifying`, `review`, `pr` and `ci` are excluded as running/queued/awaiting. A session that is waiting for the user (see "Waiting wins over archived") cannot be archived either.
 - **Restore.** `session.unarchived{by: user}` (Undo or Unarchive) marks the session restored; it is never auto-archived again but can still be archived manually.
 - **Waiting wins over archived** (UX-47). If an archived session starts waiting for the user — a `needs_reply` item names it, a task-level `needs_reply` item exists for its task and it is a main session, or it is `awaiting_permission` — the orchestrator writes `session.unarchived{by: system}` in the same transaction as the event that made it wait. This does not mark it restored.
 - Derived attention hides `needs_review` and `background` items of archived sessions (and task-level items when every main session of the task is archived). `needs_reply` items are never hidden.

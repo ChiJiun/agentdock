@@ -935,8 +935,9 @@ def f12():
             "session_unavailable; disabling auto-resume disarms a waiting task whose suspended agent then fails; a "
             "running task whose idle agent crashed; a turn cancelled by the output limit; a review session with a "
             "non-blocking ACP approval that fails while asking, followed by a refusal; a session closed while starting; "
-            "a main session archived while paused and unarchived by the system when it asks for permission; and a task "
-            "that went through crash recovery and was then deleted (its history, including the recovery events, is "
+            "a main session archived after a rate-limit stop the user had viewed (never while paused) and unarchived by "
+            "the system when it asks for permission; a running task whose agent is ready but has no turn yet; and a "
+            "task that went through crash recovery and was then deleted (its history, including the recovery events, is "
             "tombstoned; fixtures/predelete/ keeps the stream as it was before deletion).")
     g = fx.task("G: crashed, cancelled, then deleted")
     pg = fx.drive_to(g, "running")
@@ -1016,12 +1017,15 @@ def f12():
     fx.tr(f, "cancelled", "user_cancel", USER)
     fx.sst(sf, "closed", "session_closed", ORCH, outcome="cancelled")
 
-    h = fx.task("H: archived while paused, unarchived when it asks")
+    # A main session may be archived by hand only in a terminal task state, never while paused (UX section 5):
+    # here the task was stopped by a rate limit (not armed), the user viewed it and archived the session.
+    h = fx.task("H: archived after a rate-limit stop, unarchived when it asks")
     ph = fx.drive_to(h, "running")
     turn = fx.prompt(ph, "Split the config module.")
     fx.end_turn(ph, turn)
-    fx.interrupt(h, "user_paused", USER)
-    fx.sst(ph, "suspended", "task_interrupted", USER)
+    fx.sst(ph, "suspended", "task_interrupted", ORCH)
+    fx.interrupt(h, "rate_limited", adapter("claude-code"))
+    fx.ack_task(h)
     fx.emit("session.archived", USER, {"by": "user"}, task=h, session=ph)
     fx.tr(h, "queued", "resume_requested", USER, resume_phase="running")
     fx.tr(h, "preparing", "scheduled")
@@ -1029,11 +1033,14 @@ def f12():
     turn = fx.prompt(ph, "Continue the split.")
     ah = fx.acp_permission(ph, turn, "Edit src/config/mod.rs", "call-h1", classified="workspace_edit", unarchive=True)
 
+    i = fx.task("I: agent ready, first prompt not sent yet")
+    pi = fx.drive_to(i, "running")
+
     fx.delete_task(g)
     fx.write({a: "interrupted", b: "interrupted", c: "running", d: "running", e: "review", f: "cancelled",
-              h: "awaiting_approval"},
+              h: "awaiting_approval", i: "running"},
              {pa: "failed", pb: "failed", pc: "failed", pd: "idle", pe: "idle", r: "failed", r2: "idle", sf: "closed",
-              ph: "awaiting_permission"},
+              ph: "awaiting_permission", pi: "idle"},
              [att("needs_review", "interruption_needs_decision", a),
               att("needs_review", "interruption_needs_decision", b),
               att("needs_reply", "session_unavailable", c),
@@ -1042,7 +1049,8 @@ def f12():
               att("needs_reply", "agent_turn_ended", e, r2),
               att("needs_review", "child_result_unviewed", e, r),
               att("needs_review", "task_outcome_unviewed", f),
-              att("needs_reply", "approval_pending", h, ph, ah)])
+              att("needs_reply", "approval_pending", h, ph, ah),
+              att("background", "workflow_step", i)])
 
 
 def samples():

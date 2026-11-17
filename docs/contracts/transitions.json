@@ -51,7 +51,7 @@
       { "id": "T44", "from": "interrupted", "to": "queued", "actors": ["user", "orchestrator"], "triggers": ["resume_requested", "scheduled_resume"], "durability": "persist_then_act", "conditions": ["orchestrator_only_if_auto_resume_armed_and_due", "resume_phase_within_interrupted_phase"] },
       { "id": "T45", "from": "interrupted", "to": "failed", "actors": ["user", "orchestrator"], "triggers": ["abandoned"], "durability": "persist_then_report" },
       { "id": "T46", "from": "interrupted", "to": "cancelled", "actors": ["user"], "triggers": ["user_cancel"], "durability": "persist_then_report" },
-      { "id": "T47", "from": "failed", "to": "queued", "actors": ["user"], "triggers": ["retry_requested"], "durability": "persist_then_act", "conditions": ["no_unreconciled_operations"] }
+      { "id": "T47", "from": "failed", "to": "queued", "actors": ["user"], "triggers": ["retry_requested"], "durability": "persist_then_act", "conditions": ["no_unreconciled_operations", "retry_restarts_from_running"] }
     ]
   },
   "session": {

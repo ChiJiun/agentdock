@@ -13,6 +13,11 @@ What it checks:
   6. No property name anywhere suggests a known subscription quota balance.
   7. Negative self-test: a list of deliberate mutations (gap in cursor, re-running a push after a crash,
      recovery approving, early auto-resume, ...) must each be rejected with the expected message.
+  8. The "Enforcement boundary" section is the same text in README.md and ADR-0003, names exactly the mutations
+     of the self-test, and both files state the current number of mutations.
+
+Passing is a regression result over the committed fixtures. It does not show that an invariant holds for other
+streams; see the Enforcement boundary section.
 
 Usage:  python -B docs/contracts/validate_fixtures.py   (exit code 0 = all good; -B avoids writing __pycache__)
 """
@@ -30,6 +35,8 @@ SCHEMA_PATH = ROOT / "schema" / "agentdock.schema.json"
 TRANSITIONS_PATH = ROOT / "transitions.json"
 FIXTURES_DIR = ROOT / "fixtures"
 PREDELETE_DIR = FIXTURES_DIR / "predelete"
+README_PATH = ROOT / "README.md"
+ADR_PATH = ROOT.parent / "decisions" / "0003-task-session-event-contracts.md"
 
 # Any property name (including inside opaque objects such as acp_agent_capabilities) that suggests a
 # known subscription balance. 'on_quota_reset' (a user policy flag) is the only quota-named key allowed.
@@ -249,6 +256,23 @@ BULK_TASK_STATES = {"completed", "cancelled"}
 BULK_SESSION_OUTCOMES = {"succeeded", "cancelled"}
 AUTO_ARCHIVE_OUTCOMES = {"succeeded", "cancelled"}
 REVIEW_SESSION_OUTCOMES = {"succeeded", "failed", "cancelled"}
+# The only events the recovery actor may write (checkpoint-and-replay.md, crash recovery). Each predicate sees the
+# payload; a tombstoned event (payload {}) is checked by type only.
+RECOVERY_WRITES = {
+    "approval.resolved": lambda p: p.get("state") == "invalidated",
+    "operation.outcome_unknown": lambda p: p.get("cause") == "host_crash",
+    "operation.abandoned": lambda p: p.get("reason") == "host_recovery",
+    "check.finished": lambda p: p.get("state") == "outcome_unknown",
+    "session.state_changed": lambda p: p.get("to") == "disconnected" and p.get("trigger") == "host_recovery",
+    "task.state_changed": lambda p: p.get("to") == "interrupted"
+    and (p.get("interruption") or {}).get("reason") == "host_crashed",
+    "system.recovery_started": lambda p: True,
+    "system.recovery_completed": lambda p: True,
+}
+# Who may report the result of a started operation or a finished check (never the agent, policy or the user).
+RESULT_ACTORS = {"orchestrator", "integration"}
+# History an agent may re-send during session/load (events.md, provenance).
+ACP_REPLAY_TYPES = {"session.message_delta", "session.tool_call", "session.plan_updated"}
 
 
 def operation_identity(target):
@@ -308,6 +332,7 @@ class Replay:
         self.deleted = set()
         self.checkpoints = {}     # task_id -> worktree of the latest task.checkpoint_recorded
         self.must_unarchive = set()
+        self.deleted_id_claims = []  # (recovery_completed event, key, ids claimed to belong to a deleted task)
 
     def err(self, ev, msg):
         self.errors.append(f"{self.name} seq={ev.get('seq')} {ev.get('type')}: {msg}")
@@ -336,6 +361,15 @@ class Replay:
             self.err(ev, "actor 'recovery' and provenance 'recovery' must go together")
         if self.recovery is not None and not ev["type"].startswith("system.") and not is_recovery_actor:
             self.err(ev, "only recovery-actor events may be written while recovery is in progress")
+        if is_recovery_actor:
+            allowed = RECOVERY_WRITES.get(ev["type"])
+            if allowed is None or not ("tombstone" in ev or allowed(ev["payload"])):
+                self.err(ev, "the recovery actor may only invalidate approvals, mark started operations/running checks "
+                             "outcome_unknown{host_crash}, abandon recorded operations (host_recovery), disconnect "
+                             "sessions (host_recovery) and interrupt tasks (host_crashed)")
+            elif self.recovery is None and ev["type"] != "system.recovery_started":
+                self.err(ev, "recovery-actor events are only written between system.recovery_started and "
+                             "system.recovery_completed")
         tid = ev.get("task_id")
         if tid in self.deleted:
             return self.err(ev, "event for a deleted task")
@@ -349,8 +383,14 @@ class Replay:
             self.live_counts[tid] = self.live_counts.get(tid, 0) + 1
         if ev["provenance"] == "acp_replay":
             s = self.sessions.get(ev.get("session_id"))
+            if ev["type"] not in ACP_REPLAY_TYPES:
+                self.err(ev, f"acp_replay is only valid for {sorted(ACP_REPLAY_TYPES)}")
             if not s or s["state"] != "starting" or s["launch_method"] != "load":
                 self.err(ev, "acp_replay events are only valid while a session/load is in progress")
+            elif (s["snapshot"] is None or s["snapshot_seq"] < s["launch_seq"]
+                  or not s["snapshot"]["features"]["load_session"]):
+                self.err(ev, "acp_replay requires that the current process (capabilities detected after this launch) "
+                             "advertised loadSession")
         if tid is not None and ev["type"] not in ("task.created", "task.deleted") and tid not in self.tasks:
             self.err(ev, "unknown task_id")
         if "session_id" in ev and ev["type"] != "session.created":
@@ -442,8 +482,8 @@ class Replay:
             if intr["phase"] != phase:
                 self.err(ev, f"interruption.phase must be {phase} (the phase being left), not {intr['phase']}")
             t["interruption"] = intr
-        if to == "queued":  # T44 records where to resume; T47 (retry) restarts from running
-            t["resume_phase"] = p.get("resume_phase")
+        if to == "queued":  # T44 records where to resume; T47 (retry) always restarts from running
+            t["resume_phase"] = None if frm == "failed" else p.get("resume_phase")
         if frm == "interrupted":
             t["interruption"] = None
         if to == "awaiting_approval":
@@ -488,6 +528,11 @@ class Replay:
         phase = (t["interruption"] or {}).get("phase", "running")
         if PHASE_ORDER.index(p["resume_phase"]) > PHASE_ORDER.index(phase):
             self.err(ev, f"resume_phase {p['resume_phase']} is beyond the interrupted phase {phase}")
+
+    def cond_retry_restarts_from_running(self, ev, p, t, tid):
+        # The schema already forbids the field on failed -> queued; this keeps the rule next to the other conditions.
+        if "resume_phase" in p:
+            self.err(ev, "a retry (failed -> queued) always restarts from running; it carries no resume_phase")
 
     def cond_no_unreconciled_operations(self, ev, p, t, tid):
         for oid, op in self.operations.items():
@@ -697,8 +742,9 @@ class Replay:
             self.err(ev, "a session result can only be acknowledged once the session is closed/failed")
         if ev["actor"]["kind"] != "user":
             self.err(ev, "only the user acknowledges a session result")
-        if p["method"] == "bulk_marked_reviewed" and s["outcome"] not in BULK_SESSION_OUTCOMES:
-            self.err(ev, f"'Mark completed as reviewed' never applies to a session with outcome {s['outcome']}")
+        if p["method"] == "bulk_marked_reviewed" and (s["state"] != "closed" or s["outcome"] not in BULK_SESSION_OUTCOMES):
+            self.err(ev, f"'Mark completed as reviewed' never applies to a {s['state']} session with outcome "
+                         f"{s['outcome']}")
         s["ack_seq"] = ev["seq"]
         if p["method"] == "opened":
             s["opened_seq"] = ev["seq"]
@@ -714,9 +760,9 @@ class Replay:
                 self.err(ev, "auto-archive is written by the orchestrator")
             if s["parent"] is None:
                 self.err(ev, "a main (parent-less) session is never auto-archived")
-            if s["state"] not in ("closed", "failed") or s["outcome"] not in AUTO_ARCHIVE_OUTCOMES:
-                self.err(ev, f"auto-archive requires a finished child session with outcome succeeded or cancelled "
-                             f"(state {s['state']}, outcome {s['outcome']})")
+            if s["state"] != "closed" or s["outcome"] not in AUTO_ARCHIVE_OUTCOMES:
+                self.err(ev, f"auto-archive requires a closed child session with outcome succeeded or cancelled; a "
+                             f"failed session is never auto-archived (state {s['state']}, outcome {s['outcome']})")
             elif s["opened_seq"] <= s["closed_seq"]:
                 self.err(ev, "auto-archive requires the result to have been opened after the session finished "
                              "(marking it reviewed does not count)")
@@ -727,9 +773,15 @@ class Replay:
                 self.err(ev, "archived by 'user' must have a user actor")
             if s["parent"] is not None and s["state"] not in ("closed", "failed"):
                 self.err(ev, f"manual archive is offered only in a terminal state (session is {s['state']})")
-            if s["parent"] is None and self.tasks[s["task_id"]]["state"] not in ACK_TASK_STATES:
-                self.err(ev, f"manual archive of a main session is offered only in a terminal task state "
-                             f"(task is {self.tasks[s['task_id']]['state']})")
+            if s["parent"] is None:
+                t = self.tasks[s["task_id"]]
+                paused = t["state"] == "interrupted" and (t["interruption"] or {}).get("reason") == "user_paused"
+                if t["state"] not in ACK_TASK_STATES or paused:
+                    self.err(ev, f"manual archive of a main session is offered only in a terminal task state, not "
+                                 f"while it is running, queued, paused or awaiting (task is "
+                                 f"{'paused' if paused else t['state']})")
+            if sid in self._waiting_sessions():
+                self.err(ev, "a session that is waiting for the user (needs reply) cannot be archived")
         s["archived"] = p["by"]
 
     def session_unarchived(self, ev, p):
@@ -942,6 +994,9 @@ class Replay:
         op = self.operations.get(p["operation_id"])
         if op is None or op["state"] != "started":
             return self.err(ev, f"operation must be started to become {new_state}")
+        if new_state in ("succeeded", "failed") and ev["actor"]["kind"] not in RESULT_ACTORS:
+            self.err(ev, f"operation.{new_state} is reported by the orchestrator or integration that ran it, "
+                         f"not {ev['actor']['kind']}")
         if new_state == "outcome_unknown":
             want = {"host_crash": "recovery", "killed": "orchestrator"}[p["cause"]]
             if ev["actor"]["kind"] != want:
@@ -993,6 +1048,8 @@ class Replay:
             return self.err(ev, "check must be running")
         if p["state"] == "outcome_unknown" and ev["actor"]["kind"] != "recovery":
             self.err(ev, "outcome_unknown is assigned by crash recovery")
+        elif p["state"] != "outcome_unknown" and ev["actor"]["kind"] not in RESULT_ACTORS:
+            self.err(ev, f"check results are reported by the orchestrator or integration, not {ev['actor']['kind']}")
         c["state"] = p["state"]
 
     # -- usage / summary ------------------------------------------------------------------------
@@ -1020,6 +1077,8 @@ class Replay:
         r = self.recovery
         if r is None:
             return self.err(ev, "recovery_completed without recovery_started")
+        if ev["actor"]["kind"] != "recovery":
+            self.err(ev, "system.recovery_completed is written by the recovery actor")
         for aid, a in self.approvals.items():
             if a["state"] == "pending":
                 self.err(ev, f"approval {aid} still pending after recovery")
@@ -1054,6 +1113,9 @@ class Replay:
             if not actual <= listed or len(listed - actual) != hidden.get(key, 0):
                 self.err(ev, f"{key} lists {sorted(p[key])}, recovery changed {sorted(actual)}"
                              + (f" plus {hidden[key]} id(s) of a deleted task" if hidden.get(key) else ""))
+            elif listed - actual:
+                # Stand-ins for ids of a deleted task: checked at the end of the stream, when every live id is known.
+                self.deleted_id_claims.append((ev, key, listed - actual))
         self.recovery = None
 
     def finish(self):
@@ -1069,6 +1131,11 @@ class Replay:
                 self.errors.append(f"{self.name}: tombstoned events of {tid} without task.deleted")
         for sid in sorted(self.must_unarchive):
             self.errors.append(f"{self.name}: archived session {sid} is waiting for the user but was never unarchived")
+        live = {"approvals_invalidated": self.approvals, "operations_marked_unknown": self.operations,
+                "operations_abandoned": self.operations, "checks_marked_unknown": self.checks}
+        for ev, key, ids in self.deleted_id_claims:
+            for x in sorted(ids & set(live[key])):
+                self.err(ev, f"{key} lists {x} as an id of a deleted task, but it belongs to a live entity")
 
     # -- dispatcher -----------------------------------------------------------------------------
     def apply(self, ev):
@@ -1152,6 +1219,10 @@ class Replay:
             elif st == "running":
                 if not any(s["role"] in REPLY_ROLES and s["state"] in LIVE_SESSION for s in sessions):
                     items.add(("needs_reply", "session_unavailable", tid, None, None))
+                elif any(s["role"] in REPLY_ROLES and s["state"] in ("starting", "idle") and s["last_stop"] is None
+                         for s in sessions):
+                    # The agent is starting or has no turn yet: the orchestrator sends the first prompt (UX: running).
+                    items.add(("background", "workflow_step", tid, None, None))
             elif st == "interrupted":
                 intr = t["interruption"] or {}
                 if intr.get("reason") == "user_paused":
@@ -1283,6 +1354,7 @@ def main():
     if missing:
         errors.append(f"transitions never exercised by any fixture: {', '.join(missing)}")
 
+    errors += check_enforcement_docs()
     mutations_run = 0
     if not errors:
         mutation_errors, mutations_run = self_test(loaded, transitions, v, defs)
@@ -1294,7 +1366,8 @@ def main():
             print("  -", e)
         return 1
     print(f"OK: {len(fixtures)} fixtures, {total_events} events, {len(covered)}/{len(all_ids)} transitions covered, "
-          f"schema keyword subset respected, models.sample.json valid, {mutations_run} negative mutations rejected")
+          f"schema keyword subset respected, models.sample.json valid, {mutations_run} negative mutations rejected, "
+          f"Enforcement boundary table consistent")
     return 0
 
 
@@ -1894,6 +1967,234 @@ def _m_n6d_probe_less_reconcile_finding(ev):
     return ev
 
 
+# -- review round 3: the reviewer's reproductions (E1-E13) as formal mutations ---------------------------
+_USER, _ORCH, _REC = {"kind": "user", "id": "local-user"}, {"kind": "orchestrator"}, {"kind": "recovery"}
+
+
+def _recovery_writes_result(ev, etype, payload):
+    """Fixture 06: crash recovery writes a result for the started push instead of outcome_unknown."""
+    i = _find(ev, "operation.outcome_unknown", lambda e: e["actor"]["kind"] == "recovery")
+    oid = ev[i]["payload"]["operation_id"]
+    ev[i]["type"], ev[i]["payload"] = etype, dict(payload, operation_id=oid)
+    j = _next(ev, "system.recovery_completed", i)
+    ev[j]["payload"]["operations_marked_unknown"] = []
+    ev[j - 1]["payload"]["interruption"].pop("open_operation_ids", None)
+    return _renumber([e for e in ev if e["type"] != "operation.reconciled"]), oid
+
+
+def _m_r4_recovery_writes_succeeded(ev):  # E1a
+    return _recovery_writes_result(ev, "operation.succeeded", {})[0]
+
+
+def _m_r4_recovery_fails_then_repush(ev):  # E1c
+    ev, oid = _recovery_writes_result(ev, "operation.failed", {"error": {"code": "push_interrupted"}, "effect": "none"})
+    rec = ev[_op_event(ev, oid, "operation.recorded")]["payload"]
+    k = _find(ev, "task.state_changed", lambda e: e["payload"]["trigger"] == "resume_phase_restored")
+    new_op, new_apr = "op_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    pr = json.loads(json.dumps(rec))
+    pr.update(operation_id=new_op, approval_id=new_apr, supersedes_operation_id=oid)
+    steps = [("operation.recorded", _ORCH, pr),
+             ("approval.requested", {"kind": "policy", "id": "policy.default"},
+              {"approval_id": new_apr, "source": "host_policy", "operation_kind": "git_push",
+               "operation_fingerprint": pr["idempotency_key"], "operation_id": new_op, "title": "Push again",
+               "scope": "once", "return_state": "pr"}),
+             ("task.state_changed", {"kind": "policy", "id": "policy.default"},
+              {"from": "pr", "to": "awaiting_approval", "trigger": "approval_requested", "approval_id": new_apr,
+               "return_state": "pr"}),
+             ("approval.resolved", _USER, {"approval_id": new_apr, "state": "approved", "scope": "once"}),
+             ("task.state_changed", _USER, {"from": "awaiting_approval", "to": "pr", "trigger": "approval_resolved",
+                                            "approval_id": new_apr}),
+             ("operation.started", _ORCH, {"operation_id": new_op, "approval_id": new_apr}),
+             ("operation.succeeded", {"kind": "integration", "id": "github"}, {"operation_id": new_op})]
+    for n, (etype, actor, payload) in enumerate(steps, 1):
+        ev.insert(k + n, _new_event(ev, k, etype, actor, payload, 10 + n))
+    return _renumber(ev)
+
+
+def _m_r4_recovery_passes_check(ev):  # E1d
+    i = _find(ev, "system.recovery_started")
+    started = _new_event(ev, i - 1, "check.started", _ORCH,
+                         {"check_id": "chk_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "name": "cargo test", "origin": "local"}, 1)
+    finished = _new_event(ev, i - 1, "check.finished", _REC,
+                          {"check_id": "chk_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "state": "passed"}, 2)
+    finished["occurred_at"] = finished["recorded_at"] = ev[i]["recorded_at"]
+    ev.insert(i, started)
+    ev.insert(i + 2, finished)
+    return _renumber(ev)
+
+
+def _m_r4_recovery_actor_outside_window(ev):
+    i = _find(ev, "system.recovery_started")
+    j = _find(ev, "session.state_changed", lambda e: e["actor"]["kind"] == "recovery")
+    moved = ev.pop(j)
+    moved["occurred_at"] = moved["recorded_at"] = ev[i]["recorded_at"]
+    ev.insert(i, moved)
+    return _renumber(ev)
+
+
+def _m_r4_orchestrator_completes_recovery(ev):  # E7
+    i = _find(ev, "system.recovery_completed")
+    ev[i]["actor"], ev[i]["provenance"] = dict(_ORCH), "live"
+    return ev
+
+
+def _m_r4_adapter_reports_operation_result(ev):  # E8
+    ev[_find(ev, "operation.succeeded")]["actor"] = {"kind": "adapter", "id": "claude-code"}
+    return ev
+
+
+def _m_r4_adapter_reports_check_result(ev):
+    ev[_find(ev, "check.finished")]["actor"] = {"kind": "adapter", "id": "claude-code"}
+    return ev
+
+
+def _retry_after_failure(ev, steps):
+    """Append a retry of the task that most recently failed (it is still failed at the end of the fixture)."""
+    tid = ev[max(i for i, e in enumerate(ev) if e["type"] == "task.state_changed"
+                 and "tombstone" not in e and e["payload"]["to"] == "failed")]["task_id"]
+    ref = len(ev) - 1
+    for n, (etype, actor, payload) in enumerate(steps, 1):
+        e = _new_event(ev, ref, etype, actor, payload, n)
+        e["task_id"] = tid
+        ev.append(e)
+    return _renumber(ev)
+
+
+def _m_r4_retry_with_resume_phase(ev):  # E3a
+    return _retry_after_failure(ev, [
+        ("task.state_changed", _USER, {"from": "failed", "to": "queued", "trigger": "retry_requested",
+                                       "resume_phase": "review"}),
+        ("task.state_changed", _ORCH, {"from": "queued", "to": "preparing", "trigger": "scheduled"}),
+        ("task.state_changed", _ORCH, {"from": "preparing", "to": "review", "trigger": "resume_phase_restored",
+                                       "resume_phase": "review"})])
+
+
+def _m_r4_retry_skips_to_pr(ev):  # E3b without the forbidden field
+    return _retry_after_failure(ev, [
+        ("task.state_changed", _USER, {"from": "failed", "to": "queued", "trigger": "retry_requested"}),
+        ("task.state_changed", _ORCH, {"from": "queued", "to": "preparing", "trigger": "scheduled"}),
+        ("task.state_changed", _ORCH, {"from": "preparing", "to": "pr", "trigger": "resume_phase_restored",
+                                       "resume_phase": "pr"})])
+
+
+def _m_r4_replay_without_current_load_capability(ev):  # E13
+    first = _find(ev, "session.message_delta", lambda e: e["provenance"] == "acp_replay")
+    c = max(i for i in range(first) if ev[i]["type"] == "session.capabilities_detected")
+    snap = ev[c]["payload"]["snapshot"]
+    snap["acp_agent_capabilities"].pop("loadSession", None)
+    snap["features"]["load_session"] = False
+    return ev
+
+
+def _m_r4_replay_of_other_event_type(ev):
+    first = _find(ev, "session.message_delta", lambda e: e["provenance"] == "acp_replay")
+    c = max(i for i in range(first) if ev[i]["type"] == "session.capabilities_detected")
+    ev[c]["provenance"] = "acp_replay"
+    return ev
+
+
+def _failed_child(ev):
+    return _find(ev, "session.state_changed", lambda e: e["payload"]["to"] == "failed"
+                 and e["payload"]["trigger"] == "protocol_error"
+                 and any(c["type"] == "session.created" and c["session_id"] == e["session_id"]
+                         and c["payload"].get("parent_session_id") for c in ev))
+
+
+def _m_r4_auto_archive_failed_state_child(ev):  # E4, with the one non-failed outcome a failed session may carry
+    k = _failed_child(ev)
+    ev[k]["payload"]["outcome"] = "cancelled"
+    return _append_auto_archive(ev, ev[k]["session_id"], opened=True)
+
+
+def _m_r4_failed_session_claims_success(ev):  # E4 as the reviewer wrote it: now a schema error
+    ev[_failed_child(ev)]["payload"]["outcome"] = "succeeded"
+    return ev
+
+
+def _m_r4_bulk_mark_failed_state_session(ev):
+    k = _failed_child(ev)
+    ev[k]["payload"]["outcome"] = "cancelled"
+    ack = _new_event(ev, len(ev) - 1, "session.result_acknowledged", _USER, {"method": "bulk_marked_reviewed"}, 1)
+    ack.update(task_id=ev[k]["task_id"], session_id=ev[k]["session_id"])
+    ev.append(ack)
+    return _renumber(ev)
+
+
+def _m_r4_archive_waiting_main_session(ev):
+    """Fixture 06: after the crash the push is outcome_unknown (reconcile_needed), so the main session is waiting."""
+    i = _find(ev, "system.recovery_completed")
+    tid = ev[i - 1]["task_id"]
+    sid = next(e["session_id"] for e in ev if e["type"] == "session.created" and e["task_id"] == tid
+               and not e["payload"].get("parent_session_id"))
+    a = _new_event(ev, i - 1, "session.archived", _USER, {"by": "user"}, 1)
+    a["session_id"] = sid
+    a["occurred_at"] = a["recorded_at"] = ev[i]["recorded_at"]
+    ev.insert(i + 1, a)
+    return _renumber(ev)
+
+
+def _m_r4_recovery_disconnects_with_other_trigger(ev):
+    i = _find(ev, "session.state_changed", lambda e: e["actor"]["kind"] == "recovery")
+    ev[i]["payload"]["trigger"] = "process_exited"
+    return ev
+
+
+def _m_r4_archive_paused_main_session(ev):  # E5
+    i = _find(ev, "task.state_changed", lambda e: e["payload"]["to"] == "interrupted"
+              and e["payload"]["interruption"]["reason"] == "user_paused")
+    tid = ev[i]["task_id"]
+    sid = next(e["session_id"] for e in ev if e["type"] == "session.created" and e["task_id"] == tid
+               and not e["payload"].get("parent_session_id"))
+    a = _new_event(ev, i, "session.archived", _USER, {"by": "user"}, 1)
+    a["session_id"] = sid
+    ev.insert(i + 1, a)
+    return _renumber(ev)
+
+
+def _m_r4_recovery_list_names_live_approval(ev):  # E6
+    i = _find(ev, "system.recovery_completed")
+    live = next(e["payload"]["approval_id"] for e in ev[i:] if e["type"] == "approval.requested" and "tombstone" not in e)
+    ev[i]["payload"]["approvals_invalidated"] = [live]
+    return ev
+
+
+def _m_r4_live_event_during_recovery(ev):
+    i = _find(ev, "session.state_changed", lambda e: e["actor"]["kind"] == "recovery")
+    ev[i]["actor"], ev[i]["provenance"] = {"kind": "adapter", "id": "claude-code"}, "live"
+    ev[i]["payload"]["trigger"] = "process_exited"
+    return ev
+
+
+def _m_r4_recovery_leaves_session_live(ev):
+    del ev[_find(ev, "session.state_changed", lambda e: e["actor"]["kind"] == "recovery")]
+    return _renumber(ev)
+
+
+def _m_r4_recovery_leaves_check_running(ev):
+    i = _find(ev, "system.recovery_started")
+    ev.insert(i, _new_event(ev, i - 1, "check.started", _ORCH,
+                            {"check_id": "chk_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "name": "cargo test", "origin": "local"}, 1))
+    return _renumber(ev)
+
+
+def _m_r4_recovery_leaves_task_in_flight(ev):
+    del ev[_find(ev, "task.state_changed", lambda e: e["actor"]["kind"] == "recovery")]
+    return _renumber(ev)
+
+
+def _m_r4_recovery_list_omits_session(ev):
+    ev[_find(ev, "system.recovery_completed")]["payload"]["sessions_disconnected"] = []
+    return ev
+
+
+def _m_r4_archive_running_main_session(ev):
+    i = _find(ev, "session.prompt_submitted")
+    a = _new_event(ev, i, "session.archived", _USER, {"by": "user"}, 1)
+    a["session_id"] = ev[i]["session_id"]
+    ev.insert(i + 1, a)
+    return _renumber(ev)
+
+
 MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_gap, "cursor not gap-free"),
     ("01-happy-path-pr.jsonl", _m_illegal_transition, "illegal task transition"),
@@ -1942,8 +2243,8 @@ MUTATIONS = [
     ("06-crash-unknown-push.jsonl", _m_b2_retry_without_reconcile, "is outcome_unknown; reconcile it before failed -> queued"),
     ("01-happy-path-pr.jsonl", _m_b3a_policy_approves_acp_merge, "approval classified pr_merge can only be granted by the user"),
     ("01-happy-path-pr.jsonl", _m_b3b_acp_claims_operation_kind, "expected const 'tool_call'"),
-    ("01-happy-path-pr.jsonl", _m_b4a_auto_archive_failed_child, "auto-archive requires a finished child session with outcome succeeded or cancelled"),
-    ("12-session-edge-cases.jsonl", _m_b4b_auto_archive_protocol_error_child, "auto-archive requires a finished child session with outcome succeeded or cancelled"),
+    ("01-happy-path-pr.jsonl", _m_b4a_auto_archive_failed_child, "auto-archive requires a closed child session with outcome succeeded or cancelled"),
+    ("12-session-edge-cases.jsonl", _m_b4b_auto_archive_protocol_error_child, "auto-archive requires a closed child session with outcome succeeded or cancelled"),
     ("08-review-loop-pause-children.jsonl", _m_b4c_auto_archive_after_restore, "never auto-archived again"),
     ("01-happy-path-pr.jsonl", _m_b4d_archive_after_mark_reviewed_only, "auto-archive requires the result to have been opened"),
     ("12-session-edge-cases.jsonl", _m_b4e_waiting_session_left_archived, "must be written in the same transaction"),
@@ -1959,7 +2260,58 @@ MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_n6b_start_after_expiry, "an expired grant authorizes nothing"),
     ("01-happy-path-pr.jsonl", _m_n6c_policy_starts_operation, "operations are started by the orchestrator, not policy"),
     ("11-push-denied-abandon-supersede.jsonl", _m_n6d_probe_less_reconcile_finding, "the only possible finding is undeterminable"),
+    # review round 3
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_writes_succeeded, "the recovery actor may only invalidate approvals"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_fails_then_repush, "the recovery actor may only invalidate approvals"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_passes_check, "the recovery actor may only invalidate approvals"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_actor_outside_window, "only written between system.recovery_started and system.recovery_completed"),
+    ("06-crash-unknown-push.jsonl", _m_r4_orchestrator_completes_recovery, "system.recovery_completed is written by the recovery actor"),
+    ("06-crash-unknown-push.jsonl", _m_r4_adapter_reports_operation_result, "operation.succeeded is reported by the orchestrator or integration"),
+    ("01-happy-path-pr.jsonl", _m_r4_adapter_reports_check_result, "check results are reported by the orchestrator or integration, not adapter"),
+    ("04-disconnect-resume-reattach.jsonl", _m_r4_retry_with_resume_phase, 'must not match {"required": ["resume_phase"]}'),
+    ("10-prepare-pause-abandon.jsonl", _m_r4_retry_skips_to_pr, "preparing -> pr requires the task's recorded resume_phase to be pr"),
+    ("07-crash-pending-approval-load.jsonl", _m_r4_replay_without_current_load_capability, "acp_replay requires that the current process"),
+    ("07-crash-pending-approval-load.jsonl", _m_r4_replay_of_other_event_type, "not in ['session.message_delta', 'session.tool_call', 'session.plan_updated']"),
+    ("12-session-edge-cases.jsonl", _m_r4_auto_archive_failed_state_child, "a failed session is never auto-archived (state failed, outcome cancelled)"),
+    ("12-session-edge-cases.jsonl", _m_r4_failed_session_claims_success, "'succeeded' not in ['failed', 'cancelled']"),
+    ("12-session-edge-cases.jsonl", _m_r4_bulk_mark_failed_state_session, "never applies to a failed session with outcome cancelled"),
+    ("06-crash-unknown-push.jsonl", _m_r4_archive_waiting_main_session, "a session that is waiting for the user (needs reply) cannot be archived"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_disconnects_with_other_trigger, "the recovery actor may only invalidate approvals"),
+    ("10-prepare-pause-abandon.jsonl", _m_r4_archive_paused_main_session, "(task is paused)"),
+    ("12-session-edge-cases.jsonl", _m_r4_recovery_list_names_live_approval, "but it belongs to a live entity"),
+    ("06-crash-unknown-push.jsonl", _m_r4_live_event_during_recovery, "only recovery-actor events may be written while recovery is in progress"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_leaves_session_live, "after recovery (processes do not survive a host crash)"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_leaves_check_running, "check chk_ZZZZZZZZZZZZZZZZZZZZZZZZ01 still running after recovery"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_leaves_task_in_flight, "still pr after recovery"),
+    ("06-crash-unknown-push.jsonl", _m_r4_recovery_list_omits_session, "sessions_disconnected lists [], recovery changed"),
+    ("01-happy-path-pr.jsonl", _m_r4_archive_running_main_session, "(task is running)"),
 ]
+
+
+def check_enforcement_docs():
+    """The Enforcement boundary section is one text kept in two files. What it claims must be what the self-test
+    runs: every mutation name written in [`...`] exists, and every mutation is named."""
+    errors, sections = [], {}
+    for path, heading in ((README_PATH, "## Enforcement boundary"), (ADR_PATH, "### 9. Enforcement boundary")):
+        text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        m = re.search(r"(?ms)^" + re.escape(heading) + r"\n(.*?)(?=^## )", text)
+        if not m:
+            errors.append(f"{path.name}: section '{heading}' not found")
+            continue
+        sections[path.name] = m.group(1).strip().replace("](../contracts/", "](")
+        if f"{len(MUTATIONS)} negative mutations" not in text:
+            errors.append(f"{path.name}: must state the current count as '{len(MUTATIONS)} negative mutations'")
+    if len(sections) == 2:
+        readme, adr = sections.values()
+        if readme != adr:
+            errors.append("the Enforcement boundary section differs between README.md and ADR-0003")
+        named = set()
+        for group in re.findall(r"\[((?:`[a-z0-9_]+`(?:, )?)+)\]", readme):
+            named |= set(re.findall(r"`([a-z0-9_]+)`", group))
+        actual = {m.__name__[len("_m_"):] for _f, m, _e in MUTATIONS}
+        errors += [f"Enforcement boundary names mutation '{n}', which does not exist" for n in sorted(named - actual)]
+        errors += [f"mutation '{n}' is not named in the Enforcement boundary table" for n in sorted(actual - named)]
+    return errors
 
 
 def self_test(loaded, transitions, v, defs):

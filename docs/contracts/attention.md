@@ -16,7 +16,7 @@ The three kinds are the three inbox sections of the merged UX spec ([`docs/ux/st
 
 UX rules 2 (archived → not listed, unless waiting) and 3 (the session on screen → not listed) are applied as follows: rule 2 is part of the derivation below; rule 3 depends on what is on screen and is applied by the UI, never stored.
 
-"Viewed" means `task.outcome_acknowledged` / `session.result_acknowledged` with any `method` (`opened`, `marked_reviewed`, `bulk_marked_reviewed`). The bulk method ("Mark completed as reviewed") is only accepted for `completed`/`cancelled` tasks and for sessions with outcome `succeeded`/`cancelled`; `failed` and `interrupted` results stay listed until viewed individually. Only `opened` counts as "seen" for the sub-task archive rule ([state-machines.md](state-machines.md#archiving-sessions)).
+"Viewed" means `task.outcome_acknowledged` / `session.result_acknowledged` with any `method` (`opened`, `marked_reviewed`, `bulk_marked_reviewed`). The bulk method ("Mark completed as reviewed") is only accepted for `completed`/`cancelled` tasks and for `closed` sessions with outcome `succeeded`/`cancelled`; `failed` and `interrupted` results stay listed until viewed individually. Only `opened` counts as "seen" for the sub-task archive rule ([state-machines.md](state-machines.md#archiving-sessions)).
 
 ## Rules
 
@@ -29,6 +29,7 @@ Per task (by task state):
 | `verifying`, `review`, `pr`, `ci` and progressing: a session of the task is `starting`/`active`, a check is `running`, or an operation is `started` | `background / workflow_step` |
 | `verifying`, `review`, `pr`, `ci`, not progressing, and no pending approval of the task | `needs_reply / phase_decision_pending` (e.g. review finished and waits for `T28`/`T29`, CI is green and waits for `T39`, or the phase stalled) |
 | `running` and no session with role `primary`/`implementation`/`repair` is live (`starting`, `idle`, `active`, `awaiting_permission`, `suspended`) | `needs_reply / session_unavailable` (the agent crashed or failed; restart or pause) |
+| `running`, a session with role `primary`/`implementation`/`repair` is live, and one of them is `starting`, or `idle` without a finished turn (no stop reason yet) | `background / workflow_step` (the agent is ready and the orchestrator is about to send the next prompt; UX: `running`) |
 | `interrupted{reason: user_paused}` | `background / paused` |
 | `interrupted`, other reason, `auto_resume_armed` | `background / waiting_for_reset` (show `retry_hint.not_before` and its source) |
 | `interrupted`, other reason, not armed, not viewed since it entered `interrupted` | `needs_review / interruption_needs_decision` |
@@ -59,7 +60,7 @@ Per session:
 
 Archived (UX rule 2): items of kind `needs_review` and `background` are dropped when they name an archived session, or, for task-level items, when every main (parent-less) session of the task is archived. `needs_reply` items are never dropped; an archived session that starts waiting is unarchived by the system in the same transaction ([state-machines.md](state-machines.md#archiving-sessions)).
 
-"Task in flight" means `preparing`, `running`, `awaiting_approval`, `verifying`, `review`, `pr` or `ci`. A disconnected or failed session produces no item of its own; the task-level rules (`session_unavailable`, `interruption_needs_decision` after `S03 attach_rejected` + `T09`) surface it.
+"Task in flight" means `preparing`, `running`, `awaiting_approval`, `verifying`, `review`, `pr` or `ci`. An `idle` session whose last turn the user cancelled (stop reason `cancelled`, not an output limit) produces no item: the user stopped it. A suspended, disconnected or failed session produces no item of its own (for child sessions see Divergences, item 4); the task-level rules (`session_unavailable`, `interruption_needs_decision` after `S03 attach_rejected` + `T09`) surface it.
 
 Clearing: an item disappears when its condition stops holding — a prompt is sent, the approval is resolved, the operation is reconciled, the user views the result (`task.outcome_acknowledged`, `session.result_acknowledged`), or the task moves on. Viewing never changes task state.
 
@@ -70,6 +71,7 @@ Each is a deliberate difference; the default would be to follow the UX spec.
 1. **Armed auto-resume is background, not "to review".** UX section 2 lists `interrupted` as "Needs review until viewed". An `interrupted` task with `auto_resume_armed` (quota/rate limit with a known reset time and the user's opt-in) will continue without the user, so it is shown as `background / waiting_for_reset` and never as a result to review. Reason: listing it as a result would ask the user to look at something that needs nothing from them. Alternative: treat it like any other interruption (`needs_review` until viewed) and show the reset time in the row.
 2. **`phase_decision_pending`, `session_unavailable` and `reconcile_needed` count as `awaiting-input`.** The UX spec defines `awaiting-input` as "agent asked a question"; these three are AgentDock asking the user (review finished and needs a go/no-go, the agent process is gone while the task is `running`, an operation's outcome is unknown). The UX state table maps `Verifying`/`Review`/`PR`/`CI` to `running`, which would put a stalled phase under "Running in background". Reason: work that cannot continue without the user must not look like progress. Alternative: a fourth UX state ("needs decision") or keep them in background with a label.
 3. **Undo of a bulk "Mark completed as reviewed" is not yet an event.** UX section 4 says Undo restores the rows to "to review". The contract has no event that revokes an acknowledgement; issue #7 must add one (for example `*.acknowledgement_revoked{event_id}`) before the bulk action ships. Listed as an open question in the ADR.
+4. **An interrupted child session has no review item of its own.** UX section 4 rule 4 lists every `interrupted` session, sub-tasks included, under "New results to review" until viewed. Here a child that is `suspended` or `disconnected` produces no item; the interruption is surfaced once, at task level (`interruption_needs_decision`, `paused` or `waiting_for_reset`), and the child gets `child_result_unviewed` when it finishes (`closed`/`failed`). Reason: `session.result_acknowledged` exists only for finished sessions, so there is nothing to record "viewed" against for a child that is merely stopped. Alternative: allow acknowledging a suspended/disconnected child and add a `child_interrupted_unviewed` item.
 
 ## Requested harness scenarios and how the contract expresses them
 
