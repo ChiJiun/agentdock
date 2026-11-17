@@ -52,6 +52,22 @@ These are short commit prefixes for orientation; pin and record **full SHA** whe
 | 3 | [Forge `crates/forge-core/`](https://github.com/Adulari/forge/tree/main/crates/forge-core) | Read for routing/queue inspiration | **Research only** due AGPL |
 | 3 | [Forge `crates/forge-provider/`](https://github.com/Adulari/forge/tree/main/crates/forge-provider) | Provider fallback ideas | **Research only** due AGPL |
 
+## First code import (2026-11-17)
+
+The initial frontend prototype imports exactly three small MIT-licensed Acpira helpers:
+`packages/ui/ui/roving.ts`, `packages/ui/ui/mergeRefs.ts`, and
+`packages/ui/ui/railStep.ts`, from immutable commit
+`0481995e3a55abcd707f6808df9d7f396483c3e1`.
+
+Destinations: `src/vendor/acpira/`; original copyright and MIT
+license preserved in `third_party/acpira-LICENSE`.
+These helpers provide keyboard navigation, React ref composition, and progress easing.
+Their imports are limited to React (or none), with no Acpira-specific workspace dependency.
+Original AgentDock components consume them; the larger upstream UI/host was **not** copied.
+See [ADR-0002](decisions/0002-port-small-acpira-ui-helpers.md).
+
+This is **not** completion of the full source suitability audit in Issue #1.
+
 ## License and compatibility guardrails
 
 - MIT: retain the upstream copyright and license notices for copied material.

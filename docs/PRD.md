@@ -37,6 +37,7 @@ This product is not a Claude/Anthropic clone and should not copy protected asset
 - **Review drawer**: changed file list, diff, tests, reviewer findings, comment-to-agent.
 - **GitHub**: Issue/PR links, checks, remote status; do not auto-merge.
 - **Settings**: agent adapters, accounts, providers, workspace scopes, budget, optional SSH targets.
+- **Session Sentinel (navigation bell)**: cross-project attention inbox with concise event-derived summaries, decision prompts, and navigation to the relevant session. Inspired by the existing Acpira fork's notification bell / Ctrl+K switcher PR #7, expanded into an evidence-driven Monitor; see [Issue #15](https://github.com/ChiJiun/agentdock/issues/15).
 
 Design pattern: left sidebar / primary session / collapsible right evidence panel. Terminal and editor are embedded or delegated to the developer's IDE; do not build a full IDE in MVP.
 
@@ -52,6 +53,7 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 - Local Git diff and test results; no automatic push.
 - SQLite schema with migrations for projects, tasks, sessions, events and approvals.
 - Basic Windows installer/dev flow, logging, accessible keyboard navigation, dark/light themes.
+- Session Sentinel preview UI: bell count represents **human-required decisions**, not ordinary active agents; grouped items navigate to sessions. In the MVP preview, summaries are deterministic and demo-labelled. Live summaries require trusted event sources and policy-controlled decisions.
 
 ### V1.0 — complete SDLC & remote execution
 
@@ -62,6 +64,7 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 - Clear distinction between view restoration, actual agent session reattach, task resume.
 - Per-task usage metrics when exposed by adapters/providers.
 - Opt-in OS notifications for approvals / completion.
+- Event-driven Session Sentinel summary store: classify actionable tasks, deduplicate repeated status events, concise next actions, stable evidence links, and revalidate decisions before execution. UI polling must not trigger model calls.
 
 ### V1.x — cost-aware autonomous orchestration
 
