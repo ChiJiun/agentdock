@@ -1,11 +1,12 @@
 {
   "fixture": "11-push-denied-abandon-supersede.jsonl",
-  "description": "Host-policy operation edges: a denied push is abandoned, the task is paused and resumed into pr, and a superseding push with a fresh approval runs; merge is user-approved and gives the integration its completion evidence; an expired destructive-command approval; a push killed by cancellation (outcome_unknown, cause killed) and reconciled afterwards; a crash between approval and start (recovery invalidates the unused grant and abandons the recorded operation).",
+  "description": "Host-policy operation edges: a denied push is abandoned, the task is paused and resumed into pr, and a superseding push with a fresh approval runs; merge (at the pushed head) is user-approved and gives the integration its completion evidence; an expired destructive-command approval; a push killed by cancellation (outcome_unknown, cause killed) and reconciled afterwards; a cleanup operation left outcome_unknown by a crash after the task ended (needs reconcile); a crash between approval and start (recovery invalidates the unused grant and abandons the recorded operation).",
   "final_task_states": {
     "tsk_01JDQ011000000000000000001": "completed",
     "tsk_01JDQ011000000000000000002": "cancelled",
     "tsk_01JDQ011000000000000000003": "cancelled",
-    "tsk_01JDQ011000000000000000004": "ci"
+    "tsk_01JDQ011000000000000000004": "cancelled",
+    "tsk_01JDQ011000000000000000005": "ci"
   },
   "final_session_states": {
     "ses_01JDQ011000000000000000001": "closed",
@@ -20,9 +21,25 @@
       "task_id": "tsk_01JDQ011000000000000000001"
     },
     {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ011000000000000000002"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ011000000000000000003"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "reconcile_needed",
+      "task_id": "tsk_01JDQ011000000000000000004",
+      "ref_id": "op_01JDQ011000000000000000007"
+    },
+    {
       "kind": "background",
       "reason": "workflow_step",
-      "task_id": "tsk_01JDQ011000000000000000004"
+      "task_id": "tsk_01JDQ011000000000000000005"
     }
   ]
 }

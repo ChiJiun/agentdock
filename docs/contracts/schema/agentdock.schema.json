@@ -313,6 +313,11 @@
       "type": "string",
       "enum": ["once", "session", "task"]
     },
+    "PolicyClass": {
+      "description": "Backend policy classification of an ACP permission request (the tool call it would authorize), computed in Rust from the unwrapped command / path / URL (ADR-0002 APR-1..APR-10), never taken from agent text. Classes pr_merge, force_push, branch_delete, worktree_remove, destructive_command and unclassified (command could not be recovered, APR-7) may only be approved by the user. A class that names an OperationKind (git_push, pr_write, external_write, pr_merge, branch_delete, worktree_remove, destructive_command, force_push) is executed by AgentDock only as an Operation with its own host_policy approval when AgentDock itself runs it (terminal/*, fs/write_text_file).",
+      "type": "string",
+      "enum": ["read_only", "workspace_edit", "command", "config_write", "git_push", "pr_write", "external_write", "pr_merge", "force_push", "branch_delete", "worktree_remove", "destructive_command", "unclassified"]
+    },
     "AcpPermissionOptionKind": {
       "description": "ACP v1 PermissionOptionKind, copied verbatim.",
       "type": "string",
@@ -350,12 +355,28 @@
       "enum": ["idempotent_with_key", "non_repeatable"]
     },
     "OperationKindRules": {
-      "description": "Binds operation kinds to repeatability. Git/PR/merge/branch/worktree/destructive operations are always non_repeatable.",
+      "description": "Binds operation kinds to repeatability and to their identity fields. Git/PR/merge/branch/worktree/destructive operations are always non_repeatable. Each kind requires exactly its identity fields in target (others are forbidden; 'description' is free text and never part of the identity). idempotency_key = sha256(canonical {kind, identity}) where identity = target without 'description'.",
       "allOf": [
         {
           "if": { "properties": { "kind": { "enum": ["git_push", "pr_create", "pr_update", "pr_merge", "branch_delete", "worktree_remove", "destructive_command"] } } },
           "then": { "properties": { "repeatability": { "const": "non_repeatable" } } }
-        }
+        },
+        { "if": { "properties": { "kind": { "const": "git_push" } } },
+          "then": { "properties": { "target": { "required": ["remote", "ref", "expected_sha"], "not": { "anyOf": [ { "required": ["base"] }, { "required": ["pr_number"] }, { "required": ["path"] }, { "required": ["content_sha256"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "const": "pr_create" } } },
+          "then": { "properties": { "target": { "required": ["ref", "base"], "not": { "anyOf": [ { "required": ["remote"] }, { "required": ["expected_sha"] }, { "required": ["pr_number"] }, { "required": ["path"] }, { "required": ["content_sha256"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "enum": ["pr_update", "pr_comment"] } } },
+          "then": { "properties": { "target": { "required": ["pr_number", "content_sha256"], "not": { "anyOf": [ { "required": ["remote"] }, { "required": ["ref"] }, { "required": ["base"] }, { "required": ["expected_sha"] }, { "required": ["path"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "const": "pr_merge" } } },
+          "then": { "properties": { "target": { "required": ["pr_number", "expected_sha"], "not": { "anyOf": [ { "required": ["remote"] }, { "required": ["ref"] }, { "required": ["base"] }, { "required": ["path"] }, { "required": ["content_sha256"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "const": "branch_delete" } } },
+          "then": { "properties": { "target": { "required": ["ref", "expected_sha"], "not": { "anyOf": [ { "required": ["base"] }, { "required": ["pr_number"] }, { "required": ["path"] }, { "required": ["content_sha256"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "const": "worktree_remove" } } },
+          "then": { "properties": { "target": { "required": ["path"], "not": { "anyOf": [ { "required": ["remote"] }, { "required": ["ref"] }, { "required": ["base"] }, { "required": ["expected_sha"] }, { "required": ["pr_number"] }, { "required": ["content_sha256"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "const": "destructive_command" } } },
+          "then": { "properties": { "target": { "required": ["command_sha256", "cwd"], "not": { "anyOf": [ { "required": ["remote"] }, { "required": ["ref"] }, { "required": ["base"] }, { "required": ["expected_sha"] }, { "required": ["pr_number"] }, { "required": ["path"] }, { "required": ["content_sha256"] }, { "required": ["endpoint"] } ] } } } } },
+        { "if": { "properties": { "kind": { "const": "external_write" } } },
+          "then": { "properties": { "target": { "required": ["endpoint", "content_sha256"], "not": { "anyOf": [ { "required": ["remote"] }, { "required": ["ref"] }, { "required": ["base"] }, { "required": ["expected_sha"] }, { "required": ["pr_number"] }, { "required": ["path"] }, { "required": ["command_sha256"] }, { "required": ["cwd"] } ] } } } } }
       ]
     },
     "ReconcileStrategy": {
@@ -369,16 +390,22 @@
       "enum": ["recorded", "started", "succeeded", "failed", "outcome_unknown", "reconciled_applied", "reconciled_not_applied", "reconciled_undeterminable", "abandoned"]
     },
     "OperationTarget": {
+      "description": "What an operation acts on. 'description' is shown to the user and is NOT part of the identity; every other field is an identity field, and OperationKindRules fixes which ones each kind must carry.",
       "type": "object",
       "additionalProperties": false,
       "required": ["description"],
       "properties": {
         "description": { "$ref": "#/$defs/RedactedText" },
-        "remote": { "type": "string", "maxLength": 256 },
-        "ref": { "type": "string", "maxLength": 256 },
-        "expected_sha": { "$ref": "#/$defs/GitSha" },
+        "remote": { "description": "Remote name (git_push; branch_delete when deleting a remote branch, absent for a local branch).", "type": "string", "minLength": 1, "maxLength": 256 },
+        "ref": { "description": "Full ref (refs/heads/...) for git_push and branch_delete; the head branch for pr_create.", "type": "string", "minLength": 1, "maxLength": 256 },
+        "base": { "description": "Base branch of pr_create.", "type": "string", "minLength": 1, "maxLength": 256 },
+        "expected_sha": { "description": "git_push: the commit pushed (must equal the head of the task's latest clean checkpoint); pr_merge: the PR head that may be merged (gh pr merge --match-head-commit); branch_delete: the commit the ref must still point to.", "$ref": "#/$defs/GitSha" },
         "pr_number": { "type": "integer", "minimum": 1 },
-        "path": { "$ref": "#/$defs/RelativePath" }
+        "path": { "description": "worktree_remove: the worktree directory relative to the project's worktree root (<repo>.worktrees/), canonicalized by the backend.", "$ref": "#/$defs/RelativePath" },
+        "content_sha256": { "description": "sha256 of the exact request body AgentDock sends (PR title/body, comment text, external payload), computed before redaction. A digest only; the content itself is never part of the target.", "$ref": "#/$defs/Sha256" },
+        "command_sha256": { "description": "sha256 of the canonical JSON array of the unwrapped argv (after APR-6 unwrapping, before redaction).", "$ref": "#/$defs/Sha256" },
+        "cwd": { "description": "Working directory of a destructive_command, relative to the task worktree root.", "$ref": "#/$defs/RelativePath" },
+        "endpoint": { "description": "external_write: method and URL template without query values, e.g. 'POST https://api.example.com/v1/items'.", "type": "string", "minLength": 1, "maxLength": 2048 }
       }
     },
 
@@ -529,7 +556,7 @@
     "Session": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["session_id", "task_id", "role", "adapter_id", "state", "launch_method", "collapsed", "created_at"],
+      "required": ["session_id", "task_id", "role", "adapter_id", "state", "launch_method", "archived", "created_at"],
       "properties": {
         "session_id": { "$ref": "#/$defs/SessionId" },
         "task_id": { "$ref": "#/$defs/TaskId" },
@@ -543,9 +570,11 @@
         "handoff_summary_id": { "$ref": "#/$defs/SummaryId" },
         "capability_snapshot": { "$ref": "#/$defs/CapabilitySnapshot" },
         "outcome": { "$ref": "#/$defs/SessionOutcome" },
-        "result_acknowledged_at": { "$ref": "#/$defs/Timestamp" },
-        "collapsed": { "type": "boolean" },
-        "collapsed_by": { "type": "string", "enum": ["user", "auto"] },
+        "result_acknowledged_at": { "description": "Result viewed: opened, or marked reviewed (one row or bulk). Clears needs_review.", "$ref": "#/$defs/Timestamp" },
+        "result_opened_at": { "description": "Result actually opened (rendered on screen). Only this satisfies the auto-archive rule; marking reviewed does not.", "$ref": "#/$defs/Timestamp" },
+        "archived": { "description": "UX 'archived' (docs/ux/states-and-indicators.md section 5). Shown under 'Show N archived sub-tasks'.", "type": "boolean" },
+        "archived_by": { "type": "string", "enum": ["user", "auto"] },
+        "restored_by_user": { "description": "The user unarchived it (Undo or Unarchive). Such a session is never auto-archived again.", "type": "boolean" },
         "created_at": { "$ref": "#/$defs/Timestamp" },
         "closed_at": { "$ref": "#/$defs/Timestamp" }
       }
@@ -560,8 +589,9 @@
         "session_id": { "$ref": "#/$defs/SessionId" },
         "source": { "$ref": "#/$defs/ApprovalSource" },
         "state": { "$ref": "#/$defs/ApprovalState" },
-        "operation_kind": { "description": "OperationKind for host_policy approvals; 'tool_call' for ACP permissions.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
-        "operation_fingerprint": { "description": "sha256 (lowercase hex) of the canonical JSON of {\"kind\": kind, \"target\": target}: keys sorted, no insignificant whitespace, UTF-8, non-ASCII unescaped. For host_policy approvals it equals the operation's idempotency_key; for ACP permissions kind is 'tool_call' and target is {tool_call_id, title}. A grant only authorizes an execution with the same fingerprint.", "$ref": "#/$defs/Sha256" },
+        "operation_kind": { "description": "OperationKind for host_policy approvals; always 'tool_call' for ACP permissions (what the tool call does is in classified_kind).", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "classified_kind": { "description": "ACP permissions only: the backend policy classification of the tool call. Decides who may approve.", "$ref": "#/$defs/PolicyClass" },
+        "operation_fingerprint": { "description": "sha256 (lowercase hex) of canonical JSON (keys sorted, no insignificant whitespace, UTF-8, non-ASCII unescaped). For host_policy approvals it equals the operation's idempotency_key = sha256({\"kind\": kind, \"identity\": target without description}); for ACP permissions it is sha256({\"kind\": \"tool_call\", \"target\": {tool_call_id, title}}). A grant only authorizes an execution with the same fingerprint.", "$ref": "#/$defs/Sha256" },
         "operation_id": { "$ref": "#/$defs/OperationId" },
         "title": { "$ref": "#/$defs/RedactedText" },
         "scope": { "$ref": "#/$defs/ApprovalScope" },
@@ -572,7 +602,12 @@
         "expires_at": { "$ref": "#/$defs/Timestamp" },
         "decided_at": { "$ref": "#/$defs/Timestamp" },
         "decided_by": { "$ref": "#/$defs/Actor" }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "source": { "const": "acp_permission" } } },
+          "then": { "required": ["classified_kind"], "properties": { "operation_kind": { "const": "tool_call" } } },
+          "else": { "not": { "required": ["classified_kind"] }, "properties": { "operation_kind": { "$ref": "#/$defs/OperationKind" } } } }
+      ]
     },
     "Operation": {
       "type": "object",
@@ -615,7 +650,7 @@
     },
 
     "AttentionKind": {
-      "description": "needs_reply: blocked on the user; needs_review: a result the user has not looked at; background: progressing without the user.",
+      "description": "The three inbox sections of docs/ux/states-and-indicators.md section 4: needs_reply = 'Needs your reply' (blocked on the user); needs_review = 'New results to review' (a terminal result not yet viewed); background = 'Running in background'.",
       "type": "string",
       "enum": ["needs_reply", "needs_review", "background"]
     },
@@ -623,10 +658,16 @@
       "type": "string",
       "enum": [
         "approval_pending", "agent_turn_ended", "output_limited", "session_unavailable", "phase_decision_pending",
+        "reconcile_needed",
         "interruption_needs_decision", "failure_needs_decision",
         "child_result_unviewed", "task_outcome_unviewed",
-        "agent_working", "workflow_step", "queued", "waiting_for_reset"
+        "agent_working", "workflow_step", "queued", "paused", "waiting_for_reset"
       ]
+    },
+    "AcknowledgementMethod": {
+      "description": "How a result was viewed (docs/ux/states-and-indicators.md section 4). 'opened' = the result was rendered on screen while the window had focus; 'marked_reviewed' = the one-row action; 'bulk_marked_reviewed' = 'Mark completed as reviewed' (completed/cancelled results only). Only 'opened' counts as seen for auto-archive.",
+      "type": "string",
+      "enum": ["opened", "marked_reviewed", "bulk_marked_reviewed"]
     },
     "AttentionItem": {
       "description": "Derived (never stored) to-do item. Computed purely from events by the rules in docs/contracts/attention.md.",
@@ -649,7 +690,7 @@
         "task.policy_updated", "task.deleted",
         "session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted",
         "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded",
-        "session.output_limited", "session.result_acknowledged", "session.collapsed", "session.expanded",
+        "session.output_limited", "session.result_acknowledged", "session.archived", "session.unarchived",
         "approval.requested", "approval.resolved",
         "operation.recorded", "operation.started", "operation.succeeded", "operation.failed",
         "operation.outcome_unknown", "operation.reconciled", "operation.abandoned",
@@ -760,10 +801,21 @@
       }
     },
     "TaskOutcomeAcknowledgedPayload": {
+      "description": "The user viewed the task's result. Allowed in completed, cancelled, failed and interrupted (UX terminal states); bulk_marked_reviewed only for completed and cancelled.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["acknowledged_state"],
-      "properties": { "acknowledged_state": { "$ref": "#/$defs/TaskState" } }
+      "required": ["acknowledged_state", "method"],
+      "properties": {
+        "acknowledged_state": { "$ref": "#/$defs/TaskState" },
+        "method": { "$ref": "#/$defs/AcknowledgementMethod" }
+      }
+    },
+    "SessionResultAcknowledgedPayload": {
+      "description": "The user viewed a finished session's result. bulk_marked_reviewed only for outcome succeeded or cancelled.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method"],
+      "properties": { "method": { "$ref": "#/$defs/AcknowledgementMethod" } }
     },
     "SessionCreatedPayload": {
       "type": "object",
@@ -896,11 +948,19 @@
       }
     },
     "EmptyPayload": { "type": "object", "additionalProperties": false, "properties": {} },
-    "SessionCollapsedPayload": {
+    "SessionArchivedPayload": {
+      "description": "auto: a child session whose outcome is succeeded/cancelled, whose result was opened, and which the user never restored (the UI emits it only after the user navigated away). user: manual archive, only in a terminal state.",
       "type": "object",
       "additionalProperties": false,
       "required": ["by"],
       "properties": { "by": { "type": "string", "enum": ["user", "auto"] } }
+    },
+    "SessionUnarchivedPayload": {
+      "description": "user: Undo or Unarchive (sets restored_by_user; never auto-archived again). system: the archived session entered a waiting state (needs reply) and is unarchived in the same transaction.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by"],
+      "properties": { "by": { "type": "string", "enum": ["user", "system"] } }
     },
     "ApprovalRequestedPayload": {
       "type": "object",
@@ -910,6 +970,7 @@
         "approval_id": { "$ref": "#/$defs/ApprovalId" },
         "source": { "$ref": "#/$defs/ApprovalSource" },
         "operation_kind": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "classified_kind": { "$ref": "#/$defs/PolicyClass" },
         "operation_fingerprint": { "$ref": "#/$defs/Sha256" },
         "operation_id": { "$ref": "#/$defs/OperationId" },
         "title": { "$ref": "#/$defs/RedactedText" },
@@ -919,7 +980,9 @@
         "expires_at": { "$ref": "#/$defs/Timestamp" }
       },
       "allOf": [
-        { "if": { "properties": { "source": { "const": "acp_permission" } } }, "then": { "required": ["acp"] }, "else": { "required": ["operation_id"], "not": { "required": ["acp"] } } }
+        { "if": { "properties": { "source": { "const": "acp_permission" } } },
+          "then": { "required": ["acp", "classified_kind"], "properties": { "operation_kind": { "const": "tool_call" } } },
+          "else": { "required": ["operation_id"], "not": { "anyOf": [ { "required": ["acp"] }, { "required": ["classified_kind"] } ] }, "properties": { "operation_kind": { "$ref": "#/$defs/OperationKind" } } } }
       ]
     },
     "ApprovalResolvedPayload": {
@@ -1002,7 +1065,7 @@
       "required": ["operation_id", "cause"],
       "properties": {
         "operation_id": { "$ref": "#/$defs/OperationId" },
-        "cause": { "description": "host_crash: written by recovery for an op left started; killed: the orchestrator killed a started op (task cancel or interrupt) before it reported.", "type": "string", "enum": ["host_crash", "killed"] }
+        "cause": { "description": "host_crash: written by recovery for an op left started; killed: the orchestrator killed a started op (task cancel or interrupt) before it reported. A started pr_merge is never killed (ADR-0002 PRL-5): cancel/interrupt waits for its result, so pr_merge only becomes outcome_unknown through host_crash.", "type": "string", "enum": ["host_crash", "killed"] }
       }
     },
     "OperationAbandonedPayload": {
@@ -1106,7 +1169,7 @@
         { "if": { "properties": { "type": { "enum": ["system.recovery_started", "system.recovery_completed"] } } },
           "then": { "not": { "anyOf": [ { "required": ["task_id"] }, { "required": ["session_id"] } ] } },
           "else": { "required": ["project_id", "task_id"] } },
-        { "if": { "properties": { "type": { "enum": ["session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted", "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded", "session.output_limited", "session.result_acknowledged", "session.collapsed", "session.expanded", "usage.reported"] } } },
+        { "if": { "properties": { "type": { "enum": ["session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted", "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded", "session.output_limited", "session.result_acknowledged", "session.archived", "session.unarchived", "usage.reported"] } } },
           "then": { "required": ["session_id"] } },
         { "if": { "properties": { "provenance": { "const": "acp_replay" } } },
           "then": { "properties": { "type": { "enum": ["session.message_delta", "session.tool_call", "session.plan_updated"] } } } },
@@ -1126,9 +1189,9 @@
             { "if": { "properties": { "type": { "const": "session.plan_updated" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPlanUpdatedPayload" } } } },
             { "if": { "properties": { "type": { "const": "session.summary_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionSummaryRecordedPayload" } } } },
             { "if": { "properties": { "type": { "const": "session.output_limited" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionOutputLimitedPayload" } } } },
-            { "if": { "properties": { "type": { "const": "session.result_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
-            { "if": { "properties": { "type": { "const": "session.collapsed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCollapsedPayload" } } } },
-            { "if": { "properties": { "type": { "const": "session.expanded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.result_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionResultAcknowledgedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.archived" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionArchivedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.unarchived" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionUnarchivedPayload" } } } },
             { "if": { "properties": { "type": { "const": "approval.requested" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalRequestedPayload" } } } },
             { "if": { "properties": { "type": { "const": "approval.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalResolvedPayload" } } } },
             { "if": { "properties": { "type": { "const": "operation.recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationRecordedPayload" } } } },

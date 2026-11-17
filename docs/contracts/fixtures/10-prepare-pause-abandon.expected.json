@@ -17,14 +17,19 @@
   },
   "attention": [
     {
-      "kind": "needs_reply",
+      "kind": "needs_review",
       "reason": "failure_needs_decision",
       "task_id": "tsk_01JDQ010000000000000000001"
     },
     {
-      "kind": "needs_reply",
+      "kind": "needs_review",
       "reason": "failure_needs_decision",
       "task_id": "tsk_01JDQ010000000000000000002"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ010000000000000000004"
     },
     {
       "kind": "needs_reply",

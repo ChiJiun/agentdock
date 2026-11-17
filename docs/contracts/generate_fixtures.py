@@ -34,6 +34,11 @@ def sha(obj) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def op_key(kind, target) -> str:
+    """idempotency_key: sha256 of canonical {kind, identity}; identity = target without the free-text description."""
+    return sha({"kind": kind, "identity": {k: v for k, v in target.items() if k != "description"}})
+
+
 PHASES = ("running", "verifying", "review", "pr", "ci")
 
 
@@ -79,6 +84,7 @@ class Fx:
         self.project = self.id("prj")
         self.task_state, self.session_state, self.session_task = {}, {}, {}
         self.return_state, self.resume_phase = {}, {}
+        self.predelete = None
 
     # -- primitives --------------------------------------------------------------------------
     def id(self, prefix):
@@ -155,11 +161,16 @@ class Fx:
             "worktree": {"head_sha": head, "branch": f"agentdock/{tid[-4:]}", "dirty": dirty},
             "open_operation_ids": list(ops), "pending_approval_ids": list(approvals)}, task=tid)
 
-    def ack_task(self, tid):
-        self.emit("task.outcome_acknowledged", USER, {"acknowledged_state": self.task_state[tid]}, task=tid)
+    def ack_task(self, tid, method="opened"):
+        self.emit("task.outcome_acknowledged", USER, {"acknowledged_state": self.task_state[tid], "method": method},
+                  task=tid)
+
+    def ack_session(self, sid, method="opened"):
+        self.emit("session.result_acknowledged", USER, {"method": method}, task=self.session_task[sid], session=sid)
 
     def delete_task(self, tid):
         """task.deleted, then rewrite every earlier event of the task into a tombstone (seq stays gap-free)."""
+        self.predelete = json.loads(json.dumps(self.events))
         history = [e for e in self.events if e.get("task_id") == tid]
         self.emit("task.deleted", USER, {"final_state": self.task_state[tid], "events_tombstoned": len(history)},
                   task=tid)
@@ -239,7 +250,7 @@ class Fx:
         return sumid
 
     # -- approvals ---------------------------------------------------------------------------
-    def acp_permission(self, sid, turn, title, call_id, blocking=True):
+    def acp_permission(self, sid, turn, title, call_id, blocking=True, classified="command", unarchive=False):
         """blocking: the task is running and waits in awaiting_approval; otherwise (verifying/review sessions)
         the approval carries no return_state and the task state does not change."""
         tid = self.session_task[sid]
@@ -247,7 +258,7 @@ class Fx:
         self.emit("session.tool_call", ad, {"turn_id": turn, "tool_call_id": call_id, "title": title,
                                             "kind": "execute", "status": "pending"}, task=tid, session=sid)
         aid = self.id("apr")
-        p = {"approval_id": aid, "source": "acp_permission", "operation_kind": "tool_call",
+        p = {"approval_id": aid, "source": "acp_permission", "operation_kind": "tool_call", "classified_kind": classified,
              "operation_fingerprint": sha({"kind": "tool_call", "target": {"tool_call_id": call_id, "title": title}}),
              "title": title, "scope": "once",
              "acp": {"tool_call_id": call_id, "options": [
@@ -256,6 +267,8 @@ class Fx:
         if blocking:
             p["return_state"] = self.task_state[tid]
         self.emit("approval.requested", ad, p, task=tid, session=sid)
+        if unarchive:  # an archived session that starts waiting is unarchived in the same transaction
+            self.emit("session.unarchived", ORCH, {"by": "system"}, task=tid, session=sid)
         self.sst(sid, "awaiting_permission", "permission_requested", approval_id=aid)
         if blocking:
             self.tr(tid, "awaiting_approval", "approval_requested", ad, approval_id=aid)
@@ -273,7 +286,7 @@ class Fx:
 
     def host_op(self, tid, kind, target, strategy, supersedes=None, blocking=True):
         oid, aid = self.id("op"), self.id("apr")
-        key = sha({"kind": kind, "target": target})
+        key = op_key(kind, target)
         p = {"operation_id": oid, "kind": kind, "repeatability": "non_repeatable", "idempotency_key": key,
              "target": target, "approval_id": aid, "reconcile_strategy": strategy}
         if supersedes:
@@ -353,20 +366,31 @@ class Fx:
         self.tr(tid, "ci", "pr_published", INTEG)
         return sid
 
-    def push_and_pr(self, tid, head="2" * 40):
+    def push_target(self, tid, head, description=None):
         branch = f"agentdock/{tid[-4:]}"
-        oid, aid = self.host_op(tid, "git_push", {"description": f"push {branch} to origin", "remote": "origin",
-                                                   "ref": f"refs/heads/{branch}", "expected_sha": head}, "remote_ref_compare")
+        return {"description": description or f"push {branch} to origin", "remote": "origin",
+                "ref": f"refs/heads/{branch}", "expected_sha": head}
+
+    def pr_target(self, tid):
+        branch = f"agentdock/{tid[-4:]}"
+        return {"description": f"open PR from {branch} into main", "ref": branch, "base": "main"}
+
+    def push_and_pr(self, tid, head="2" * 40, pr_number=42):
+        self.checkpoint(tid, head=head)  # the commit to push: clean checkpoint whose head is expected_sha
+        oid, aid = self.host_op(tid, "git_push", self.push_target(tid, head), "remote_ref_compare")
         self.approve_op(tid, aid)
         self.run_op(tid, oid, aid, {"remote_sha": head})
-        oid, aid = self.host_op(tid, "pr_create", {"description": f"open PR from {branch} into main", "ref": branch},
-                                "pr_lookup_by_head")
+        oid, aid = self.host_op(tid, "pr_create", self.pr_target(tid), "pr_lookup_by_head")
         self.approve_op(tid, aid)
-        self.run_op(tid, oid, aid, {"pr_number": 42, "url": "https://github.com/example/repo/pull/42"})
+        self.run_op(tid, oid, aid, {"pr_number": pr_number, "url": f"https://github.com/example/repo/pull/{pr_number}"})
 
     # -- output ------------------------------------------------------------------------------
     def write(self, final_tasks, final_sessions, attention):
         name = f"{self.num:02d}-{self.slug}"
+        if self.predelete is not None:
+            (OUT / "predelete").mkdir(exist_ok=True)
+            (OUT / "predelete" / f"{name}.jsonl").write_text(
+                "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in self.predelete), encoding="utf-8", newline="\n")
         (OUT / f"{name}.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in self.events),
                                           encoding="utf-8", newline="\n")
         exp = {"fixture": f"{name}.jsonl", "description": self.description,
@@ -389,7 +413,8 @@ def att(kind, reason, task, session=None, ref=None):
 # ============================================================================================
 def f01():
     fx = Fx(1, "happy-path-pr", "Full Issue -> PR -> CI flow with an ACP permission, a host-policy push/PR approval, "
-            "a review child session that is acknowledged then auto-collapsed, and three usage sources.")
+            "a review child session whose result is opened and which is then auto-archived, a worktree cleanup after "
+            "completion, and three usage sources.")
     t = fx.task("Add retry to the HTTP client (issue #12)")
     fx.tr(t, "preparing", "scheduled")
     p = fx.session(t)
@@ -426,11 +451,12 @@ def f01():
     fx.check(t, "ci / build", origin="ci")
     fx.tr(t, "completed", "ci_passed_accepted", USER)
     fx.close(p, "succeeded")
-    fx.emit("session.result_acknowledged", USER, {}, task=t, session=r)
-    fx.emit("session.collapsed", ORCH, {"by": "auto"}, task=t, session=r)
+    fx.ack_session(r, "opened")
+    fx.emit("session.archived", ORCH, {"by": "auto"}, task=t, session=r)
     # Cleanup after completion: a non-blocking host-policy approval (no return_state, no task transition).
     branch = f"agentdock/{t[-4:]}"
-    oid, aid = fx.host_op(t, "worktree_remove", {"description": f"remove the worktree of {branch}", "ref": branch},
+    oid, aid = fx.host_op(t, "worktree_remove", {"description": f"remove the worktree of {branch}",
+                                                 "path": branch.replace("/", "-")},
                           "path_exists_lookup", blocking=False)
     fx.approve_op(t, aid, blocking=False)
     fx.run_op(t, oid, aid, {})
@@ -440,11 +466,12 @@ def f01():
 
 def f02():
     fx = Fx(2, "approval-denied", "ACP permission denied: the tool call never runs, the agent continues, "
-            "then the user cancels the running task; a second task is cancelled while still queued.")
+            "then the user cancels the running task; a second task is cancelled while still queued. Cancelled results "
+            "stay in 'to review' until viewed (UX section 4).")
     t = fx.task("Clean up build artifacts")
     p = fx.drive_to(t, "running")
     turn = fx.prompt(p, "Remove stale build output.")
-    a = fx.acp_permission(p, turn, "rm -rf ../shared-cache", "call-9")
+    a = fx.acp_permission(p, turn, "rm -rf ../shared-cache", "call-9", classified="destructive_command")
     fx.resolve_acp(p, a, approve=False)
     fx.emit("session.tool_call", adapter("claude-code"), {"turn_id": turn, "tool_call_id": "call-9", "status": "failed",
                                                          "approval_id": a}, task=t, session=p)
@@ -456,7 +483,8 @@ def f02():
     fx.close(p, "cancelled")
     q = fx.task("Unstarted follow-up")
     fx.tr(q, "cancelled", "user_cancel", USER)
-    fx.write({t: "cancelled", q: "cancelled"}, {p: "closed"}, [])
+    fx.write({t: "cancelled", q: "cancelled"}, {p: "closed"},
+             [att("needs_review", "task_outcome_unviewed", t), att("needs_review", "task_outcome_unviewed", q)])
 
 
 def f03():
@@ -465,7 +493,7 @@ def f03():
     t = fx.task("Rewrite the release script")
     p = fx.drive_to(t, "running")
     turn = fx.prompt(p, "Rewrite scripts/release.sh.")
-    a = fx.acp_permission(p, turn, "Edit scripts/release.sh", "call-3")
+    a = fx.acp_permission(p, turn, "Edit scripts/release.sh", "call-3", classified="workspace_edit")
     fx.emit("approval.resolved", USER, {"approval_id": a, "state": "cancelled", "acp_outcome": {"outcome": "cancelled"}},
             task=t, session=p)
     fx.tr(t, "cancelled", "user_cancel", USER, approval_id=a)
@@ -476,7 +504,8 @@ def f03():
     s = fx.session(u)
     fx.tr(u, "cancelled", "user_cancel", USER)
     fx.sst(s, "failed", "launch_failed", ORCH, outcome="cancelled")
-    fx.write({t: "cancelled", u: "cancelled"}, {p: "closed", s: "failed"}, [])
+    fx.write({t: "cancelled", u: "cancelled"}, {p: "closed", s: "failed"},
+             [att("needs_review", "task_outcome_unviewed", t), att("needs_review", "task_outcome_unviewed", u)])
 
 
 def f04():
@@ -509,13 +538,14 @@ def f04():
     fx.check(t, "cargo test", state="failed")
     fx.tr(t, "failed", "repair_limit_reached", failure={"code": "repair_limit_reached", "message": "2 repair rounds"})
     fx.close(p, "failed")
-    fx.write({t: "failed"}, {p: "closed"}, [att("needs_reply", "failure_needs_decision", t)])
+    fx.write({t: "failed"}, {p: "closed"}, [att("needs_review", "failure_needs_decision", t)])
 
 
 def f05():
     fx = Fx(5, "quota-interrupt-auto-resume", "Quota exhausted mid-turn: host-written summary, auto-resume armed from a "
             "provider-reported reset time; the agent process dies while waiting and has no load/resume, so the task "
-            "restarts with a new session seeded by the summary. Plus one task waiting for reset and one needing a decision.")
+            "restarts with a new session seeded by the summary. Plus one task waiting for reset and one interrupted "
+            "task whose result has not been viewed.")
     t = fx.task("Port config loader to TOML", quota=True)
     p = fx.drive_to(t, "running")
     turn = fx.prompt(p, "Port the config loader.")
@@ -547,7 +577,7 @@ def f05():
                  hint={"not_before": fx.at(hours=4), "source": "user_configured"})
     fx.write({t: "running", b: "interrupted", c: "interrupted"}, {p: "closed", p2: "active"},
              [att("background", "agent_working", t, p2),
-              att("needs_reply", "interruption_needs_decision", b),
+              att("needs_review", "interruption_needs_decision", b),
               att("background", "waiting_for_reset", c)])
 
 
@@ -557,12 +587,10 @@ def f06():
             "new repair session starts because the adapter cannot reattach.")
     t = fx.task("Bump dependency versions")
     p = fx.drive_to(t, "pr")
-    branch = f"agentdock/{t[-4:]}"
-    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
-              "expected_sha": "3" * 40}
+    target = fx.push_target(t, "3" * 40)
     oid, aid = fx.host_op(t, "git_push", target, "remote_ref_compare")
     fx.approve_op(t, aid)
-    fx.checkpoint(t, ops=[oid])
+    fx.checkpoint(t, head="3" * 40, ops=[oid])
     fx.run_op(t, oid, aid)
     fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-7", "last_seq_before_crash": len(fx.events)})
     fx.sst(p, "disconnected", "host_recovery", RECOV)
@@ -576,8 +604,7 @@ def f06():
     fx.emit("operation.reconciled", INTEG, {"operation_id": oid, "finding": "applied",
                                             "evidence": "origin " + target["ref"] + " == expected_sha"}, task=t)
     fx.tr(t, "pr", "resume_phase_restored", resume_phase="pr")
-    oid2, aid2 = fx.host_op(t, "pr_create", {"description": f"open PR from {branch} into main", "ref": branch},
-                            "pr_lookup_by_head")
+    oid2, aid2 = fx.host_op(t, "pr_create", fx.pr_target(t), "pr_lookup_by_head")
     fx.approve_op(t, aid2)
     fx.run_op(t, oid2, aid2, {"pr_number": 43})
     fx.tr(t, "ci", "pr_published", INTEG)
@@ -628,14 +655,14 @@ def f07():
     fx.tr(t, "cancelled", "user_cancel", USER)
     fx.finish_check(t, c, "cancelled")
     fx.close(p, "cancelled")
-    fx.write({t: "cancelled"}, {p: "closed"}, [])
+    fx.write({t: "cancelled"}, {p: "closed"}, [att("needs_review", "task_outcome_unviewed", t)])
 
 
 def f08():
     fx = Fx(8, "review-loop-pause-children", "Primary session with explore and review child sessions: blocking review "
-            "sends the task back to running; the acknowledged child is auto-collapsed while unacknowledged children "
-            "stay visible; the user pauses and resumes into review; the reviewer crashes, the task fails, the user "
-            "retries and the suspended primary session continues.")
+            "sends the task back to running; the child whose result was opened is auto-archived and later restored by "
+            "the user (Undo), while unviewed children stay visible; the user pauses and resumes into review; the "
+            "reviewer crashes, the task fails, the user retries and the suspended primary session continues.")
     t = fx.task("Introduce plugin registry")
     fx.tr(t, "preparing", "scheduled")
     p = fx.session(t)
@@ -658,8 +685,8 @@ def f08():
     fx.end_turn(r1, rt)
     fx.close(r1, "succeeded")
     fx.tr(t, "running", "review_blocking_findings")
-    fx.emit("session.result_acknowledged", USER, {}, task=t, session=r1)
-    fx.emit("session.collapsed", ORCH, {"by": "auto"}, task=t, session=r1)
+    fx.ack_session(r1, "opened")
+    fx.emit("session.archived", ORCH, {"by": "auto"}, task=t, session=r1)
     turn = fx.prompt(p, "Address the blocking finding.", origin="orchestrator")
     fx.end_turn(p, turn)
     fx.tr(t, "verifying", "implementation_done")
@@ -678,6 +705,7 @@ def f08():
     fx.tr(t, "queued", "retry_requested", USER)
     fx.tr(t, "preparing", "scheduled")
     fx.tr(t, "running", "session_ready")
+    fx.emit("session.unarchived", USER, {"by": "user"}, task=t, session=r1)  # Undo: never auto-archived again
     fx.prompt(p, "Resume where you left off.")
     fx.write({t: "running"}, {p: "active", e: "closed", r1: "closed", r2: "failed"},
              [att("background", "agent_working", t, p),
@@ -687,11 +715,11 @@ def f08():
 
 def f09():
     fx = Fx(9, "pr-ci-edges", "PR and CI phase edges: PR creation rejected, merge approval from CI, integration outage "
-            "and resume straight into CI, CI repair limit, cancellation in PR/CI/review, and completion without a PR.")
+            "and resume straight into CI, CI repair limit, cancellation in PR/CI/review (one cancelled result bulk-marked "
+            "as reviewed), and completion without a PR.")
     a = fx.task("A: PR creation rejected")
     pa = fx.drive_to(a, "pr")
-    branch = f"agentdock/{a[-4:]}"
-    oid, aid = fx.host_op(a, "pr_create", {"description": f"open PR from {branch}", "ref": branch}, "pr_lookup_by_head")
+    oid, aid = fx.host_op(a, "pr_create", fx.pr_target(a), "pr_lookup_by_head")
     fx.approve_op(a, aid)
     fx.run_op(a, oid, aid)
     fx.emit("operation.failed", INTEG, {"operation_id": oid, "error": {"code": "http_403", "message": "Resource not accessible"},
@@ -708,8 +736,8 @@ def f09():
     fx.tr(b, "preparing", "scheduled")
     fx.tr(b, "ci", "resume_phase_restored", resume_phase="ci")
     fx.check(b, "ci / build", origin="ci")
-    oid, aid = fx.host_op(b, "pr_merge", {"description": "merge PR #42 with a merge commit", "pr_number": 42},
-                          "pr_state_lookup")
+    oid, aid = fx.host_op(b, "pr_merge", {"description": "merge PR #42 with a merge commit", "pr_number": 42,
+                                          "expected_sha": "2" * 40}, "pr_state_lookup")
     fx.approve_op(b, aid)
     fx.run_op(b, oid, aid, {"pr_number": 42})
     fx.tr(b, "completed", "ci_passed_accepted", INTEG)
@@ -724,6 +752,7 @@ def f09():
     d = fx.task("D: cancelled in CI")
     pd = fx.drive_to(d, "ci")
     fx.tr(d, "cancelled", "user_cancel", USER)
+    fx.ack_task(d, "bulk_marked_reviewed")
 
     e = fx.task("E: cancelled in PR")
     pe = fx.drive_to(e, "pr")
@@ -740,7 +769,9 @@ def f09():
         fx.close(s, "succeeded")
     fx.write({a: "failed", b: "completed", c: "failed", d: "cancelled", e: "cancelled", f: "cancelled", g: "completed"},
              {s: "closed" for s in (pa, pb, pc, pd, pe, pf, pg)},
-             [att("needs_review", "task_outcome_unviewed", g)])
+             [att("needs_review", "task_outcome_unviewed", e),
+              att("needs_review", "task_outcome_unviewed", f),
+              att("needs_review", "task_outcome_unviewed", g)])
 
 
 def f10():
@@ -789,22 +820,23 @@ def f10():
     fx.tr(e, "review", "checks_passed")
     fx.write({a: "failed", b: "failed", c: "failed", d: "cancelled", e: "review"},
              {sa: "closed", sb: "closed", sc: "closed", sd: "closed", se: "suspended"},
-             [att("needs_reply", "failure_needs_decision", a),
-              att("needs_reply", "failure_needs_decision", b),
+             [att("needs_review", "failure_needs_decision", a),
+              att("needs_review", "failure_needs_decision", b),
+              att("needs_review", "task_outcome_unviewed", d),
               att("needs_reply", "phase_decision_pending", e)])
 
 
 def f11():
     fx = Fx(11, "push-denied-abandon-supersede", "Host-policy operation edges: a denied push is abandoned, the task is "
-            "paused and resumed into pr, and a superseding push with a fresh approval runs; merge is user-approved and "
-            "gives the integration its completion evidence; an expired destructive-command approval; a push killed by "
-            "cancellation (outcome_unknown, cause killed) and reconciled afterwards; a crash between approval and start "
-            "(recovery invalidates the unused grant and abandons the recorded operation).")
+            "paused and resumed into pr, and a superseding push with a fresh approval runs; merge (at the pushed head) "
+            "is user-approved and gives the integration its completion evidence; an expired destructive-command "
+            "approval; a push killed by cancellation (outcome_unknown, cause killed) and reconciled afterwards; a "
+            "cleanup operation left outcome_unknown by a crash after the task ended (needs reconcile); a crash between "
+            "approval and start (recovery invalidates the unused grant and abandons the recorded operation).")
     a = fx.task("A: push denied, re-requested later")
     pa = fx.drive_to(a, "pr")
-    branch = f"agentdock/{a[-4:]}"
-    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
-              "expected_sha": "2" * 40}
+    fx.checkpoint(a, head="2" * 40)
+    target = fx.push_target(a, "2" * 40)
     oid, aid = fx.host_op(a, "git_push", target, "remote_ref_compare")
     fx.reject_op(a, aid, oid, "denied")
     fx.interrupt(a, "user_paused", USER)
@@ -814,14 +846,13 @@ def f11():
     oid2, aid2 = fx.host_op(a, "git_push", target, "remote_ref_compare", supersedes=oid)
     fx.approve_op(a, aid2)
     fx.run_op(a, oid2, aid2, {"remote_sha": "2" * 40})
-    oid3, aid3 = fx.host_op(a, "pr_create", {"description": f"open PR from {branch} into main", "ref": branch},
-                            "pr_lookup_by_head")
+    oid3, aid3 = fx.host_op(a, "pr_create", fx.pr_target(a), "pr_lookup_by_head")
     fx.approve_op(a, aid3)
     fx.run_op(a, oid3, aid3, {"pr_number": 51})
     fx.tr(a, "ci", "pr_published", INTEG)
     fx.check(a, "ci / build", origin="ci")
-    oid4, aid4 = fx.host_op(a, "pr_merge", {"description": "merge PR #51 with a merge commit", "pr_number": 51},
-                            "pr_state_lookup")
+    oid4, aid4 = fx.host_op(a, "pr_merge", {"description": "merge PR #51 with a merge commit", "pr_number": 51,
+                                            "expected_sha": "2" * 40}, "pr_state_lookup")
     fx.approve_op(a, aid4)
     fx.run_op(a, oid4, aid4, {"pr_number": 51})
     fx.tr(a, "completed", "ci_passed_accepted", INTEG)
@@ -831,7 +862,8 @@ def f11():
     pb = fx.drive_to(b, "running")
     turn = fx.prompt(pb, "Reset the local test database.")
     oid, aid = fx.host_op(b, "destructive_command", {"description": "drop and recreate the local test database",
-                                                     "path": "target/test-db"}, "none")
+                                                     "command_sha256": sha(["sqlx", "database", "reset", "-y"]),
+                                                     "cwd": "target/test-db"}, "none")
     fx.reject_op(b, aid, oid, "expired", actor=POLICY)
     fx.tr(b, "cancelled", "user_cancel", USER)
     fx.end_turn(pb, turn, stop="cancelled")
@@ -839,9 +871,8 @@ def f11():
 
     c = fx.task("C: cancelled while a push is running")
     pc = fx.drive_to(c, "pr")
-    branch = f"agentdock/{c[-4:]}"
-    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
-              "expected_sha": "4" * 40}
+    fx.checkpoint(c, head="4" * 40)
+    target = fx.push_target(c, "4" * 40)
     oid, aid = fx.host_op(c, "git_push", target, "remote_ref_compare")
     fx.approve_op(c, aid)
     fx.run_op(c, oid, aid)
@@ -851,11 +882,24 @@ def f11():
                                             "evidence": "origin " + target["ref"] + " does not exist"}, task=c)
     fx.close(pc, "cancelled")
 
+    e = fx.task("E: cleanup interrupted by a host crash")
+    fx.tr(e, "cancelled", "user_cancel", USER)
+    fx.ack_task(e)
+    oid, aid = fx.host_op(e, "worktree_remove", {"description": "remove the worktree of the cancelled task",
+                                                 "path": f"agentdock-{e[-4:]}"}, "path_exists_lookup", blocking=False)
+    fx.approve_op(e, aid, blocking=False)
+    fx.run_op(e, oid, aid)
+    fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-10", "last_seq_before_crash": len(fx.events)})
+    fx.emit("operation.outcome_unknown", RECOV, {"operation_id": oid, "cause": "host_crash"}, task=e)
+    fx.emit("system.recovery_completed", RECOV, {"tasks_interrupted": [], "sessions_disconnected": [],
+                                                 "approvals_invalidated": [], "operations_marked_unknown": [oid],
+                                                 "operations_abandoned": [], "checks_marked_unknown": []})
+    cleanup = oid
+
     d = fx.task("D: crash after approval, before start")
     pd = fx.drive_to(d, "pr")
-    branch = f"agentdock/{d[-4:]}"
-    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
-              "expected_sha": "5" * 40}
+    fx.checkpoint(d, head="5" * 40)
+    target = fx.push_target(d, "5" * 40)
     oid, aid = fx.host_op(d, "git_push", target, "remote_ref_compare")
     fx.approve_op(d, aid)
     fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-11", "last_seq_before_crash": len(fx.events)})
@@ -872,15 +916,17 @@ def f11():
     oid2, aid2 = fx.host_op(d, "git_push", target, "remote_ref_compare", supersedes=oid)
     fx.approve_op(d, aid2)
     fx.run_op(d, oid2, aid2, {"remote_sha": "5" * 40})
-    oid3, aid3 = fx.host_op(d, "pr_create", {"description": f"open PR from {branch} into main", "ref": branch},
-                            "pr_lookup_by_head")
+    oid3, aid3 = fx.host_op(d, "pr_create", fx.pr_target(d), "pr_lookup_by_head")
     fx.approve_op(d, aid3)
     fx.run_op(d, oid3, aid3, {"pr_number": 52})
     fx.tr(d, "ci", "pr_published", INTEG)
     fx.check(d, "ci / build", origin="ci", finish=False)
-    fx.write({a: "completed", b: "cancelled", c: "cancelled", d: "ci"},
+    fx.write({a: "completed", b: "cancelled", c: "cancelled", e: "cancelled", d: "ci"},
              {pa: "closed", pb: "closed", pc: "closed", pd: "disconnected"},
              [att("needs_review", "task_outcome_unviewed", a),
+              att("needs_review", "task_outcome_unviewed", b),
+              att("needs_review", "task_outcome_unviewed", c),
+              att("needs_reply", "reconcile_needed", e, ref=cleanup),
               att("background", "workflow_step", d)])
 
 
@@ -889,9 +935,22 @@ def f12():
             "session_unavailable; disabling auto-resume disarms a waiting task whose suspended agent then fails; a "
             "running task whose idle agent crashed; a turn cancelled by the output limit; a review session with a "
             "non-blocking ACP approval that fails while asking, followed by a refusal; a session closed while starting; "
-            "and a deleted task whose history is tombstoned.")
-    g = fx.task("G: deleted after cancellation")
+            "a main session archived while paused and unarchived by the system when it asks for permission; and a task "
+            "that went through crash recovery and was then deleted (its history, including the recovery events, is "
+            "tombstoned; fixtures/predelete/ keeps the stream as it was before deletion).")
+    g = fx.task("G: crashed, cancelled, then deleted")
+    pg = fx.drive_to(g, "running")
+    turn = fx.prompt(pg, "Remove the legacy importer.")
+    ag = fx.acp_permission(pg, turn, "Run cargo build", "call-g1")
+    fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-12", "last_seq_before_crash": len(fx.events)})
+    fx.emit("approval.resolved", RECOV, {"approval_id": ag, "state": "invalidated"}, task=g, session=pg)
+    fx.sst(pg, "disconnected", "host_recovery", RECOV)
+    fx.interrupt(g, "host_crashed", RECOV, approval=ag)
+    fx.emit("system.recovery_completed", RECOV, {"tasks_interrupted": [g], "sessions_disconnected": [pg],
+                                                 "approvals_invalidated": [ag], "operations_marked_unknown": [],
+                                                 "operations_abandoned": [], "checks_marked_unknown": []})
     fx.tr(g, "cancelled", "user_cancel", USER)
+    fx.close(pg, "abandoned", trigger="abandoned", actor=USER)
     fx.ack_task(g)
 
     a = fx.task("A: reattach rejected")
@@ -957,24 +1016,42 @@ def f12():
     fx.tr(f, "cancelled", "user_cancel", USER)
     fx.sst(sf, "closed", "session_closed", ORCH, outcome="cancelled")
 
+    h = fx.task("H: archived while paused, unarchived when it asks")
+    ph = fx.drive_to(h, "running")
+    turn = fx.prompt(ph, "Split the config module.")
+    fx.end_turn(ph, turn)
+    fx.interrupt(h, "user_paused", USER)
+    fx.sst(ph, "suspended", "task_interrupted", USER)
+    fx.emit("session.archived", USER, {"by": "user"}, task=h, session=ph)
+    fx.tr(h, "queued", "resume_requested", USER, resume_phase="running")
+    fx.tr(h, "preparing", "scheduled")
+    fx.tr(h, "running", "session_ready")
+    turn = fx.prompt(ph, "Continue the split.")
+    ah = fx.acp_permission(ph, turn, "Edit src/config/mod.rs", "call-h1", classified="workspace_edit", unarchive=True)
+
     fx.delete_task(g)
-    fx.write({a: "interrupted", b: "interrupted", c: "running", d: "running", e: "review", f: "cancelled"},
-             {pa: "failed", pb: "failed", pc: "failed", pd: "idle", pe: "idle", r: "failed", r2: "idle", sf: "closed"},
-             [att("needs_reply", "interruption_needs_decision", a),
-              att("needs_reply", "interruption_needs_decision", b),
+    fx.write({a: "interrupted", b: "interrupted", c: "running", d: "running", e: "review", f: "cancelled",
+              h: "awaiting_approval"},
+             {pa: "failed", pb: "failed", pc: "failed", pd: "idle", pe: "idle", r: "failed", r2: "idle", sf: "closed",
+              ph: "awaiting_permission"},
+             [att("needs_review", "interruption_needs_decision", a),
+              att("needs_review", "interruption_needs_decision", b),
               att("needs_reply", "session_unavailable", c),
               att("needs_reply", "output_limited", d, pd),
               att("needs_reply", "phase_decision_pending", e),
               att("needs_reply", "agent_turn_ended", e, r2),
-              att("needs_review", "child_result_unviewed", e, r)])
+              att("needs_review", "child_result_unviewed", e, r),
+              att("needs_review", "task_outcome_unviewed", f),
+              att("needs_reply", "approval_pending", h, ph, ah)])
 
 
 def samples():
     fx = Fx(99, "samples", "")
     prj, tsk, ses, child = fx.project, fx.id("tsk"), fx.id("ses"), fx.id("ses")
     apr, op, chk, use, sumid = fx.id("apr"), fx.id("op"), fx.id("chk"), fx.id("use"), fx.id("sum")
-    op_target = {"description": "push agentdock/x", "remote": "origin", "ref": "refs/heads/agentdock/x"}
-    key = sha({"kind": "git_push", "target": op_target})
+    op_target = {"description": "push agentdock/x", "remote": "origin", "ref": "refs/heads/agentdock/x",
+                 "expected_sha": "2" * 40}
+    key = op_key("git_push", op_target)
     ts = "2026-11-17T10:00:00.000Z"
     doc = {
         "projects": [{"project_id": prj, "name": "agentdock", "local_path": "D:/Code/agentdock", "environment_id": "local",
@@ -989,14 +1066,23 @@ def samples():
         "sessions": [
             {"session_id": ses, "task_id": tsk, "role": "primary", "adapter_id": "claude-code", "state": "suspended",
              "external_session_id": "acp-abc", "launch_method": "new", "capability_snapshot": caps(ts),
-             "collapsed": False, "created_at": ts},
+             "archived": False, "created_at": ts},
             {"session_id": child, "task_id": tsk, "parent_session_id": ses, "role": "review", "adapter_id": "codex",
              "state": "closed", "launch_method": "new", "outcome": "succeeded", "result_acknowledged_at": ts,
-             "collapsed": True, "collapsed_by": "auto", "created_at": ts, "closed_at": ts}],
+             "result_opened_at": ts, "archived": True, "archived_by": "auto", "restored_by_user": False,
+             "created_at": ts, "closed_at": ts}],
         "approvals": [{"approval_id": apr, "task_id": tsk, "source": "host_policy", "state": "approved",
                        "operation_kind": "git_push", "operation_fingerprint": key, "operation_id": op,
                        "title": "push agentdock/x", "scope": "once", "return_state": "pr", "requested_at": ts,
-                       "decided_at": ts, "decided_by": USER}],
+                       "decided_at": ts, "decided_by": USER},
+                      {"approval_id": fx.id("apr"), "task_id": tsk, "session_id": ses, "source": "acp_permission",
+                       "state": "denied", "operation_kind": "tool_call", "classified_kind": "force_push",
+                       "operation_fingerprint": sha({"kind": "tool_call", "target": {"tool_call_id": "call-1",
+                                                                                     "title": "git push --force"}}),
+                       "title": "git push --force", "scope": "once", "return_state": "running",
+                       "acp": {"tool_call_id": "call-1", "options": [{"option_id": "allow", "kind": "allow_once"},
+                                                                     {"option_id": "reject", "kind": "reject_once"}]},
+                       "selected_option_id": "reject", "requested_at": ts, "decided_at": ts, "decided_by": USER}],
         "operations": [{"operation_id": op, "task_id": tsk, "kind": "git_push", "repeatability": "non_repeatable",
                         "idempotency_key": key, "target": op_target,
                         "approval_id": apr, "reconcile_strategy": "remote_ref_compare", "state": "reconciled_applied",

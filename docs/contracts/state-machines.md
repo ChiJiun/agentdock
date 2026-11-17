@@ -98,7 +98,7 @@ stateDiagram-v2
 | T05 | `preparing` | `verifying` | orchestrator | `resume_phase_restored` | persist_then_report | `resume_phase_equals_to` |
 | T06 | `preparing` | `review` | orchestrator | `resume_phase_restored` | persist_then_report | `resume_phase_equals_to` |
 | T07 | `preparing` | `pr` | orchestrator | `resume_phase_restored` | persist_then_report | `resume_phase_equals_to`, `no_unreconciled_operations` |
-| T08 | `preparing` | `ci` | orchestrator | `resume_phase_restored` | persist_then_report | `resume_phase_equals_to`, `no_unreconciled_operations`, `pr_operation_succeeded` |
+| T08 | `preparing` | `ci` | orchestrator | `resume_phase_restored` | persist_then_report | `resume_phase_equals_to`, `no_unreconciled_operations`, `pr_published_this_round` |
 | T09 | `preparing` | `interrupted` | orchestrator, adapter, recovery | `interruption` | persist_then_report | `no_open_operations` |
 | T10 | `preparing` | `failed` | orchestrator | `preparation_failed` | persist_then_report | `no_open_operations` |
 | T11 | `preparing` | `cancelled` | user | `user_cancel` | persist_then_act | `no_open_operations` |
@@ -118,18 +118,18 @@ stateDiagram-v2
 | T25 | `verifying` | `failed` | orchestrator | `repair_limit_reached` | persist_then_report | `no_open_operations` |
 | T26 | `verifying` | `cancelled` | user | `user_cancel` | persist_then_act | `no_open_operations` |
 | T27 | `review` | `running` | orchestrator | `review_blocking_findings` | persist_then_report | — |
-| T28 | `review` | `pr` | user, orchestrator | `review_passed` | persist_then_report | — |
-| T29 | `review` | `completed` | user | `accepted_without_pr` | persist_then_report | — |
+| T28 | `review` | `pr` | user, orchestrator | `review_passed` | persist_then_report | `no_unreconciled_operations` |
+| T29 | `review` | `completed` | user | `accepted_without_pr` | persist_then_report | `no_unreconciled_operations` |
 | T30 | `review` | `interrupted` | user, orchestrator, adapter, recovery | `interruption` | persist_then_report | `no_open_operations` |
 | T31 | `review` | `failed` | orchestrator | `repair_limit_reached` | persist_then_report | `no_open_operations` |
 | T32 | `review` | `cancelled` | user | `user_cancel` | persist_then_act | `no_open_operations` |
 | T33 | `pr` | `awaiting_approval` | policy | `approval_requested` | persist_then_act | `approval_requested_before` |
-| T34 | `pr` | `ci` | integration | `pr_published` | persist_then_report | `pr_operation_succeeded` |
+| T34 | `pr` | `ci` | integration | `pr_published` | persist_then_report | `no_unreconciled_operations`, `pr_published_this_round` |
 | T35 | `pr` | `interrupted` | user, orchestrator, integration, recovery | `interruption` | persist_then_report | `no_open_operations` |
 | T36 | `pr` | `failed` | integration, orchestrator | `operation_failed` | persist_then_report | `no_open_operations` |
 | T37 | `pr` | `cancelled` | user | `user_cancel` | persist_then_act | `no_open_operations` |
 | T38 | `ci` | `running` | orchestrator | `ci_failed` | persist_then_report | — |
-| T39 | `ci` | `completed` | user, integration | `ci_passed_accepted` | persist_then_report | `ci_checks_passed`, `merge_evidence_if_integration` |
+| T39 | `ci` | `completed` | user, integration | `ci_passed_accepted` | persist_then_report | `no_unreconciled_operations`, `ci_checks_passed`, `merge_evidence_if_integration` |
 | T40 | `ci` | `awaiting_approval` | policy | `approval_requested` | persist_then_act | `approval_requested_before` |
 | T41 | `ci` | `interrupted` | user, orchestrator, integration, recovery | `interruption` | persist_then_report | `no_open_operations` |
 | T42 | `ci` | `failed` | orchestrator | `repair_limit_reached` | persist_then_report | `no_open_operations` |
@@ -137,7 +137,7 @@ stateDiagram-v2
 | T44 | `interrupted` | `queued` | user, orchestrator | `resume_requested`, `scheduled_resume` | persist_then_act | `orchestrator_only_if_auto_resume_armed_and_due`, `resume_phase_within_interrupted_phase` |
 | T45 | `interrupted` | `failed` | user, orchestrator | `abandoned` | persist_then_report | — |
 | T46 | `interrupted` | `cancelled` | user | `user_cancel` | persist_then_report | — |
-| T47 | `failed` | `queued` | user | `retry_requested` | persist_then_act | — |
+| T47 | `failed` | `queued` | user | `retry_requested` | persist_then_act | `no_unreconciled_operations` |
 
 `T39` with actor `user` is the user accepting a green CI run. With actor `integration` it requires merge evidence: a `pr_merge` operation of the task that `succeeded` (or was `reconciled_applied`). AgentDock's own `pr_merge` is an approval-gated operation inside `ci` (`T40`/`T19`), and only the user can grant that approval (see [checkpoint-and-replay.md](checkpoint-and-replay.md#rules)). A merge done by a human directly on GitHub is observed by the user, who completes the task with actor `user`.
 
@@ -151,13 +151,17 @@ Interruption phase: every `Interruption` records `phase`, the furthest phase the
 
 Cancelling or interrupting while an operation is `started` (not a crash): the orchestrator kills the operation and records `operation.outcome_unknown{cause: killed}` first, then the transition. The operation is reconciled later by a live read-only probe. A `recorded` operation is `operation.abandoned` instead.
 
+**Exception: a started `pr_merge` is never killed** (ADR-0002 PRL-5: a loop in `merging` cannot be cancelled; a restart never launches a duplicate merge). While a `pr_merge` is `started`, `T41`/`T42`/`T43` are rejected by `no_open_operations`; the UI disables Pause/Cancel with an explanation and the backend waits for `operation.succeeded`/`failed`. Only a host crash can leave it `outcome_unknown` (`cause: host_crash`, reconciled with `pr_state_lookup`). Other kinds stay killable, see [checkpoint-and-replay.md](checkpoint-and-replay.md#rules) rule 8.
+
+Reconciliation gates: `no_unreconciled_operations` guards every way back into, or out of, the PR/CI part of the workflow: resume into `pr`/`ci` (`T07`/`T08`), `review → pr` (`T28`), `pr → ci` (`T34`), completion (`T29`, `T39`) and retry (`T47`). A task can therefore never re-enter `pr`/`ci` or complete while one of its operations is `outcome_unknown`. An ended task (`completed`/`cancelled`/`failed`) that still has one shows `needs_reply / reconcile_needed` ([attention.md](attention.md)).
+
 ### Conditions
 
 | Condition | Meaning |
 | --- | --- |
 | `resume_phase_equals_to` | `payload.resume_phase == to`, and equals the `resume_phase` recorded when the task left `interrupted` (`T44` requires `resume_phase`). |
-| `no_unreconciled_operations` | No operation of the task is `recorded`, `started` or `outcome_unknown`. Re-entering `pr`/`ci` after a crash requires reconciliation first. |
-| `no_open_operations` | No operation of the task is `recorded` or `started`, and no host-policy approval of the task is `approved` but unused. Abandon recorded operations, invalidate unused grants, and kill started operations (`outcome_unknown{cause: killed}`) before leaving the phase. |
+| `no_unreconciled_operations` | No operation of the task is `recorded`, `started` or `outcome_unknown`. Used on `T07`, `T08`, `T28`, `T29`, `T34`, `T39`, `T47`. |
+| `no_open_operations` | No operation of the task is `recorded` or `started`, and no host-policy approval of the task is `approved` but unused. Abandon recorded operations, invalidate unused grants, and kill started operations (`outcome_unknown{cause: killed}`) before leaving the phase; a started `pr_merge` cannot be killed, so the transition waits for its result. |
 | `resume_phase_within_interrupted_phase` | `resume_phase` is at or before `interruption.phase` (`running < verifying < review < pr < ci`). |
 | `merge_evidence_if_integration` | If the actor is `integration`, a `pr_merge` operation of the task is `succeeded` or `reconciled_applied`. |
 | `approval_requested_before` | The referenced approval was already persisted as `pending`, and it is a blocking approval whose `return_state` is the state being left. |
@@ -166,7 +170,7 @@ Cancelling or interrupting while an operation is `started` (not a crash): the or
 | `approval_not_pending_after` | No approval of this task (for `S15`: of this session) is still `pending`. Resolve them first (`cancelled` on user cancel, `invalidated` by recovery) in the same transaction. |
 | `local_checks_passed` | At least one `local` check started since the task last entered `verifying`, and all of them `passed`. An approval detour does not reset the phase. |
 | `ci_checks_passed` | Same, for `ci` checks since the task last entered `ci`. |
-| `pr_operation_succeeded` | A `pr_create` or `pr_update` operation of this task is `succeeded` or `reconciled_applied`. Also required when resuming straight into `ci` (`T08`). |
+| `pr_published_this_round` | In the current PR round (since the task last went `review → pr`, `T28`; a resume via `T07` continues the same round), a `git_push` of this task `succeeded` or was `reconciled_applied`, and a PR exists: a `pr_create` that succeeded (in any round) or a `pr_update` in this round. Used on `T34` and `T08`. A second round after `ci → running` therefore needs a new push; an old round's push or PR does not count. |
 | `orchestrator_only_if_auto_resume_armed_and_due` | A user may resume any time (`resume_requested`). The orchestrator may resume only with `scheduled_resume`, only if `interruption.auto_resume_armed` is true, and not before `retry_hint.not_before`. |
 | `launch_method_advertised` | A capability snapshot was recorded for *this* launch, and it advertises the launch method used (`load` → `load_session`, `resume` → `resume_session`). |
 | `reattach_capability_required` | The last snapshot for the session advertises the requested method and an `external_session_id` is known. |
@@ -229,8 +233,14 @@ Additional session rules:
 - Late prompt response after `S11`: if the agent answers the cancelled `session/prompt` while the session is `suspended`, the session stays `suspended`; the `stopReason` and `turn_id` are recorded on the next transition out of `suspended` (`stop_reason` is allowed on any `session.state_changed`). It never moves the session back to `idle` on its own.
 - `session.output_limited{action: turn_cancelled}` sends `session/cancel`; the turn then ends with `stopReason: cancelled`. Attention shows it as `output_limited`, not as a user cancel.
 
-## Collapsing child sessions
+## Archiving sessions
 
-- A session may be collapsed by the user at any time (`session.collapsed{by: user}`).
-- **Automatic** collapse (`by: auto`) is allowed only when the session has a `parent_session_id`, is `closed`/`failed`, **and** the user acknowledged its result (`session.result_acknowledged`) after it closed.
-- A session without a parent (the main session) is never auto-collapsed.
+These rules implement the merged UX spec (`docs/ux/states-and-indicators.md` section 5, acceptance criteria UX-40 to UX-47). "Archived" in the UX is `Session.archived` here; the events are `session.archived{by}` and `session.unarchived{by}`.
+
+- **Viewed vs opened.** `session.result_acknowledged{method}` records that the user viewed a result: `opened` (rendered on screen while the window had focus), `marked_reviewed` (one row) or `bulk_marked_reviewed` ("Mark completed as reviewed", only for outcome `succeeded`/`cancelled`). Any method clears the needs-review item; only `opened` satisfies the auto-archive rule.
+- **Automatic archive** (`by: auto`, actor `orchestrator`) is allowed only when all hold: the session has a `parent_session_id`; it is `closed`/`failed` with outcome `succeeded` or `cancelled`; its result was `opened` after it finished; and the user never restored it. The UI emits it only after the user navigated away (rows never disappear while focused, hovered or on screen; that part is a UI rule and not checkable from events).
+- **Never automatically archived:** a session without a parent (the main session, UX-40), a child with outcome `failed` (including a protocol error), `superseded` or `abandoned` (UX-42), and a child the user restored (UX-41, UX-46).
+- **Manual archive** (`by: user`, actor `user`) only in a terminal state: a child that is `closed`/`failed`; a main session when its task is `completed`, `failed`, `interrupted` or `cancelled` (UX-40).
+- **Restore.** `session.unarchived{by: user}` (Undo or Unarchive) marks the session restored; it is never auto-archived again but can still be archived manually.
+- **Waiting wins over archived** (UX-47). If an archived session starts waiting for the user — a `needs_reply` item names it, a task-level `needs_reply` item exists for its task and it is a main session, or it is `awaiting_permission` — the orchestrator writes `session.unarchived{by: system}` in the same transaction as the event that made it wait. This does not mark it restored.
+- Derived attention hides `needs_review` and `background` items of archived sessions (and task-level items when every main session of the task is archived). `needs_reply` items are never hidden.

@@ -90,12 +90,14 @@ A reattach can still fail (the agent's own storage may be gone). That is `S03 st
 | `tool_call` / `tool_call_update` | `session.tool_call` (`rawInput`/`rawOutput` → redacted artifact only) |
 | `plan` | `session.plan_updated` |
 | `usage_update` | `usage.reported` with `source: provider_reported`, `reporter: acp_usage_update`; `used/size` → `context_window`, `cost` → `cost{amount, unit, basis: reported}`; scope `cumulative` |
-| `session/request_permission` | `approval.requested{source: acp_permission}` → `active → awaiting_permission` → task `running → awaiting_approval` |
+| `session/request_permission` | `approval.requested{source: acp_permission, operation_kind: tool_call, classified_kind}` → `active → awaiting_permission` → task `running → awaiting_approval`. `classified_kind` (`PolicyClass`) is computed by the Rust backend from the unwrapped command, path or URL, never from agent text; user-only classes cannot be approved by policy ([checkpoint-and-replay.md](checkpoint-and-replay.md)). |
 | permission answer | `approval.resolved` (with `acp_outcome`) persisted **before** the JSON-RPC response is sent |
 | `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `notice`, `compaction_*` | Not part of the v1 contract. May be stored later as new event types (additive). `notice` is live-only and never part of history. |
-| `fs/*`, `terminal/*` client methods | Executed by AgentDock under host policy (path checks, approvals); recorded as `session.tool_call` / `operation.*` as appropriate, never silently. |
+| `fs/*`, `terminal/*` client methods | Executed by AgentDock under host policy (path checks, approvals), never silently. A request whose classification names an operation kind (`git_push`, `pr_write`, `pr_merge`, `force_push`, `branch_delete`, `worktree_remove`, `destructive_command`, `external_write`) runs only as an `Operation` with its own host-policy approval; other classes are recorded as `session.tool_call`. Enforcement is issue #8; the fixtures do not exercise client-method execution. |
 | JSON-RPC protocol error / malformed message | `active → failed (protocol_error)` or `starting → failed` |
 | process exit | `* → disconnected (process_exited)` |
+
+**Honest scope (ADR-0002 APR-11).** An agent running in its own bypass or full-access mode (for example Claude Code `bypassPermissions`, Codex full access) sends no `session/request_permission` and executes its own tools; AgentDock cannot intercept or approve those, and the UI must label such a session as not policy-enforced (issue #26). The approval guarantees in this contract cover only what reaches AgentDock.
 
 `allow_always` / `reject_always`: AgentDock records the selected option, but its own scope (`ApprovalScope`) is decided by host policy; selecting `allow_always` never creates a persistent AgentDock rule without a separate, explicit settings change.
 

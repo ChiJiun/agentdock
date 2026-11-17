@@ -7,5 +7,11 @@
   "final_session_states": {
     "ses_01JDQ007000000000000000001": "closed"
   },
-  "attention": []
+  "attention": [
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ007000000000000000001"
+    }
+  ]
 }

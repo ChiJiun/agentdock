@@ -9,5 +9,16 @@
     "ses_01JDQ003000000000000000001": "closed",
     "ses_01JDQ003000000000000000002": "failed"
   },
-  "attention": []
+  "attention": [
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ003000000000000000001"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ003000000000000000002"
+    }
+  ]
 }

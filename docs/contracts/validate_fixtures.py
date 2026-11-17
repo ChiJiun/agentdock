@@ -7,7 +7,7 @@ What it checks:
      fixtures/models.sample.json is a valid ModelSamples document.
   3. Semantic rules that JSON Schema cannot express: gap-free cursor, legal task/session transitions
      (transitions.json), approval/operation/check lifecycles, crash-recovery invariants, no automatic
-     replay of non-repeatable operations, capability-gated reattach, auto-collapse and auto-resume rules.
+     replay of non-repeatable operations, capability-gated reattach, auto-archive and auto-resume rules.
   4. The projection of each fixture (final states + derived attention items) equals its expectation.
   5. Every transition in transitions.json is exercised by at least one fixture.
   6. No property name anywhere suggests a known subscription quota balance.
@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent
 SCHEMA_PATH = ROOT / "schema" / "agentdock.schema.json"
 TRANSITIONS_PATH = ROOT / "transitions.json"
 FIXTURES_DIR = ROOT / "fixtures"
+PREDELETE_DIR = FIXTURES_DIR / "predelete"
 
 # Any property name (including inside opaque objects such as acp_agent_capabilities) that suggests a
 # known subscription balance. 'on_quota_reset' (a user policy flag) is the only quota-named key allowed.
@@ -235,8 +236,28 @@ OP_STATES = {
 CLEANUP_KINDS = {"branch_delete", "worktree_remove"}
 # Host-policy approvals that only a human may grant; policy may still deny or let them expire.
 HUMAN_ONLY_KINDS = {"pr_merge", "branch_delete", "worktree_remove", "destructive_command"}
+# ACP permission requests whose backend classification (PolicyClass) only a human may approve.
+HUMAN_ONLY_CLASSES = {"pr_merge", "force_push", "branch_delete", "worktree_remove", "destructive_command", "unclassified"}
+# A started operation of these kinds is never killed; cancel/interrupt waits for its result (ADR-0002 PRL-5).
+UNINTERRUPTIBLE_KINDS = {"pr_merge"}
 SUPERSEDABLE = {"reconciled_not_applied", "reconciled_undeterminable", "abandoned"}
+DONE_OP = {"succeeded", "reconciled_applied"}
 ATTENTION_STOPS = {"refusal", "max_tokens", "max_turn_requests"}
+# UX terminal states (docs/ux/states-and-indicators.md section 2): results the user can view/acknowledge.
+ACK_TASK_STATES = {"completed", "cancelled", "failed", "interrupted"}
+BULK_TASK_STATES = {"completed", "cancelled"}
+BULK_SESSION_OUTCOMES = {"succeeded", "cancelled"}
+AUTO_ARCHIVE_OUTCOMES = {"succeeded", "cancelled"}
+REVIEW_SESSION_OUTCOMES = {"succeeded", "failed", "cancelled"}
+
+
+def operation_identity(target):
+    """Identity of an operation target: every field except the free-text description."""
+    return {k: v for k, v in target.items() if k != "description"}
+
+
+def idempotency_key(kind, target):
+    return canonical_sha256({"kind": kind, "identity": operation_identity(target)})
 
 
 def derive_features(raw):
@@ -285,6 +306,8 @@ class Replay:
         self.tombstoned = {}      # task_id -> list of tombstone 'at' values
         self.live_counts = {}     # task_id -> number of non-tombstoned events
         self.deleted = set()
+        self.checkpoints = {}     # task_id -> worktree of the latest task.checkpoint_recorded
+        self.must_unarchive = set()
 
     def err(self, ev, msg):
         self.errors.append(f"{self.name} seq={ev.get('seq')} {ev.get('type')}: {msg}")
@@ -318,6 +341,9 @@ class Replay:
             return self.err(ev, "event for a deleted task")
         if "tombstone" in ev:
             self.tombstoned.setdefault(tid, []).append(ev["tombstone"]["at"])
+            if self.recovery is not None and is_recovery_actor:
+                # The task was deleted later: payload ids are gone, routing fields and the type remain.
+                self.recovery["tombstoned"].append(ev)
             return
         if tid is not None and ev["type"] != "task.deleted":
             self.live_counts[tid] = self.live_counts.get(tid, 0) + 1
@@ -345,7 +371,7 @@ class Replay:
         self.tasks[tid] = {
             "state": "queued", "policy": dict(p["auto_resume_policy"]), "interruption": None, "resume_phase": None,
             "return_state": None, "approval_id": None, "entered_seq": ev["seq"], "ack_seq": 0,
-            "state_entered": {"queued": ev["seq"]},
+            "state_entered": {"queued": ev["seq"]}, "pr_round_seq": None,
         }
 
     def task_policy_updated(self, ev, p):
@@ -430,6 +456,8 @@ class Replay:
             self.err(ev, f"preparing -> {to} requires the task's recorded resume_phase to be {to}")
         if frm == "preparing" and to in IN_FLIGHT_TASK:
             t["resume_phase"] = None
+        if frm == "review" and to == "pr":  # T28 starts a new PR round; resume (T07) continues the old one
+            t["pr_round_seq"] = ev["seq"]
         t["state"] = to
         if frm != "awaiting_approval":  # an approval detour is not a new phase
             t["state_entered"][to] = ev["seq"]
@@ -464,13 +492,15 @@ class Replay:
     def cond_no_unreconciled_operations(self, ev, p, t, tid):
         for oid, op in self.operations.items():
             if op["task_id"] == tid and op["state"] in ("recorded", "started", "outcome_unknown"):
-                self.err(ev, f"operation {oid} is {op['state']}; reconcile before re-entering {p['to']}")
+                self.err(ev, f"operation {oid} is {op['state']}; reconcile it before {p['from']} -> {p['to']}")
 
     def cond_no_open_operations(self, ev, p, t, tid):
         for oid, op in self.operations.items():
             if op["task_id"] == tid and op["state"] in ("recorded", "started"):
-                self.err(ev, f"operation {oid} is {op['state']}; abandon it (or kill it and record outcome_unknown) "
-                             f"before the task leaves {p['from']}")
+                hint = ("wait for its result (a started merge cannot be killed)" if op["state"] == "started"
+                        and op["kind"] in UNINTERRUPTIBLE_KINDS else
+                        "abandon it (or kill it and record outcome_unknown)")
+                self.err(ev, f"operation {oid} is {op['state']}; {hint} before the task leaves {p['from']}")
         for aid, a in self.approvals.items():
             if a["task_id"] == tid and a["state"] == "approved" and a["source"] == "host_policy" \
                     and aid not in self.consumed_approvals:
@@ -514,13 +544,19 @@ class Replay:
             if c["state"] != "passed":
                 self.err(ev, f"{origin} check {c['name']} is {c['state']}")
 
-    def _op_done(self, tid, kinds):
-        return any(op["task_id"] == tid and op["kind"] in kinds and op["state"] in ("succeeded", "reconciled_applied")
+    def _op_done(self, tid, kinds, since=0):
+        return any(op["task_id"] == tid and op["kind"] in kinds and op["state"] in DONE_OP and op["seq"] > since
                    for op in self.operations.values())
 
-    def cond_pr_operation_succeeded(self, ev, p, t, tid):
-        if not self._op_done(tid, ("pr_create", "pr_update")):
-            self.err(ev, f"{p['from']} -> ci requires a succeeded (or reconciled-applied) pr_create/pr_update operation")
+    def cond_pr_published_this_round(self, ev, p, t, tid):
+        since = t["pr_round_seq"]
+        if since is None:
+            return self.err(ev, f"{p['from']} -> ci without a PR round (the task never went review -> pr)")
+        if not self._op_done(tid, ("git_push",), since):
+            self.err(ev, f"{p['from']} -> ci requires a git_push that succeeded (or was reconciled applied) in this "
+                         f"PR round (since seq {since})")
+        if not (self._op_done(tid, ("pr_create",)) or self._op_done(tid, ("pr_update",), since)):
+            self.err(ev, f"{p['from']} -> ci requires a PR: a succeeded pr_create, or a pr_update in this PR round")
 
     def cond_merge_evidence_if_integration(self, ev, p, t, tid):
         if ev["actor"]["kind"] == "integration" and not self._op_done(tid, ("pr_merge",)):
@@ -543,9 +579,18 @@ class Replay:
         t = self.tasks[ev["task_id"]]
         if ev["actor"]["kind"] != "user":
             self.err(ev, "only the user acknowledges outcomes")
-        if p["acknowledged_state"] != t["state"] or t["state"] not in ENDED_TASK:
-            self.err(ev, "acknowledged_state must be the current completed/failed/cancelled state")
+        if p["acknowledged_state"] != t["state"] or t["state"] not in ACK_TASK_STATES:
+            self.err(ev, "acknowledged_state must be the current completed/cancelled/failed/interrupted state")
+        if p["method"] == "bulk_marked_reviewed" and t["state"] not in BULK_TASK_STATES:
+            self.err(ev, f"'Mark completed as reviewed' never applies to a {t['state']} task")
         t["ack_seq"] = ev["seq"]
+
+    def checkpoint(self, ev, p):
+        t = self.tasks[ev["task_id"]]
+        if p["phase"] != t["state"]:
+            self.err(ev, f"checkpoint phase {p['phase']} is not the task state {t['state']}")
+        if "worktree" in p:
+            self.checkpoints[ev["task_id"]] = p["worktree"]
 
     # -- session ----------------------------------------------------------------------------
     def session_created(self, ev, p):
@@ -567,7 +612,8 @@ class Replay:
             "task_id": ev["task_id"], "role": p["role"], "parent": parent, "state": "starting",
             "launch_method": p["launch_method"], "external_id": p.get("external_session_id"),
             "snapshot": None, "snapshot_seq": 0, "launch_seq": ev["seq"], "last_stop": None,
-            "outcome": None, "closed_seq": 0, "ack_seq": 0, "collapsed": None, "limited_turn": None,
+            "outcome": None, "closed_seq": 0, "ack_seq": 0, "opened_seq": 0, "archived": None, "restored": False,
+            "limited_turn": None,
         }
 
     def session_caps(self, ev, p):
@@ -651,24 +697,70 @@ class Replay:
             self.err(ev, "a session result can only be acknowledged once the session is closed/failed")
         if ev["actor"]["kind"] != "user":
             self.err(ev, "only the user acknowledges a session result")
+        if p["method"] == "bulk_marked_reviewed" and s["outcome"] not in BULK_SESSION_OUTCOMES:
+            self.err(ev, f"'Mark completed as reviewed' never applies to a session with outcome {s['outcome']}")
         s["ack_seq"] = ev["seq"]
+        if p["method"] == "opened":
+            s["opened_seq"] = ev["seq"]
 
-    def session_collapsed(self, ev, p):
-        s = self.sessions[ev["session_id"]]
+    # Archiving follows docs/ux/states-and-indicators.md section 5 (UX-40..UX-47).
+    def session_archived(self, ev, p):
+        sid = ev["session_id"]
+        s = self.sessions[sid]
+        if s["archived"]:
+            self.err(ev, "session is already archived")
         if p["by"] == "auto":
+            if ev["actor"]["kind"] != "orchestrator":
+                self.err(ev, "auto-archive is written by the orchestrator")
             if s["parent"] is None:
-                self.err(ev, "a primary (parent-less) session is never auto-collapsed")
-            if s["state"] not in ("closed", "failed") or s["ack_seq"] <= s["closed_seq"]:
-                self.err(ev, "auto-collapse requires a finished child session whose result the user acknowledged")
-        elif ev["actor"]["kind"] != "user":
-            self.err(ev, "collapsed by 'user' must have a user actor")
-        s["collapsed"] = p["by"]
+                self.err(ev, "a main (parent-less) session is never auto-archived")
+            if s["state"] not in ("closed", "failed") or s["outcome"] not in AUTO_ARCHIVE_OUTCOMES:
+                self.err(ev, f"auto-archive requires a finished child session with outcome succeeded or cancelled "
+                             f"(state {s['state']}, outcome {s['outcome']})")
+            elif s["opened_seq"] <= s["closed_seq"]:
+                self.err(ev, "auto-archive requires the result to have been opened after the session finished "
+                             "(marking it reviewed does not count)")
+            if s["restored"]:
+                self.err(ev, "a session the user restored is never auto-archived again")
+        else:
+            if ev["actor"]["kind"] != "user":
+                self.err(ev, "archived by 'user' must have a user actor")
+            if s["parent"] is not None and s["state"] not in ("closed", "failed"):
+                self.err(ev, f"manual archive is offered only in a terminal state (session is {s['state']})")
+            if s["parent"] is None and self.tasks[s["task_id"]]["state"] not in ACK_TASK_STATES:
+                self.err(ev, f"manual archive of a main session is offered only in a terminal task state "
+                             f"(task is {self.tasks[s['task_id']]['state']})")
+        s["archived"] = p["by"]
 
-    def session_expanded(self, ev, p):
-        s = self.sessions[ev["session_id"]]
-        if s["collapsed"] is None:
-            self.err(ev, "session is not collapsed")
-        s["collapsed"] = None
+    def session_unarchived(self, ev, p):
+        sid = ev["session_id"]
+        s = self.sessions[sid]
+        if not s["archived"]:
+            self.err(ev, "session is not archived")
+        if p["by"] == "user":
+            if ev["actor"]["kind"] != "user":
+                self.err(ev, "unarchived by 'user' must have a user actor")
+            s["restored"] = True
+        else:
+            if ev["actor"]["kind"] != "orchestrator":
+                self.err(ev, "a system unarchive is written by the orchestrator")
+            if sid not in self._waiting_sessions():
+                self.err(ev, "a system unarchive happens only when the archived session is waiting for the user")
+        s["archived"] = None
+        self.must_unarchive.discard(sid)
+
+    def _waiting_sessions(self):
+        """Sessions that are 'waiting' in the UX sense (awaiting approval or input): those named by a needs_reply
+        item, the parent-less sessions of a task with a task-level needs_reply item, and awaiting_permission."""
+        waiting = {sid for sid, s in self.sessions.items() if s["state"] == "awaiting_permission"}
+        for kind, _reason, tid, sid, _ref in self.attention(filter_archived=False):
+            if kind != "needs_reply":
+                continue
+            if sid:
+                waiting.add(sid)
+            else:
+                waiting |= {x for x, s in self.sessions.items() if s["task_id"] == tid and s["parent"] is None}
+        return waiting
 
     # -- approvals ----------------------------------------------------------------------------
     def approval_requested(self, ev, p):
@@ -679,7 +771,14 @@ class Replay:
         st = self.tasks[tid]["state"]
         rs = p.get("return_state")
         kind = p["operation_kind"]
+        if rs is not None:
+            for other_id, other in self.approvals.items():
+                if other["task_id"] == tid and other["state"] == "pending" and other["return_state"] is not None:
+                    self.err(ev, f"approval {other_id} of this task is already pending and blocking; a second blocking "
+                                 f"approval is held by the adapter/policy until the first is resolved")
         if p["source"] == "acp_permission":
+            if kind != "tool_call":
+                self.err(ev, "ACP permission approvals use operation_kind 'tool_call'; what the call does is classified_kind")
             if "session_id" not in ev:
                 self.err(ev, "ACP permission approvals are session-scoped")
             elif self.sessions[ev["session_id"]]["state"] != "active":
@@ -711,7 +810,8 @@ class Replay:
             self.err(ev, f"approvals cannot be requested while the task is {st}")
         self.approvals[aid] = {"task_id": tid, "session_id": ev.get("session_id"), "state": "pending",
                                "source": p["source"], "fingerprint": p["operation_fingerprint"], "kind": kind,
-                               "return_state": rs,
+                               "classified": p.get("classified_kind"), "return_state": rs,
+                               "expires_at": p.get("expires_at"),
                                "options": {o["option_id"]: o["kind"] for o in p.get("acp", {}).get("options", [])}}
 
     def approval_resolved(self, ev, p):
@@ -728,8 +828,11 @@ class Replay:
                    "cancelled": {"user", "orchestrator"}, "invalidated": {"recovery", "orchestrator"}}[state]
         if actor not in allowed:
             self.err(ev, f"{state} cannot be decided by {actor}")
-        if state == "approved" and actor != "user" and a["source"] == "host_policy" and a["kind"] in HUMAN_ONLY_KINDS:
-            self.err(ev, f"approval for {a['kind']} can only be granted by the user")
+        if state == "approved" and actor != "user":
+            if a["source"] == "host_policy" and a["kind"] in HUMAN_ONLY_KINDS:
+                self.err(ev, f"approval for {a['kind']} can only be granted by the user")
+            elif a["source"] == "acp_permission" and a["classified"] in HUMAN_ONLY_CLASSES:
+                self.err(ev, f"approval classified {a['classified']} can only be granted by the user")
         if actor == "policy" and state in ("approved", "denied") and not p.get("policy_rule_id"):
             self.err(ev, "policy decisions must name policy_rule_id")
         if state == "invalidated" and actor == "orchestrator" and not unused_grant:
@@ -764,8 +867,8 @@ class Replay:
         st = self.tasks[tid]["state"]
         if st not in OP_STATES[p["kind"]]:
             self.err(ev, f"cannot record {p['kind']} while task is {st}")
-        if p["idempotency_key"] != canonical_sha256({"kind": p["kind"], "target": p["target"]}):
-            self.err(ev, "idempotency_key is not sha256(canonical {kind, target})")
+        if p["idempotency_key"] != idempotency_key(p["kind"], p["target"]):
+            self.err(ev, "idempotency_key is not sha256(canonical {kind, identity}) (identity = target without description)")
         if p["approval_id"] in self.approvals:
             self.err(ev, "each operation needs a fresh approval id")
         sup = p.get("supersedes_operation_id")
@@ -792,7 +895,8 @@ class Replay:
             self.err(ev, f"same idempotency_key as {other_id} ({other['state']}); non-repeatable work must not be redone")
         self.operations[oid] = {"task_id": tid, "kind": p["kind"], "key": p["idempotency_key"],
                                 "rep": p["repeatability"], "approval": p["approval_id"], "sup": sup,
-                                "state": "recorded", "effect": None, "seq": ev["seq"]}
+                                "state": "recorded", "effect": None, "seq": ev["seq"], "target": p["target"],
+                                "strategy": p["reconcile_strategy"]}
 
     def operation_started(self, ev, p):
         op = self.operations.get(p["operation_id"])
@@ -802,6 +906,19 @@ class Replay:
             return self.err(ev, f"operation is {op['state']}; an operation id executes at most once")
         if ev["actor"]["kind"] == "recovery":
             self.err(ev, "crash recovery never (re)starts an operation")
+        elif ev["actor"]["kind"] != "orchestrator":
+            self.err(ev, f"operations are started by the orchestrator, not {ev['actor']['kind']}")
+        tid = op["task_id"]
+        if op["kind"] == "git_push":
+            wt = self.checkpoints.get(tid)
+            if wt is None or wt["head_sha"] != op["target"]["expected_sha"] or wt["dirty"]:
+                self.err(ev, "git_push expected_sha must equal the head_sha of the task's latest clean checkpoint")
+        if op["kind"] == "pr_merge":
+            pushes = [o for o in self.operations.values()
+                      if o["task_id"] == tid and o["kind"] == "git_push" and o["state"] in DONE_OP]
+            head = max(pushes, key=lambda o: o["seq"])["target"]["expected_sha"] if pushes else None
+            if head != op["target"]["expected_sha"]:
+                self.err(ev, f"pr_merge expected_sha must equal the PR head AgentDock last pushed ({head})")
         st = self.tasks[op["task_id"]]["state"]
         if st not in OP_STATES[op["kind"]]:
             self.err(ev, f"operation {op['kind']} cannot start while task is {st}")
@@ -814,6 +931,8 @@ class Replay:
             self.err(ev, "approval belongs to another task")
         elif a["fingerprint"] != op["key"]:
             self.err(ev, "approval fingerprint does not match the operation idempotency_key")
+        elif a["expires_at"] and ev["recorded_at"] >= a["expires_at"]:
+            self.err(ev, f"approval expired at {a['expires_at']}; an expired grant authorizes nothing")
         if p["approval_id"] in self.consumed_approvals:
             self.err(ev, "approval already consumed by another execution")
         self.consumed_approvals.add(p["approval_id"])
@@ -827,6 +946,9 @@ class Replay:
             want = {"host_crash": "recovery", "killed": "orchestrator"}[p["cause"]]
             if ev["actor"]["kind"] != want:
                 self.err(ev, f"outcome_unknown with cause {p['cause']} is assigned by {want}")
+            if p["cause"] == "killed" and op["kind"] in UNINTERRUPTIBLE_KINDS:
+                self.err(ev, f"a started {op['kind']} cannot be killed (ADR-0002 PRL-5); cancel/interrupt waits for "
+                             f"its result")
         op["state"] = new_state
         if new_state == "failed":
             op["effect"] = p["effect"]
@@ -854,6 +976,8 @@ class Replay:
             return self.err(ev, "only outcome_unknown operations are reconciled")
         if ev["actor"]["kind"] not in ("orchestrator", "integration", "user"):
             self.err(ev, "reconciliation is a live read-only probe, not part of recovery")
+        if op["strategy"] == "none" and p["finding"] != "undeterminable":
+            self.err(ev, "reconcile_strategy 'none' has no probe; the only possible finding is undeterminable")
         op["state"] = "reconciled_" + p["finding"]
 
     # -- checks -------------------------------------------------------------------------------
@@ -890,7 +1014,7 @@ class Replay:
         if ev["actor"]["kind"] != "recovery":
             self.err(ev, "recovery events need the recovery actor")
         self.recovery = {"tasks": set(), "sessions": set(), "approvals": set(), "ops": set(), "abandoned": set(),
-                         "checks": set()}
+                         "checks": set(), "tombstoned": []}
 
     def recovery_completed(self, ev, p):
         r = self.recovery
@@ -913,12 +1037,23 @@ class Replay:
         for tid, t in self.tasks.items():
             if t["state"] in IN_FLIGHT_TASK:
                 self.err(ev, f"task {tid} still {t['state']} after recovery")
+        # Recovery events of a task deleted later are tombstones: their type and routing ids survive, payload ids
+        # do not. Task and session ids are checked exactly; approval/operation/check ids by count.
+        dead = r["tombstoned"]
+        r["tasks"] |= {e["task_id"] for e in dead if e["type"] == "task.state_changed"}
+        r["sessions"] |= {e["session_id"] for e in dead if e["type"] == "session.state_changed"}
+        hidden = {"approvals_invalidated": sum(e["type"] == "approval.resolved" for e in dead),
+                  "operations_marked_unknown": sum(e["type"] == "operation.outcome_unknown" for e in dead),
+                  "operations_abandoned": sum(e["type"] == "operation.abandoned" for e in dead),
+                  "checks_marked_unknown": sum(e["type"] == "check.finished" for e in dead)}
         expect = {"tasks_interrupted": r["tasks"], "sessions_disconnected": r["sessions"],
                   "approvals_invalidated": r["approvals"], "operations_marked_unknown": r["ops"],
                   "operations_abandoned": r["abandoned"], "checks_marked_unknown": r["checks"]}
         for key, actual in expect.items():
-            if set(p[key]) != actual:
-                self.err(ev, f"{key} lists {sorted(p[key])}, recovery changed {sorted(actual)}")
+            listed = set(p[key])
+            if not actual <= listed or len(listed - actual) != hidden.get(key, 0):
+                self.err(ev, f"{key} lists {sorted(p[key])}, recovery changed {sorted(actual)}"
+                             + (f" plus {hidden[key]} id(s) of a deleted task" if hidden.get(key) else ""))
         self.recovery = None
 
     def finish(self):
@@ -932,6 +1067,8 @@ class Replay:
         for tid in self.tombstoned:
             if tid not in self.deleted:
                 self.errors.append(f"{self.name}: tombstoned events of {tid} without task.deleted")
+        for sid in sorted(self.must_unarchive):
+            self.errors.append(f"{self.name}: archived session {sid} is waiting for the user but was never unarchived")
 
     # -- dispatcher -----------------------------------------------------------------------------
     def apply(self, ev):
@@ -944,15 +1081,21 @@ class Replay:
         if "session_id" in ev and ev["type"] != "session.created" and ev["session_id"] not in self.sessions:
             return
         p, t = ev["payload"], ev["type"]
+        if self.must_unarchive and not (t == "session.unarchived" and p.get("by") == "system"
+                                        and ev.get("session_id") in self.must_unarchive):
+            for sid in sorted(self.must_unarchive):
+                self.err(ev, f"archived session {sid} is waiting for the user; session.unarchived{{by: system}} "
+                             f"must be written in the same transaction")
+            self.must_unarchive = set()
         handler = {
             "task.created": self.task_created, "task.state_changed": self.task_state_changed,
             "task.outcome_acknowledged": self.task_ack, "task.policy_updated": self.task_policy_updated,
-            "task.deleted": self.task_deleted,
+            "task.deleted": self.task_deleted, "task.checkpoint_recorded": self.checkpoint,
             "session.created": self.session_created, "session.capabilities_detected": self.session_caps,
             "session.state_changed": self.session_state_changed, "session.prompt_submitted": self.prompt,
             "session.output_limited": self.output_limited,
-            "session.result_acknowledged": self.session_ack, "session.collapsed": self.session_collapsed,
-            "session.expanded": self.session_expanded, "session.summary_recorded": self.summary,
+            "session.result_acknowledged": self.session_ack, "session.archived": self.session_archived,
+            "session.unarchived": self.session_unarchived, "session.summary_recorded": self.summary,
             "approval.requested": self.approval_requested, "approval.resolved": self.approval_resolved,
             "operation.recorded": self.operation_recorded, "operation.started": self.operation_started,
             "operation.succeeded": lambda e, q: self.operation_finished(e, q, "succeeded"),
@@ -967,6 +1110,9 @@ class Replay:
             handler(ev, p)
         if self.recovery is not None and t != "system.recovery_started":
             self._note_recovery(ev, p)
+        if any(s["archived"] for s in self.sessions.values()):
+            waiting = self._waiting_sessions()
+            self.must_unarchive |= {sid for sid, s in self.sessions.items() if s["archived"] and sid in waiting}
 
     def _note_recovery(self, ev, p):
         r, t = self.recovery, ev["type"]
@@ -984,11 +1130,12 @@ class Replay:
             r["checks"].add(p["check_id"])
 
     # -- derived attention (docs/contracts/attention.md) ---------------------------------------
-    def attention(self):
+    def attention(self, filter_archived=True):
         items = set()
         pending_tasks = {a["task_id"] for a in self.approvals.values() if a["state"] == "pending"}
         for tid, t in self.tasks.items():
             st = t["state"]
+            unviewed = t["ack_seq"] < t["entered_seq"]
             sessions = [s for s in self.sessions.values() if s["task_id"] == tid]
             if st == "queued":
                 items.add(("background", "queued", tid, None, None))
@@ -1006,17 +1153,23 @@ class Replay:
                 if not any(s["role"] in REPLY_ROLES and s["state"] in LIVE_SESSION for s in sessions):
                     items.add(("needs_reply", "session_unavailable", tid, None, None))
             elif st == "interrupted":
-                if (t["interruption"] or {}).get("auto_resume_armed"):
+                intr = t["interruption"] or {}
+                if intr.get("reason") == "user_paused":
+                    items.add(("background", "paused", tid, None, None))
+                elif intr.get("auto_resume_armed"):
                     items.add(("background", "waiting_for_reset", tid, None, None))
-                else:
-                    items.add(("needs_reply", "interruption_needs_decision", tid, None, None))
-            elif st == "failed" and t["ack_seq"] < t["entered_seq"]:
-                items.add(("needs_reply", "failure_needs_decision", tid, None, None))
-            elif st == "completed" and t["ack_seq"] < t["entered_seq"]:
+                elif unviewed:
+                    items.add(("needs_review", "interruption_needs_decision", tid, None, None))
+            elif st == "failed" and unviewed:
+                items.add(("needs_review", "failure_needs_decision", tid, None, None))
+            elif st in ("completed", "cancelled") and unviewed:
                 items.add(("needs_review", "task_outcome_unviewed", tid, None, None))
         for aid, a in self.approvals.items():
             if a["state"] == "pending":
                 items.add(("needs_reply", "approval_pending", a["task_id"], a["session_id"], aid))
+        for oid, op in self.operations.items():
+            if op["state"] == "outcome_unknown":
+                items.add(("needs_reply", "reconcile_needed", op["task_id"], None, oid))
         for sid, s in self.sessions.items():
             task_state = self.tasks[s["task_id"]]["state"]
             if s["state"] == "active":
@@ -1027,10 +1180,21 @@ class Replay:
                 elif s["last_stop"] in ATTENTION_STOPS or (
                         s["last_stop"] == "end_turn" and task_state == "running" and s["role"] in REPLY_ROLES):
                     items.add(("needs_reply", "agent_turn_ended", s["task_id"], sid, None))
-            if (s["parent"] and s["state"] in ("closed", "failed") and s["outcome"] in ("succeeded", "failed")
+            if (s["parent"] and s["state"] in ("closed", "failed") and s["outcome"] in REVIEW_SESSION_OUTCOMES
                     and s["ack_seq"] <= s["closed_seq"]):
                 items.add(("needs_review", "child_result_unviewed", s["task_id"], sid, None))
-        return items
+        if not filter_archived:
+            return items
+        # UX rule 2: archived -> not listed. needs_reply is never hidden (rule 1 wins; the session is unarchived).
+        def hidden(item):
+            kind, _reason, tid, sid, _ref = item
+            if kind == "needs_reply":
+                return False
+            if sid:
+                return bool(self.sessions[sid]["archived"])
+            mains = [s for s in self.sessions.values() if s["task_id"] == tid and s["parent"] is None]
+            return bool(mains) and all(s["archived"] for s in mains)
+        return {i for i in items if not hidden(i)}
 
 
 def item_key(item):
@@ -1067,8 +1231,8 @@ def main():
         if "capability_snapshot" in s:
             errors += [f"models.sample.json {s['session_id']}: {e}" for e in feature_errors(s["capability_snapshot"])]
     for o in samples.get("operations", []):
-        if o["idempotency_key"] != canonical_sha256({"kind": o["kind"], "target": o["target"]}):
-            errors.append(f"models.sample.json {o['operation_id']}: idempotency_key is not sha256(canonical {{kind, target}})")
+        if o["idempotency_key"] != idempotency_key(o["kind"], o["target"]):
+            errors.append(f"models.sample.json {o['operation_id']}: idempotency_key is not sha256(canonical {{kind, identity}})")
 
     covered = set()
     fixtures = sorted(FIXTURES_DIR.glob("*.jsonl"))
@@ -1077,19 +1241,22 @@ def main():
     total_events = 0
     loaded = {}
     for path in fixtures:
-        events = []
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if not line.strip():
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                errors.append(f"{path.name}:{lineno}: invalid JSON: {exc}")
+        events, load_errors = load_jsonl(path)
+        errors += load_errors
         loaded[path.name] = events
         run_errors, replay = run_stream(path.name, events, transitions, v, defs)
         errors += run_errors
         total_events += len(events)
         covered |= replay.covered
+        pre_path = PREDELETE_DIR / path.name
+        if any(e.get("type") == "task.deleted" for e in events):
+            if not pre_path.exists():
+                errors.append(f"{path.name}: deletes a task but predelete/{path.name} is missing")
+            else:
+                pre, load_errors = load_jsonl(pre_path)
+                errors += load_errors
+                loaded["predelete/" + path.name] = pre
+                errors += check_predelete(path.name, events, pre, transitions, v, defs)
 
         exp_path = path.with_name(path.stem + ".expected.json")
         if not exp_path.exists():
@@ -1131,6 +1298,60 @@ def main():
     return 0
 
 
+def load_jsonl(path):
+    """One JSON value per '\\n'-terminated line. str.splitlines() is not used: it also splits on U+2028/U+2029,
+    which json.dumps(ensure_ascii=False) leaves unescaped inside strings."""
+    events, errors = [], []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+        if not line.strip():
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            errors.append(f"{path.name}:{lineno}: invalid JSON: {exc}")
+    return events, errors
+
+
+def check_predelete(name, events, pre, transitions, v, defs):
+    """Deletion preconditions. A tombstoned stream cannot show the deleted task's state, so the generator also
+    writes fixtures/predelete/<name>: the stream exactly as it was before task.deleted. It must be a valid stream,
+    a prefix of the final stream (identical except that events of the deleted task are now tombstones), and the
+    deleted task must be ended with nothing open."""
+    errors, replay = run_stream("predelete/" + name, pre, transitions, v, defs)
+    n = len(pre)
+    if n >= len(events) or events[n]["type"] != "task.deleted":
+        return errors + [f"predelete/{name}: must end right before a task.deleted of {name}"]
+    deleted = events[n]
+    tid = deleted["task_id"]
+    for a, b in zip(pre, events[:n]):
+        keep = ("id", "seq", "type", "task_id", "session_id", "actor", "authority_id", "recorded_at")
+        same = all(a.get(k) == b.get(k) for k in keep)
+        if "tombstone" in b:
+            same = same and a.get("task_id") == tid
+        else:
+            same = same and a == b
+        if not same:
+            errors.append(f"predelete/{name} seq={a.get('seq')}: differs from {name} beyond tombstoning")
+            break
+    prefix = f"{name} seq={deleted['seq']} task.deleted precondition:"
+    t = replay.tasks.get(tid)
+    if t is None:
+        return errors + [f"{prefix} task {tid} does not exist before deletion"]
+    if t["state"] not in ENDED_TASK or t["state"] != deleted["payload"].get("final_state"):
+        errors.append(f"{prefix} task is {t['state']}; only an ended task (final_state) can be deleted")
+    for oid, op in replay.operations.items():
+        if op["task_id"] == tid and op["state"] in ("recorded", "started", "outcome_unknown"):
+            errors.append(f"{prefix} operation {oid} is {op['state']}")
+    for aid, a in replay.approvals.items():
+        if a["task_id"] == tid and (a["state"] == "pending" or (a["state"] == "approved" and a["source"] == "host_policy"
+                                                                 and aid not in replay.consumed_approvals)):
+            errors.append(f"{prefix} approval {aid} is {a['state']} and unused")
+    for sid, s in replay.sessions.items():
+        if s["task_id"] == tid and s["state"] in LIVE_SESSION:
+            errors.append(f"{prefix} session {sid} is still {s['state']}")
+    return errors
+
+
 def run_stream(name, events, transitions, v, defs):
     """Schema-check and replay one event stream. Returns (errors, replay)."""
     errors = []
@@ -1153,7 +1374,7 @@ def run_stream(name, events, transitions, v, defs):
 # Negative self-test: each mutation breaks one rule and must be rejected with a matching message.
 # --------------------------------------------------------------------------------------------
 def _find(events, etype, pred=lambda e: True, nth=0):
-    hits = [i for i, e in enumerate(events) if e["type"] == etype and pred(e)]
+    hits = [i for i, e in enumerate(events) if e["type"] == etype and "tombstone" not in e and pred(e)]
     return hits[nth]
 
 
@@ -1221,15 +1442,15 @@ def _m_auto_resume_after_crash(ev):
     return ev
 
 
-def _m_collapse_primary(ev):
-    i = _find(ev, "session.collapsed")
+def _m_archive_primary(ev):
+    i = _find(ev, "session.archived")
     primary = next(e["session_id"] for e in ev if e["type"] == "session.created" and e["payload"]["role"] == "primary")
     ev[i]["session_id"] = primary
     return ev
 
 
-def _m_collapse_before_ack(ev):
-    i = _find(ev, "session.collapsed")
+def _m_archive_before_open(ev):
+    i = _find(ev, "session.archived")
     j = _find(ev, "session.result_acknowledged")
     ev[i], ev[j] = ev[j], ev[i]
     return _renumber(ev)
@@ -1303,17 +1524,21 @@ def _drop(ev, pred):
     return _renumber([e for e in ev if not pred(e)])
 
 
+def _next(ev, etype, start):
+    return next(k for k in range(start, len(ev)) if ev[k]["type"] == etype)
+
+
 def _m_e1_recovery_keeps_recorded_op(ev):
     i = _find(ev, "operation.abandoned", lambda e: e["payload"]["reason"] == "host_recovery")
     del ev[i]
-    ev[_find(ev, "system.recovery_completed")]["payload"]["operations_abandoned"] = []
+    ev[_next(ev, "system.recovery_completed", i)]["payload"]["operations_abandoned"] = []
     return _renumber(ev)
 
 
 def _m_e1_recovery_keeps_unused_grant(ev):
     i = _find(ev, "approval.resolved", lambda e: e["actor"]["kind"] == "recovery")
     del ev[i]
-    ev[_find(ev, "system.recovery_completed")]["payload"]["approvals_invalidated"] = []
+    ev[_next(ev, "system.recovery_completed", i)]["payload"]["approvals_invalidated"] = []
     return _renumber(ev)
 
 
@@ -1323,7 +1548,7 @@ def _m_e1_start_after_crash(ev):
     aid = next(e["payload"]["approval_id"] for e in ev if e["type"] == "operation.recorded"
                and e["payload"]["operation_id"] == oid)
     ev = [e for e in ev if not (e["actor"]["kind"] == "recovery" and e["type"] in ("operation.abandoned", "approval.resolved"))]
-    j = _find(ev, "system.recovery_completed")
+    j = _find(ev, "system.recovery_completed", nth=-1)
     ev[j]["payload"]["operations_abandoned"] = ev[j]["payload"]["approvals_invalidated"] = []
     ev.insert(j + 1, _new_event(ev, j - 1, "operation.started", {"kind": "orchestrator"},
                                 {"operation_id": oid, "approval_id": aid}, 1))
@@ -1395,10 +1620,11 @@ def _m_e8b_push_without_approval_id(ev):
 def _m_e9_push_during_review(ev):
     j = len(ev) - 1
     task = ev[j]["task_id"]  # fixture 10 ends with task E entering review
-    target = {"description": "push from review", "remote": "origin", "ref": "refs/heads/agentdock/e"}
+    target = {"description": "push from review", "remote": "origin", "ref": "refs/heads/agentdock/e",
+              "expected_sha": "1" * 40}
     ev.append(_new_event(ev, j, "operation.recorded", {"kind": "orchestrator"}, {
         "operation_id": "op_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "kind": "git_push", "repeatability": "non_repeatable",
-        "idempotency_key": canonical_sha256({"kind": "git_push", "target": target}), "target": target,
+        "idempotency_key": idempotency_key("git_push", target), "target": target,
         "approval_id": "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "reconcile_strategy": "remote_ref_compare"}, 1))
     ev[-1]["task_id"] = task
     return _renumber(ev)
@@ -1452,11 +1678,227 @@ def _m_event_after_delete(ev):
     return _renumber(ev)
 
 
+# -- review round 2 (B1-B5, N1-N7): the reviewer's reproductions as formal mutations ------------------
+def _clone(e, n, at=None):
+    c = json.loads(json.dumps(e))
+    c["id"] = f"evt_ZZZZZZZZZZZZZZZZZZZZZZZZ{n:02d}"
+    if at:
+        c["occurred_at"] = c["recorded_at"] = at
+    return c
+
+
+def _op_event(ev, oid, etype):
+    return _find(ev, etype, lambda e: e["payload"].get("operation_id") == oid)
+
+
+def _insert_same_identity(ev, kind, after, supersede):
+    """A new operation of `kind` whose target differs from the first one only in its description."""
+    i = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == kind)
+    rec = _clone(ev[i], 1, ev[after]["recorded_at"])
+    p = rec["payload"]
+    old = p["operation_id"]
+    p.update(operation_id="op_ZZZZZZZZZZZZZZZZZZZZZZZZ01", approval_id="apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01")
+    p["target"]["description"] += " (re-requested with new wording)"
+    p["idempotency_key"] = idempotency_key(kind, p["target"])
+    if supersede:
+        p["supersedes_operation_id"] = old
+    ev.insert(after + 1, rec)
+    return _renumber(ev)
+
+
+def _m_b1a_duplicate_pr_create_new_description(ev):
+    oid = ev[_find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_create")]["payload"]["operation_id"]
+    return _insert_same_identity(ev, "pr_create", _op_event(ev, oid, "operation.succeeded"), supersede=False)
+
+
+def _m_b1b_repush_after_applied_new_description(ev):
+    after = _find(ev, "task.state_changed", lambda e: e["payload"]["trigger"] == "resume_phase_restored")
+    return _insert_same_identity(ev, "git_push", after, supersede=True)
+
+
+def _m_b1c_push_target_without_identity(ev):
+    i = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "git_push")
+    p = ev[i]["payload"]
+    p["target"] = {"description": p["target"]["description"]}
+    p["idempotency_key"] = idempotency_key("git_push", p["target"])
+    ev[i + 1]["payload"]["operation_fingerprint"] = p["idempotency_key"]
+    return ev
+
+
+def _m_b2_retry_without_reconcile(ev):
+    j = _find(ev, "system.recovery_completed")
+    ev = ev[:j + 1]
+    base = j - 1
+    ev.append(_new_event(ev, base, "task.state_changed", {"kind": "user", "id": "local-user"},
+                         {"from": "interrupted", "to": "failed", "trigger": "abandoned",
+                          "failure": {"code": "abandoned_by_user"}}, 1))
+    ev.append(_new_event(ev, base, "task.state_changed", {"kind": "user", "id": "local-user"},
+                         {"from": "failed", "to": "queued", "trigger": "retry_requested"}, 2))
+    for e in ev[-2:]:
+        e["occurred_at"] = e["recorded_at"] = ev[j]["recorded_at"]
+    return _renumber(ev)
+
+
+def _m_b3a_policy_approves_acp_merge(ev):
+    i = _find(ev, "approval.requested", lambda e: e["payload"]["source"] == "acp_permission")
+    ev[i]["payload"]["classified_kind"] = "pr_merge"
+    aid = ev[i]["payload"]["approval_id"]
+    j = _find(ev, "approval.resolved", lambda e: e["payload"]["approval_id"] == aid)
+    for k in (j, j + 1, j + 2):  # approval.resolved, S14, T17
+        ev[k]["actor"] = {"kind": "policy", "id": "auto-approve"}
+    ev[j]["payload"]["policy_rule_id"] = "allow_all_tools"
+    return ev
+
+
+def _m_b3b_acp_claims_operation_kind(ev):
+    i = _find(ev, "approval.requested", lambda e: e["payload"]["source"] == "acp_permission")
+    ev[i]["payload"]["operation_kind"] = "destructive_command"
+    return ev
+
+
+def _m_b4a_auto_archive_failed_child(ev):
+    sid = ev[_find(ev, "session.archived")]["session_id"]
+    i = _find(ev, "session.state_changed", lambda e: e["session_id"] == sid and e["payload"]["to"] == "closed")
+    ev[i]["payload"]["outcome"] = "failed"
+    return ev
+
+
+def _append_auto_archive(ev, sid, opened):
+    j = len(ev) - 1
+    task = next(e["task_id"] for e in ev if e.get("session_id") == sid)
+    if opened:
+        ack = _new_event(ev, j, "session.result_acknowledged", {"kind": "user", "id": "local-user"}, {"method": "opened"}, 1)
+        ack.update(task_id=task, session_id=sid)
+        ev.append(ack)
+    arc = _new_event(ev, j, "session.archived", {"kind": "orchestrator"}, {"by": "auto"}, 2)
+    arc.update(task_id=task, session_id=sid)
+    ev.append(arc)
+    return _renumber(ev)
+
+
+def _m_b4b_auto_archive_protocol_error_child(ev):
+    sid = next(e["session_id"] for e in ev if e["type"] == "session.state_changed" and e.get("session_id")
+               and e["payload"].get("to") == "failed" and e["payload"].get("trigger") == "protocol_error"
+               and any(c["type"] == "session.created" and c["session_id"] == e["session_id"]
+                       and c["payload"].get("parent_session_id") for c in ev))
+    return _append_auto_archive(ev, sid, opened=True)
+
+
+def _m_b4c_auto_archive_after_restore(ev):
+    sid = ev[_find(ev, "session.unarchived", lambda e: e["payload"]["by"] == "user")]["session_id"]
+    return _append_auto_archive(ev, sid, opened=False)
+
+
+def _m_b4d_archive_after_mark_reviewed_only(ev):
+    ev[_find(ev, "session.result_acknowledged")]["payload"]["method"] = "marked_reviewed"
+    return ev
+
+
+def _m_b4e_waiting_session_left_archived(ev):
+    return _drop(ev, lambda e: e["type"] == "session.unarchived" and e["payload"]["by"] == "system")
+
+
+def _m_b4f_bulk_mark_failed_task(ev):
+    i = _find(ev, "task.outcome_acknowledged", lambda e: e["payload"]["acknowledged_state"] == "failed")
+    ev[i]["payload"]["method"] = "bulk_marked_reviewed"
+    return ev
+
+
+def _m_b5_kill_started_merge(ev):
+    oid = ev[_find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_merge")]["payload"]["operation_id"]
+    k = _op_event(ev, oid, "operation.succeeded")
+    ev[k].update(type="operation.outcome_unknown", actor={"kind": "orchestrator"},
+                 payload={"operation_id": oid, "cause": "killed"})
+    ev[k + 1]["actor"] = {"kind": "user", "id": "local-user"}
+    ev[k + 1]["payload"] = {"from": "ci", "to": "cancelled", "trigger": "user_cancel"}
+    return ev
+
+
+def _m_n1_recovery_list_hides_deleted_ids(ev):
+    ev[_find(ev, "system.recovery_completed")]["payload"]["approvals_invalidated"] = []
+    return ev
+
+
+def _m_n2_delete_unended_task(ev):
+    # Replace the cancellation in place (same seq), so the deleted task is still interrupted when it is deleted.
+    i = _find(ev, "task.state_changed", lambda e: e["payload"]["from"] == "interrupted" and e["payload"]["to"] == "cancelled")
+    ev[i]["type"] = "task.policy_updated"
+    ev[i]["payload"] = {"auto_resume_policy": {"on_quota_reset": False, "on_rate_limit": False}}
+    return ev
+
+
+def _m_n3a_second_round_without_push(ev):
+    j = len(ev) - 1
+    user, orch, integ = {"kind": "user", "id": "local-user"}, {"kind": "orchestrator"}, {"kind": "integration", "id": "github"}
+    steps = [("task.state_changed", orch, {"from": "running", "to": "verifying", "trigger": "implementation_done"}),
+             ("check.started", orch, {"check_id": "chk_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "name": "cargo test", "origin": "local"}),
+             ("check.finished", orch, {"check_id": "chk_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "state": "passed"}),
+             ("task.state_changed", orch, {"from": "verifying", "to": "review", "trigger": "checks_passed"}),
+             ("task.state_changed", user, {"from": "review", "to": "pr", "trigger": "review_passed"}),
+             ("task.state_changed", integ, {"from": "pr", "to": "ci", "trigger": "pr_published"})]
+    for n, (etype, actor, payload) in enumerate(steps, 1):
+        ev.append(_new_event(ev, j, etype, actor, payload, n))
+    return _renumber(ev)
+
+
+def _m_n3b_push_other_than_checkpoint_head(ev):
+    oid = ev[_find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "git_push")]["payload"]["operation_id"]
+    k = _op_event(ev, oid, "operation.started")
+    c = max(i for i in range(k) if ev[i]["type"] == "task.checkpoint_recorded")
+    ev[c]["payload"]["worktree"]["head_sha"] = "9" * 40
+    return ev
+
+
+def _m_n3c_merge_other_than_pushed_head(ev):
+    i = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_merge")
+    p = ev[i]["payload"]
+    p["target"]["expected_sha"] = "8" * 40
+    p["idempotency_key"] = idempotency_key("pr_merge", p["target"])
+    ev[i + 1]["payload"]["operation_fingerprint"] = p["idempotency_key"]
+    return ev
+
+
+def _m_n4_second_blocking_approval(ev):
+    i = _find(ev, "approval.requested", lambda e: e["payload"]["source"] == "acp_permission")
+    c = _clone(ev[i], 1)
+    p = c["payload"]
+    p["approval_id"] = "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    p["acp"]["tool_call_id"] = "call-zz"
+    p["operation_fingerprint"] = canonical_sha256({"kind": "tool_call", "target": {"tool_call_id": "call-zz",
+                                                                                   "title": p["title"]}})
+    ev.insert(i + 1, c)
+    return _renumber(ev)
+
+
+def _m_n6a_approval_of_other_task(ev):
+    i = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_merge")
+    ev[i + 1]["task_id"] = ev[0]["task_id"]  # task A of fixture 09
+    return ev
+
+
+def _m_n6b_start_after_expiry(ev):
+    i = _find(ev, "approval.requested", lambda e: e["payload"]["source"] == "host_policy")
+    ev[i]["payload"]["expires_at"] = ev[i]["recorded_at"]
+    return ev
+
+
+def _m_n6c_policy_starts_operation(ev):
+    ev[_find(ev, "operation.started")]["actor"] = {"kind": "policy", "id": "policy.default"}
+    return ev
+
+
+def _m_n6d_probe_less_reconcile_finding(ev):
+    i = _find(ev, "operation.reconciled")
+    oid = ev[i]["payload"]["operation_id"]
+    ev[_op_event(ev, oid, "operation.recorded")]["payload"]["reconcile_strategy"] = "none"
+    return ev
+
+
 MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_gap, "cursor not gap-free"),
     ("01-happy-path-pr.jsonl", _m_illegal_transition, "illegal task transition"),
-    ("01-happy-path-pr.jsonl", _m_collapse_primary, "never auto-collapsed"),
-    ("01-happy-path-pr.jsonl", _m_collapse_before_ack, "auto-collapse requires"),
+    ("01-happy-path-pr.jsonl", _m_archive_primary, "never auto-archived"),
+    ("01-happy-path-pr.jsonl", _m_archive_before_open, "auto-archive requires the result to have been opened"),
     ("01-happy-path-pr.jsonl", _m_quota_field_schema, "quota_remaining: not allowed"),
     ("01-happy-path-pr.jsonl", _m_opaque_quota_key, "'remainingQuota' implies a known quota balance"),
     ("01-happy-path-pr.jsonl", _m_unknown_usage_with_numbers, "must not match"),
@@ -1467,7 +1909,7 @@ MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_e2b_supersede_recorded_op, "(recorded); non-repeatable work must not be redone"),
     ("01-happy-path-pr.jsonl", _m_e7_trailing_newline_id, "\\n' does not match ^tsk_"),
     ("01-happy-path-pr.jsonl", _m_e7_impossible_date, "is not a valid date-time"),
-    ("01-happy-path-pr.jsonl", _m_e8a_key_not_canonical, "idempotency_key is not sha256(canonical {kind, target})"),
+    ("01-happy-path-pr.jsonl", _m_e8a_key_not_canonical, "idempotency_key is not sha256(canonical {kind, identity})"),
     ("01-happy-path-pr.jsonl", _m_e8b_push_claims_idempotent, "expected const 'non_repeatable'"),
     ("01-happy-path-pr.jsonl", _m_e8b_push_without_approval_id, "missing required 'approval_id'"),
     ("04-disconnect-resume-reattach.jsonl", _m_load_without_capability, "without advertised load_session"),
@@ -1491,8 +1933,32 @@ MUTATIONS = [
     ("11-push-denied-abandon-supersede.jsonl", _m_e4_cancel_with_started_op, "is started; abandon it"),
     ("11-push-denied-abandon-supersede.jsonl", _m_abandon_while_approval_pending, "is pending; resolve or invalidate it"),
     ("12-session-edge-cases.jsonl", _m_e5_review_approval_blocks, "is non-blocking and must not carry return_state"),
-    ("12-session-edge-cases.jsonl", _m_tombstone_count, "events_tombstoned=4 but 3 tombstones"),
+    ("12-session-edge-cases.jsonl", _m_tombstone_count, "tombstones precede it"),
     ("12-session-edge-cases.jsonl", _m_event_after_delete, "event for a deleted task"),
+    # review round 2
+    ("01-happy-path-pr.jsonl", _m_b1a_duplicate_pr_create_new_description, "(succeeded); non-repeatable work must not be redone"),
+    ("06-crash-unknown-push.jsonl", _m_b1b_repush_after_applied_new_description, "(reconciled_applied); non-repeatable work must not be redone"),
+    ("01-happy-path-pr.jsonl", _m_b1c_push_target_without_identity, "target: missing required 'remote'"),
+    ("06-crash-unknown-push.jsonl", _m_b2_retry_without_reconcile, "is outcome_unknown; reconcile it before failed -> queued"),
+    ("01-happy-path-pr.jsonl", _m_b3a_policy_approves_acp_merge, "approval classified pr_merge can only be granted by the user"),
+    ("01-happy-path-pr.jsonl", _m_b3b_acp_claims_operation_kind, "expected const 'tool_call'"),
+    ("01-happy-path-pr.jsonl", _m_b4a_auto_archive_failed_child, "auto-archive requires a finished child session with outcome succeeded or cancelled"),
+    ("12-session-edge-cases.jsonl", _m_b4b_auto_archive_protocol_error_child, "auto-archive requires a finished child session with outcome succeeded or cancelled"),
+    ("08-review-loop-pause-children.jsonl", _m_b4c_auto_archive_after_restore, "never auto-archived again"),
+    ("01-happy-path-pr.jsonl", _m_b4d_archive_after_mark_reviewed_only, "auto-archive requires the result to have been opened"),
+    ("12-session-edge-cases.jsonl", _m_b4e_waiting_session_left_archived, "must be written in the same transaction"),
+    ("10-prepare-pause-abandon.jsonl", _m_b4f_bulk_mark_failed_task, "never applies to a failed task"),
+    ("09-pr-ci-edges.jsonl", _m_b5_kill_started_merge, "a started pr_merge cannot be killed"),
+    ("12-session-edge-cases.jsonl", _m_n1_recovery_list_hides_deleted_ids, "plus 1 id(s) of a deleted task"),
+    ("predelete/12-session-edge-cases.jsonl", _m_n2_delete_unended_task, "task.deleted precondition: task is interrupted"),
+    ("06-crash-unknown-push.jsonl", _m_n3a_second_round_without_push, "requires a git_push that succeeded (or was reconciled applied) in this PR round"),
+    ("01-happy-path-pr.jsonl", _m_n3b_push_other_than_checkpoint_head, "git_push expected_sha must equal the head_sha"),
+    ("09-pr-ci-edges.jsonl", _m_n3c_merge_other_than_pushed_head, "pr_merge expected_sha must equal the PR head"),
+    ("01-happy-path-pr.jsonl", _m_n4_second_blocking_approval, "already pending and blocking"),
+    ("09-pr-ci-edges.jsonl", _m_n6a_approval_of_other_task, "must follow operation.recorded of the same task"),
+    ("01-happy-path-pr.jsonl", _m_n6b_start_after_expiry, "an expired grant authorizes nothing"),
+    ("01-happy-path-pr.jsonl", _m_n6c_policy_starts_operation, "operations are started by the orchestrator, not policy"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_n6d_probe_less_reconcile_finding, "the only possible finding is undeterminable"),
 ]
 
 
@@ -1500,7 +1966,11 @@ def self_test(loaded, transitions, v, defs):
     errors = []
     for fixture, mutate, expected in MUTATIONS:
         events = mutate(json.loads(json.dumps(loaded[fixture])))
-        run_errors, _ = run_stream(fixture, events, transitions, v, defs)
+        if fixture.startswith("predelete/"):
+            main_name = fixture[len("predelete/"):]
+            run_errors = check_predelete(main_name, loaded[main_name], events, transitions, v, defs)
+        else:
+            run_errors, _ = run_stream(fixture, events, transitions, v, defs)
         if not any(expected in e for e in run_errors):
             errors.append(f"self-test {mutate.__name__} on {fixture}: expected an error containing {expected!r}, "
                           f"got {run_errors[:3]}")

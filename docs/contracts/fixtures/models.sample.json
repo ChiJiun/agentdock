@@ -94,7 +94,7 @@
         },
         "unstable_opt_ins": []
       },
-      "collapsed": false,
+      "archived": false,
       "created_at": "2026-11-17T10:00:00.000Z"
     },
     {
@@ -107,8 +107,10 @@
       "launch_method": "new",
       "outcome": "succeeded",
       "result_acknowledged_at": "2026-11-17T10:00:00.000Z",
-      "collapsed": true,
-      "collapsed_by": "auto",
+      "result_opened_at": "2026-11-17T10:00:00.000Z",
+      "archived": true,
+      "archived_by": "auto",
+      "restored_by_user": false,
       "created_at": "2026-11-17T10:00:00.000Z",
       "closed_at": "2026-11-17T10:00:00.000Z"
     }
@@ -120,11 +122,44 @@
       "source": "host_policy",
       "state": "approved",
       "operation_kind": "git_push",
-      "operation_fingerprint": "8e3569fc3461bbabbfe3daf51167202e819d5c2536a5629fc44828207f9d0a40",
+      "operation_fingerprint": "a1b1a4b1b41cb733fd455c4dc37603761a0fa27bf7c0d4a9d2a7a1e59ead0324",
       "operation_id": "op_01JDQ099000000000000000001",
       "title": "push agentdock/x",
       "scope": "once",
       "return_state": "pr",
+      "requested_at": "2026-11-17T10:00:00.000Z",
+      "decided_at": "2026-11-17T10:00:00.000Z",
+      "decided_by": {
+        "kind": "user",
+        "id": "local-user"
+      }
+    },
+    {
+      "approval_id": "apr_01JDQ099000000000000000002",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "session_id": "ses_01JDQ099000000000000000001",
+      "source": "acp_permission",
+      "state": "denied",
+      "operation_kind": "tool_call",
+      "classified_kind": "force_push",
+      "operation_fingerprint": "757e5f4ba3518ef810219cc35b319f453237722f814ecc27b1badaa2a607e973",
+      "title": "git push --force",
+      "scope": "once",
+      "return_state": "running",
+      "acp": {
+        "tool_call_id": "call-1",
+        "options": [
+          {
+            "option_id": "allow",
+            "kind": "allow_once"
+          },
+          {
+            "option_id": "reject",
+            "kind": "reject_once"
+          }
+        ]
+      },
+      "selected_option_id": "reject",
       "requested_at": "2026-11-17T10:00:00.000Z",
       "decided_at": "2026-11-17T10:00:00.000Z",
       "decided_by": {
@@ -139,11 +174,12 @@
       "task_id": "tsk_01JDQ099000000000000000001",
       "kind": "git_push",
       "repeatability": "non_repeatable",
-      "idempotency_key": "8e3569fc3461bbabbfe3daf51167202e819d5c2536a5629fc44828207f9d0a40",
+      "idempotency_key": "a1b1a4b1b41cb733fd455c4dc37603761a0fa27bf7c0d4a9d2a7a1e59ead0324",
       "target": {
         "description": "push agentdock/x",
         "remote": "origin",
-        "ref": "refs/heads/agentdock/x"
+        "ref": "refs/heads/agentdock/x",
+        "expected_sha": "2222222222222222222222222222222222222222"
       },
       "approval_id": "apr_01JDQ099000000000000000001",
       "reconcile_strategy": "remote_ref_compare",

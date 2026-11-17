@@ -1,6 +1,6 @@
 {
   "fixture": "01-happy-path-pr.jsonl",
-  "description": "Full Issue -> PR -> CI flow with an ACP permission, a host-policy push/PR approval, a review child session that is acknowledged then auto-collapsed, and three usage sources.",
+  "description": "Full Issue -> PR -> CI flow with an ACP permission, a host-policy push/PR approval, a review child session whose result is opened and which is then auto-archived, a worktree cleanup after completion, and three usage sources.",
   "final_task_states": {
     "tsk_01JDQ001000000000000000001": "completed"
   },

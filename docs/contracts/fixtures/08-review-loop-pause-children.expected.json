@@ -1,6 +1,6 @@
 {
   "fixture": "08-review-loop-pause-children.jsonl",
-  "description": "Primary session with explore and review child sessions: blocking review sends the task back to running; the acknowledged child is auto-collapsed while unacknowledged children stay visible; the user pauses and resumes into review; the reviewer crashes, the task fails, the user retries and the suspended primary session continues.",
+  "description": "Primary session with explore and review child sessions: blocking review sends the task back to running; the child whose result was opened is auto-archived and later restored by the user (Undo), while unviewed children stay visible; the user pauses and resumes into review; the reviewer crashes, the task fails, the user retries and the suspended primary session continues.",
   "final_task_states": {
     "tsk_01JDQ008000000000000000001": "running"
   },

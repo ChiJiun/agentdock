@@ -9,7 +9,7 @@
   },
   "attention": [
     {
-      "kind": "needs_reply",
+      "kind": "needs_review",
       "reason": "failure_needs_decision",
       "task_id": "tsk_01JDQ004000000000000000001"
     }
