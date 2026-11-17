@@ -40,6 +40,10 @@ This product is not a Claude/Anthropic clone and should not copy protected asset
 
 Design pattern: left sidebar / primary session / collapsible right evidence panel. Terminal and editor are embedded or delegated to the developer's IDE; do not build a full IDE in MVP.
 
+## Language policy: Traditional Chinese and English
+
+AgentDock must support a switchable **whole-development-workflow language**, initially `zh-TW` and `en-US`. It affects UI, host-owned role/prompt templates, user-facing results from Skills, plans, Advisor/subagents, code reviews, PR/Issue prose, CI explanations and Session Sentinel alerts. Languages can be set globally, per project, per session, and for an explicit task, with source code, raw logs, executable Skill bodies and tool permissions preserved. For external ACP/SDK agents, the UI must accurately display which instruction capabilities have been confirmed and which requests are best-effort. See [language policy](architecture/end-to-end-language-policy.md) and [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
+
 ## 6. Functional requirements and versions
 
 ### MVP — usable, safe desktop client

@@ -27,6 +27,10 @@ flowchart TB
 
 The UI does not launch arbitrary shell commands. It calls typed Rust commands. All tool execution, approvals, task scopes and session transitions are mediated by the relevant backend boundary.
 
+## Language and context composition
+
+The future Harness language-control layer is defined in [the `zh-TW` / `en-US` language policy](architecture/end-to-end-language-policy.md). Distinguish UI locale from workflow prose and generated artifacts, preserve the original technical/Skill context, use policy snapshots for remote tasks, and negotiate adapter-specific instruction capabilities. UI language switching alone must not invoke the LLM or change security/approval policies.
+
 ## Runtime split
 
 **External ACP agents:** Claude Code, Codex, Octomind, etc. remain owners of their proprietary/native prompt loops, model usage, context, internal tools and authentication. ACP capabilities are negotiated per adapter; no promise to override opaque model routing.

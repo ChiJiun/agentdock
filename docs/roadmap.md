@@ -16,7 +16,7 @@ Status: proposal; not a promise of completion dates.
 ## Initial work order
 
 1. License/provenance / precise upstream migration decision.
-2. Define UX states + design tokens and screen map.
+2. Define UX states + design tokens and screen map; provide `zh-TW` / `en-US` navigation and the [end-to-end Harness language policy](architecture/end-to-end-language-policy.md) from the beginning.
 3. Rust & Tauri scaffold with typed front/back boundary.
 4. ACP mock first and supported real adapter compatibility matrix.
 5. Storage and approval gates before unrestricted real-agent tools.

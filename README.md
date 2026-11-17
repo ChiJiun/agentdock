@@ -33,6 +33,7 @@ AgentDock aims to give a developer one desktop environment for multiple coding a
 ## Project documents
 
 - [Product requirements](docs/PRD.md)
+- [Traditional Chinese / English end-to-end Harness language policy](docs/architecture/end-to-end-language-policy.md)
 - [Architecture and data contracts](docs/architecture.md)
 - [Upstream source inventory, migration matrix and licenses](docs/sources.md)
 - [Roadmap and release gates](docs/roadmap.md)
