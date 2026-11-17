@@ -2,8 +2,10 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { GitHubReader, parseGithubRemote } from './github-reader.mjs';
+import { resolve } from 'node:path';
+import { GitHubEvidenceError, GitHubReader, parseGithubRemote } from './github-reader.mjs';
+
+const READ_ONLY_PREFIX = ['api','--method','GET','--hostname','github.com','-H','Accept: application/vnd.github+json'];
 
 function sampleRepo() {
   mkdirSync(resolve('.local'),{recursive:true});
@@ -12,23 +14,27 @@ function sampleRepo() {
   execFileSync('git',['-C',dir,'remote','add','origin','git@github.com:ChiJiun/agentdock.git'],{stdio:'ignore'});
   return { dir,close:()=>rmSync(dir,{recursive:true,force:true}) };
 }
-function fakeExec(program,args,opts) {
-  if (program==='git') return execFileSync(program,args,opts);
-  assert.equal(program,'fake-gh');
-  assert.equal(args[0],'api');
-  const url=args.at(-1);
+function fakeGh(url, { pullCount = 1, checkTotal } = {}) {
   if (url.includes('/issues?')) return JSON.stringify([
-    {number:7,title:'Feature: test',html_url:'https://github.com/ChiJiun/agentdock/issues/7',state:'open'},
+    {number:7,title:'Feature:\ntest',html_url:'https://github.com/ChiJiun/agentdock/issues/7',state:'open'},
     {number:8,title:'A PR in issues endpoint',pull_request:{url:'some'},html_url:'https://github.com/ChiJiun/agentdock/pull/8',state:'open'},
   ]);
-  if (url.includes('/pulls?')) return JSON.stringify([{
-    number:11,title:'Open PR',html_url:'https://github.com/ChiJiun/agentdock/pull/11',draft:false,state:'open',
-    head:{sha:'a'.repeat(40)},
-  }]);
-  if (url.includes('/check-runs?')) return JSON.stringify({check_runs:[
+  if (url.includes('/pulls?')) return JSON.stringify(Array.from({length:pullCount},(_,i)=>({
+    number:11+i,title:'Open PR',html_url:i===0?'https://github.com/ChiJiun/agentdock/pull/11':'javascript:alert(1)',draft:false,state:'open',
+    head:{sha:i===0?'a'.repeat(40):'not-a-sha'},
+  })));
+  if (url.includes('/check-runs?')) return JSON.stringify({total_count:checkTotal ?? 1,check_runs:[
     {id:17,name:'unit tests',status:'completed',conclusion:'success',html_url:'https://github.com/ChiJiun/agentdock/actions/runs/999'},
   ]});
   throw new Error('unknown fake URL');
+}
+function makeExec(seen, options) {
+  return async (program,args,opts) => {
+    seen.push({program,args,opts});
+    if (program==='git') return execFileSync(program,args,opts);
+    assert.equal(program,'fake-gh');
+    return fakeGh(args.at(-1), options);
+  };
 }
 
 describe('read-only GitHub evidence (no writes)', () => {
@@ -40,44 +46,106 @@ describe('read-only GitHub evidence (no writes)', () => {
     assert.equal(parseGithubRemote('https://github.com/../agentdock'),null);
     assert.equal(parseGithubRemote('https://github.com/ChiJiun/agentdock/evil'),null);
     assert.equal(parseGithubRemote('https://github.com/ChiJiun/agentdock.git?token=x'),null);
+    assert.equal(parseGithubRemote('https://user:token@github.com/ChiJiun/agentdock.git'),null);
+    assert.equal(parseGithubRemote('https://github.com.evil.test/ChiJiun/agentdock'),null);
   });
-  test('fetches Issues separately from PRs, with fixed read-only endpoint paths', () => {
-    const f=sampleRepo();
-    try {
-      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:fakeExec});
-      const issues=reader.issues(f.dir);
-      const pulls=reader.pulls(f.dir);
-      assert.equal(issues.repo,'ChiJiun/agentdock');
-      assert.deepEqual(issues.items.map(x=>x.number),[7]);
-      assert.deepEqual(pulls.items.map(x=>x.number),[11]);
-      assert.equal(pulls.items[0].headSha,'a'.repeat(40));
-    } finally {f.close();}
-  });
-  test('checks require full SHA and never invoke remote writes', () => {
+  test('fetches Issues separately from PRs, with fixed read-only endpoint paths', async () => {
     const f=sampleRepo();
     const seen=[];
-    const exec=(program,args,opts)=>{
-      seen.push({program,args});
-      return fakeExec(program,args,opts);
-    };
     try {
-      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec});
-      assert.throws(()=>reader.checks(f.dir,'../branch'),/invalid commit SHA/);
-      const checks=reader.checks(f.dir,'a'.repeat(40));
-      assert.equal(checks.items[0].conclusion,'success');
-      assert.equal(seen.filter(x=>x.program==='fake-gh').length,1);
-      for (const entry of seen.filter(x=>x.program==='fake-gh')) {
-        assert.equal(entry.args[0],'api');
-        assert.equal(entry.args.length,4); // api -H Accept path
-      }
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec(seen,{pullCount:2})});
+      const issues=await reader.issues(f.dir);
+      const pulls=await reader.pulls(f.dir);
+      assert.equal(issues.repo,'ChiJiun/agentdock');
+      assert.deepEqual(issues.items.map(x=>x.number),[7]);
+      assert.equal(issues.items[0].title,'Feature: test','untrusted titles are flattened to one line');
+      assert.equal(issues.truncated,false);
+      assert.deepEqual(pulls.items.map(x=>x.number),[11,12]);
+      assert.equal(pulls.items[0].headSha,'a'.repeat(40));
+      assert.equal(pulls.items[1].headSha,'','non-SHA head values are dropped');
+      assert.equal(pulls.items[1].url,null,'non-github links are dropped');
+      const gh=seen.filter(x=>x.program==='fake-gh');
+      assert.deepEqual(gh.map(x=>x.args.slice(0,-1)),[READ_ONLY_PREFIX,READ_ONLY_PREFIX]);
+      assert.deepEqual(gh.map(x=>x.args.at(-1)),[
+        'repos/ChiJiun/agentdock/issues?state=open&per_page=30',
+        'repos/ChiJiun/agentdock/pulls?state=open&per_page=30',
+      ]);
     } finally {f.close();}
   });
-  test('working directory must be approved before reading remote evidence', () => {
+  test('a full page is reported as truncated instead of complete', async () => {
     const f=sampleRepo();
     try {
-      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:fakeExec});
-      assert.throws(()=>reader.issues('/'),/outside/);
-      assert.throws(()=>reader.issues('relative'),/absolute/);
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec([],{pullCount:30,checkTotal:45})});
+      assert.equal((await reader.pulls(f.dir)).truncated,true);
+      const checks=await reader.checks(f.dir,'a'.repeat(40));
+      assert.equal(checks.total,45);
+      assert.equal(checks.truncated,true);
+    } finally {f.close();}
+  });
+  test('checks require full SHA and never invoke remote writes', async () => {
+    const f=sampleRepo();
+    const seen=[];
+    try {
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec(seen)});
+      for (const bad of ['../branch','A'.repeat(40),'a'.repeat(39),'a'.repeat(40)+'/../../pulls',undefined]) {
+        await assert.rejects(reader.checks(f.dir,bad),err=>err instanceof GitHubEvidenceError && err.status===400);
+      }
+      assert.equal(seen.length,0,'an invalid SHA is rejected before any process starts');
+      const checks=await reader.checks(f.dir,'a'.repeat(40));
+      assert.equal(checks.items[0].conclusion,'success');
+      assert.equal(checks.truncated,false);
+      const gh=seen.filter(x=>x.program==='fake-gh');
+      assert.equal(gh.length,1);
+      assert.deepEqual(gh[0].args,[...READ_ONLY_PREFIX,`repos/ChiJiun/agentdock/commits/${'a'.repeat(40)}/check-runs?per_page=30`]);
+    } finally {f.close();}
+  });
+  test('gh cannot be redirected to another host or repository by environment', async () => {
+    const f=sampleRepo();
+    const seen=[];
+    const saved={GH_HOST:process.env.GH_HOST,GH_REPO:process.env.GH_REPO};
+    process.env.GH_HOST='evil.example';
+    process.env.GH_REPO='someone/else';
+    try {
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec(seen)});
+      await reader.issues(f.dir);
+      for (const entry of seen) {
+        assert.equal(entry.opts.env.GH_HOST,undefined);
+        assert.equal(entry.opts.env.GH_REPO,undefined);
+        assert.equal(entry.opts.env.GH_PROMPT_DISABLED,'1');
+        assert.equal(entry.opts.windowsHide,true);
+        assert.ok(entry.opts.timeout>0);
+      }
+    } finally {
+      for (const [key,value] of Object.entries(saved)) {
+        if (value===undefined) delete process.env[key]; else process.env[key]=value;
+      }
+      f.close();
+    }
+  });
+  test('gh failures never surface stderr or credential text', async () => {
+    const f=sampleRepo();
+    try {
+      const exec=async (program,args,opts)=>{
+        if (program==='git') return execFileSync(program,args,opts);
+        const error=new Error('Command failed: gh api ... token ghp_SECRETSECRET');
+        error.stderr='HTTP 401: Bad credentials ghp_SECRETSECRET';
+        throw error;
+      };
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec});
+      await assert.rejects(reader.issues(f.dir),err=>{
+        assert.ok(err instanceof GitHubEvidenceError);
+        assert.equal(err.status,502);
+        assert.doesNotMatch(err.message,/SECRET|ghp_|401/);
+        return true;
+      });
+    } finally {f.close();}
+  });
+  test('working directory must be approved before reading remote evidence', async () => {
+    const f=sampleRepo();
+    try {
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec([])});
+      await assert.rejects(reader.issues(resolve('/')),/outside/);
+      await assert.rejects(reader.issues('relative'),/absolute/);
     } finally {f.close();}
   });
 });

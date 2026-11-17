@@ -9,7 +9,7 @@ import {
   getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces, getWorktrees, getGithubIssues, getGithubPulls, getGithubChecks,
   gitDiff, gitStatus, sendRuntimePrompt,
   type RuntimeAdapter, type RuntimeApproval, type RuntimeEvent, type RuntimeSession,
-  type RuntimeWorkspace, type RuntimeWorktree, type LiveAttentionItem, type GithubIssue, type GithubPull, type GithubCheck,
+  type RuntimeWorkspace, type RuntimeWorktree, type LiveAttentionItem, type GithubIssue, type GithubPull, type GithubChecksEvidence,
 } from '../live/api';
 import { compileLanguageOverlay, type LanguageSettings } from '../i18n/language';
 import { useLocale } from '../i18n/context';
@@ -79,8 +79,11 @@ export function LiveWorkspace({ settings, onBack }: {
   const [githubRepo, setGithubRepo] = useState('');
   const [issues, setIssues] = useState<GithubIssue[]>([]);
   const [pulls, setPulls] = useState<GithubPull[]>([]);
-  const [checks, setChecks] = useState<GithubCheck[]>([]);
+  const [githubTruncated, setGithubTruncated] = useState(false);
+  const [checks, setChecks] = useState<(GithubChecksEvidence & { pr: number }) | null>(null);
   const [githubLoading, setGithubLoading] = useState(false);
+  // Bumped on session switch so a slow GitHub response cannot land in another session's panel.
+  const githubRequest = useRef(0);
   const latest = useRef(0);
   const active = sessions.find(item => item.id === activeId);
   const effective = active
@@ -155,10 +158,13 @@ export function LiveWorkspace({ settings, onBack }: {
     setHistory([]);
     setApprovals([]);
     setGitEvidence({});
+    githubRequest.current += 1;
     setGithubRepo('');
     setIssues([]);
     setPulls([]);
-    setChecks([]);
+    setGithubTruncated(false);
+    setChecks(null);
+    setGithubLoading(false);
     setError('');
   }
 
@@ -226,26 +232,31 @@ export function LiveWorkspace({ settings, onBack }: {
   async function inspectGithub() {
     if (!active || githubLoading) return;
     setInspectorTab('github');
+    const request = ++githubRequest.current;
     setGithubLoading(true);
     setError('');
     try {
       const [foundIssues, foundPulls] = await Promise.all([getGithubIssues(active.cwd), getGithubPulls(active.cwd)]);
+      if (request !== githubRequest.current) return;
       setGithubRepo(foundIssues.repo);
       setIssues(foundIssues.items);
       setPulls(foundPulls.items);
-      setChecks([]);
-    } catch(e) { setError(String((e as Error).message)); }
-    finally { setGithubLoading(false); }
+      setGithubTruncated(foundIssues.truncated || foundPulls.truncated);
+      setChecks(null);
+    } catch(e) { if (request === githubRequest.current) setError(String((e as Error).message)); }
+    finally { if (request === githubRequest.current) setGithubLoading(false); }
   }
-  async function inspectChecks(sha: string) {
+  async function inspectChecks(pr: GithubPull) {
     if (!active || githubLoading) return;
+    const request = ++githubRequest.current;
     setGithubLoading(true);
     setError('');
     try {
-      const evidence = await getGithubChecks(active.cwd, sha);
-      setChecks(evidence.items);
-    } catch(e) { setError(String((e as Error).message)); }
-    finally { setGithubLoading(false); }
+      const evidence = await getGithubChecks(active.cwd, pr.headSha);
+      if (request !== githubRequest.current) return;
+      setChecks({ ...evidence, pr: pr.number });
+    } catch(e) { if (request === githubRequest.current) setError(String((e as Error).message)); }
+    finally { if (request === githubRequest.current) setGithubLoading(false); }
   }
 
   async function cancel() {
@@ -300,10 +311,10 @@ export function LiveWorkspace({ settings, onBack }: {
         {inspectorTab==='git' && <div className="live-history"><div className="live-code-title"><FolderGit2 size={15}/> {ui("Git 狀態（唯讀）","Git status (read-only)")}</div><pre>{gitEvidence.status ?? ui("尚未讀取 Git 狀態。","No Git status loaded.")}</pre><div className="live-code-title"><FileDiff size={15}/> {ui("工作目錄差異（唯讀）","Working tree diff (read-only)")}</div><pre>{gitEvidence.diff ?? ui("尚未讀取 Git 差異。","No Git diff loaded.")}</pre></div>}
         {inspectorTab==='github' && <div className="live-history live-github-evidence">
           <div className="live-github-header"><strong>{githubRepo || ui('GitHub Repo','GitHub repo')}</strong><button className="live-github-refresh" disabled={githubLoading} onClick={()=>void inspectGithub()}>{githubLoading?ui('讀取中…','Loading…'):ui('重新讀取','Refresh')}</button></div>
-          <p className="live-github-warning">{ui('資料來自已登入的 GitHub CLI。此介面只讀取資訊，不會建立 PR、推送或合併。','Data comes from your authenticated GitHub CLI. This panel is read-only and cannot create, push or merge PRs.')}</p>
+          <p className="live-github-warning">{ui('資料來自已登入的 GitHub CLI。此介面只讀取資訊，不會建立 PR、推送或合併。','Data comes from your authenticated GitHub CLI. This panel is read-only and cannot create, push or merge PRs.')}{githubTruncated && <> {ui('只顯示前 30 筆，可能還有更多。','Only the first 30 results are shown; more may exist.')}</>}</p>
           <div className="live-github-section"><h3>{ui('開啟中的 Issues','Open Issues')} ({issues.length})</h3>{issues.length===0 && <p>{ui('沒有資料或尚未讀取。','No results or not loaded.')}</p>}{issues.map(item=><a key={item.number} href={item.url || undefined} target="_blank" rel="noreferrer noopener">#{item.number} · {item.title}</a>)}</div>
-          <div className="live-github-section"><h3>{ui('開啟中的 PR','Open Pull Requests')} ({pulls.length})</h3>{pulls.length===0 && <p>{ui('沒有資料或尚未讀取。','No results or not loaded.')}</p>}{pulls.map(item=><div className="live-github-pull" key={item.number}><a href={item.url || undefined} target="_blank" rel="noreferrer noopener">#{item.number} · {item.title} ({item.state})</a><button disabled={githubLoading || !/^[a-f0-9]{40}$/.test(item.headSha)} onClick={()=>void inspectChecks(item.headSha)}>{ui('查看 CI Checks','View CI checks')}</button></div>)}</div>
-          <div className="live-github-section"><h3>{ui('CI Checks','CI Checks')} ({checks.length})</h3>{checks.length===0 && <p>{ui('尚未讀取，或此 Commit 沒有 Checks；不代表通過。','No checks loaded or reported. This does not imply success.')}</p>}{checks.map(c=><div key={c.id} className="live-github-check"><span>{c.name}: {c.status} / {c.conclusion??'unknown'}</span>{c.url && <a href={c.url} target="_blank" rel="noreferrer noopener">{ui('查看執行紀錄','View run')}</a>}</div>)}</div>
+          <div className="live-github-section"><h3>{ui('開啟中的 PR','Open Pull Requests')} ({pulls.length})</h3>{pulls.length===0 && <p>{ui('沒有資料或尚未讀取。','No results or not loaded.')}</p>}{pulls.map(item=><div className="live-github-pull" key={item.number}><a href={item.url || undefined} target="_blank" rel="noreferrer noopener">#{item.number} · {item.title} ({item.state})</a><button disabled={githubLoading || !/^[a-f0-9]{40}$/.test(item.headSha)} onClick={()=>void inspectChecks(item)}>{ui('查看 CI Checks','View CI checks')}</button></div>)}</div>
+          <div className="live-github-section"><h3>{ui('CI Checks','CI Checks')} ({checks ? checks.total : 0})</h3>{checks && <p className="live-github-sha">{ui('PR','PR')} #{checks.pr} · {ui('讀取當下的 head','head when read')} <code>{checks.sha.slice(0,12)}</code>{checks.truncated && <> · {ui('只顯示前 30 筆','first 30 shown')}</>}</p>}<p className="live-github-note">{ui('只含 GitHub Check Runs，不含舊式 Commit Status；重新推送後需重新讀取。','Check Runs only (legacy commit statuses are not included); re-read after new pushes.')}</p>{(!checks || checks.items.length===0) && <p>{ui('尚未讀取，或此 Commit 沒有 Checks；不代表通過。','No checks loaded or reported. This does not imply success.')}</p>}{checks?.items.map(c=><div key={c.id} className="live-github-check"><span>{c.name}: {c.status} / {c.conclusion??'unknown'}</span>{c.url && <a href={c.url} target="_blank" rel="noreferrer noopener">{ui('查看執行紀錄','View run')}</a>}</div>)}</div>
         </div>}
         <div className="live-composer"><textarea aria-label={ui("傳給真實 ACP Agent 的 Prompt","Prompt to real ACP agent")} placeholder={ui("輸入要交給 ACP Agent 的任務…","Prompt the selected ACP agent…")} rows={3} value={prompt} onChange={e=>setPrompt(e.target.value)} disabled={active.status!=='ready'}/><div className="live-compose-footer"><small>{active.supports_load ? ui('Agent 宣告支援載入 Session','Agent advertises session load') : ui('重啟後僅能讀取歷史；不能宣稱 Agent 已重新接上','Historical session only after restart; no claimed reattach')}</small><button onClick={()=>void submit()} disabled={!prompt.trim() || submitting || active.status!=='ready'}>{ui("傳送 Prompt","Send prompt")}</button></div></div>
       </>}

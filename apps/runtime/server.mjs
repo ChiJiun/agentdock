@@ -8,7 +8,7 @@ import { DEFAULT_MOCK, ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
 import { WorktreeManager } from './worktrees.mjs';
-import { GitHubReader } from './github-reader.mjs';
+import { GitHubEvidenceError, GitHubReader } from './github-reader.mjs';
 
 const MAX_BODY = 20_000;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
@@ -83,13 +83,13 @@ export function createRuntimeServer({
         return json(response, 201, item);
       }
       if (method === 'GET' && pathname === '/api/github/issues') {
-        return json(response, 200, github.issues(url.searchParams.get('cwd') || ''));
+        return json(response, 200, await github.issues(url.searchParams.get('cwd') || ''));
       }
       if (method === 'GET' && pathname === '/api/github/pulls') {
-        return json(response, 200, github.pulls(url.searchParams.get('cwd') || ''));
+        return json(response, 200, await github.pulls(url.searchParams.get('cwd') || ''));
       }
       if (method === 'GET' && pathname === '/api/github/checks') {
-        return json(response, 200, github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
+        return json(response, 200, await github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
       }
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
       if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
@@ -156,7 +156,7 @@ export function createRuntimeServer({
       }
       throw new ClientError(404, 'endpoint not found');
     } catch (error) {
-      const status = error instanceof ClientError ? error.status
+      const status = error instanceof ClientError || error instanceof GitHubEvidenceError ? error.status
         : /workspace|adapter|approval|not connected|already processing|invalid/i.test(error.message) ? 400 : 500;
       const message = status === 500 ? 'internal runtime error' : String(error.message).slice(0, 200);
       json(response, status, { error: message });

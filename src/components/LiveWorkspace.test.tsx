@@ -30,9 +30,9 @@ function mockedFetch(path: string | URL | Request, options?: RequestInit): Promi
   if (uri.endsWith('/api/health')) return Promise.resolve(returnJson({ok:true,protocol:'ACP v1',mode:'local-development'}));
   if (uri.endsWith('/api/adapters')) return Promise.resolve(returnJson([{id:'mock',label:'ACP mock'}]));
   if (uri.endsWith('/api/attention')) return Promise.resolve(returnJson(attentionItems));
-  if (uri.includes('/api/github/issues')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',items:[{number:9,title:'GitHub issue fixture',url:'https://github.com/ChiJiun/agentdock/issues/9',state:'open'}]}));
-  if (uri.includes('/api/github/pulls')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',items:[{number:25,title:'GitHub PR fixture',url:'https://github.com/ChiJiun/agentdock/pull/25',state:'open',headSha:'a'.repeat(40)}]}));
-  if (uri.includes('/api/github/checks')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',items:[]}));
+  if (uri.includes('/api/github/issues')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',truncated:false,items:[{number:9,title:'GitHub issue fixture',url:'https://github.com/ChiJiun/agentdock/issues/9',state:'open'}]}));
+  if (uri.includes('/api/github/pulls')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',truncated:true,items:[{number:25,title:'GitHub PR fixture',url:'https://github.com/ChiJiun/agentdock/pull/25',state:'open',headSha:'a'.repeat(40)}]}));
+  if (uri.includes('/api/github/checks')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',sha:'a'.repeat(40),total:0,truncated:false,items:[]}));
   if (uri.endsWith('/api/workspaces')) return Promise.resolve(returnJson([{path:'/mock/project'}]));
   if (uri.endsWith('/api/worktrees') && method === 'GET') return Promise.resolve(returnJson([]));
   if (uri.endsWith('/api/worktrees') && method === 'POST') return Promise.resolve(returnJson({id:'wt1',source_repo:'/mock/project',path:'/mock/project/.local/worktrees/wt1',branch:'agentdock/task-123456789abc',created_at:new Date().toISOString(),exists:true},201));
@@ -154,6 +154,9 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     const checks=[...ui.querySelectorAll<HTMLButtonElement>('.live-github-pull button')][0];
     await act(async()=>checks?.click());
     expect(ui.textContent).toContain('不代表通過');
+    expect(ui.textContent).toContain('只顯示前 30 筆');
+    expect(ui.textContent).toContain('#25');
+    expect(ui.textContent).toContain('a'.repeat(12));
     expect(requests.some(r=>r.path.includes('/api/github/checks') && r.method==='GET')).toBe(true);
   });
 

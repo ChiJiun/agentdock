@@ -6,7 +6,8 @@ export interface RuntimeWorkspace { path: string; }
 export interface GithubIssue { number: number; title: string; url: string | null; state: string; }
 export interface GithubPull { number: number; title: string; url: string | null; state: string; headSha: string; }
 export interface GithubCheck { id: number; name: string; status: string; conclusion: string | null; url: string | null; }
-export interface GithubEvidence<T> { repo: string; items: T[]; }
+export interface GithubEvidence<T> { repo: string; items: T[]; truncated: boolean; }
+export interface GithubChecksEvidence extends GithubEvidence<GithubCheck> { sha: string; total: number; }
 export interface RuntimeWorktree { id: string; source_repo: string; path: string; branch: string; created_at: string; exists: boolean; }
 export type RuntimeSessionStatus =
   | 'starting' | 'ready' | 'running' | 'awaiting_approval'
@@ -111,4 +112,4 @@ export const gitDiff = (cwd: string) =>
   runtimeApi<{ cwd: string; diff: string; truncated: boolean }>(`git/diff?cwd=${encodeURIComponent(cwd)}`);
 export const getGithubIssues = (cwd: string) => runtimeApi<GithubEvidence<GithubIssue>>(`github/issues?cwd=${encodeURIComponent(cwd)}`);
 export const getGithubPulls = (cwd: string) => runtimeApi<GithubEvidence<GithubPull>>(`github/pulls?cwd=${encodeURIComponent(cwd)}`);
-export const getGithubChecks = (cwd: string, sha: string) => runtimeApi<GithubEvidence<GithubCheck>>(`github/checks?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}`);
+export const getGithubChecks = (cwd: string, sha: string) => runtimeApi<GithubChecksEvidence>(`github/checks?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}`);
