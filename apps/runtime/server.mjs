@@ -9,7 +9,7 @@ import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
 import { WorktreeManager } from './worktrees.mjs';
 import { GitHubReader } from './github-reader.mjs';
-import { TaskWorkflow } from './task-workflow.mjs';
+import { TaskError, TaskWorkflow } from './task-workflow.mjs';
 
 const MAX_BODY = 20_000;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
@@ -95,19 +95,17 @@ export function createRuntimeServer({
       }
       if (method === 'GET' && pathname === '/api/tasks') return json(response, 200, tasks.list());
       if (method === 'POST' && pathname === '/api/tasks') {
-        const payload = await readJson(request);
-        return json(response, 201, tasks.create({
-          workspace: payload.workspace, objective: payload.objective,
-          issueNumber: payload.issueNumber ?? null, issueUrl: payload.issueUrl ?? null,
-        }));
+        return json(response, 201, tasks.create(await readJson(request)));
       }
       const taskMatch = /^\/api\/tasks\/([a-f0-9-]{36})(?:\/(evidence|history|advance))?$/.exec(pathname);
       if (taskMatch) {
         const [, id, route] = taskMatch;
         if (!tasks.get(id)) throw new ClientError(404, 'task not found');
         if (method === 'GET' && !route) return json(response, 200, tasks.get(id));
-        if (method === 'GET' && route === 'evidence') return json(response, 200, tasks.evidence(id));
-        if (method === 'GET' && route === 'history') return json(response, 200, tasks.history(id));
+        if (method === 'GET' && (route === 'evidence' || route === 'history')) {
+          const after = Number(url.searchParams.get('after') || 0);
+          return json(response, 200, route === 'evidence' ? tasks.evidence(id, after) : tasks.history(id, after));
+        }
         if (method === 'POST' && route === 'evidence') {
           const payload = await readJson(request);
           return json(response, 201, tasks.addEvidence(id, payload));
@@ -184,7 +182,7 @@ export function createRuntimeServer({
       }
       throw new ClientError(404, 'endpoint not found');
     } catch (error) {
-      const status = error instanceof ClientError ? error.status
+      const status = error instanceof ClientError || error instanceof TaskError ? error.status
         : /workspace|adapter|approval|not connected|already processing|invalid/i.test(error.message) ? 400 : 500;
       const message = status === 500 ? 'internal runtime error' : String(error.message).slice(0, 200);
       json(response, status, { error: message });
