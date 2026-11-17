@@ -1,0 +1,13 @@
+{
+  "fixture": "03-cancel-during-approval.jsonl",
+  "description": "User cancels while an ACP permission is pending: the pending request is answered 'cancelled' before the task is cancelled; a second task is cancelled while preparing.",
+  "final_task_states": {
+    "tsk_01JDQ003000000000000000001": "cancelled",
+    "tsk_01JDQ003000000000000000002": "cancelled"
+  },
+  "final_session_states": {
+    "ses_01JDQ003000000000000000001": "closed",
+    "ses_01JDQ003000000000000000002": "failed"
+  },
+  "attention": []
+}

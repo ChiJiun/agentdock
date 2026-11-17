@@ -1,0 +1,29 @@
+{
+  "fixture": "09-pr-ci-edges.jsonl",
+  "description": "PR and CI phase edges: PR creation rejected, merge approval from CI, integration outage and resume straight into CI, CI repair limit, cancellation in PR/CI/review, and completion without a PR.",
+  "final_task_states": {
+    "tsk_01JDQ009000000000000000001": "failed",
+    "tsk_01JDQ009000000000000000002": "completed",
+    "tsk_01JDQ009000000000000000003": "failed",
+    "tsk_01JDQ009000000000000000004": "cancelled",
+    "tsk_01JDQ009000000000000000005": "cancelled",
+    "tsk_01JDQ009000000000000000006": "cancelled",
+    "tsk_01JDQ009000000000000000007": "completed"
+  },
+  "final_session_states": {
+    "ses_01JDQ009000000000000000001": "closed",
+    "ses_01JDQ009000000000000000002": "closed",
+    "ses_01JDQ009000000000000000003": "closed",
+    "ses_01JDQ009000000000000000004": "closed",
+    "ses_01JDQ009000000000000000005": "closed",
+    "ses_01JDQ009000000000000000006": "closed",
+    "ses_01JDQ009000000000000000007": "closed"
+  },
+  "attention": [
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ009000000000000000007"
+    }
+  ]
+}

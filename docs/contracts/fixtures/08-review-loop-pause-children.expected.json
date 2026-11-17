@@ -1,0 +1,33 @@
+{
+  "fixture": "08-review-loop-pause-children.jsonl",
+  "description": "Primary session with explore and review child sessions: blocking review sends the task back to running; the acknowledged child is auto-collapsed while unacknowledged children stay visible; the user pauses and resumes into review; the reviewer crashes, the task fails, the user retries and the suspended primary session continues.",
+  "final_task_states": {
+    "tsk_01JDQ008000000000000000001": "running"
+  },
+  "final_session_states": {
+    "ses_01JDQ008000000000000000001": "active",
+    "ses_01JDQ008000000000000000002": "closed",
+    "ses_01JDQ008000000000000000003": "closed",
+    "ses_01JDQ008000000000000000004": "failed"
+  },
+  "attention": [
+    {
+      "kind": "background",
+      "reason": "agent_working",
+      "task_id": "tsk_01JDQ008000000000000000001",
+      "session_id": "ses_01JDQ008000000000000000001"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "child_result_unviewed",
+      "task_id": "tsk_01JDQ008000000000000000001",
+      "session_id": "ses_01JDQ008000000000000000002"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "child_result_unviewed",
+      "task_id": "tsk_01JDQ008000000000000000001",
+      "session_id": "ses_01JDQ008000000000000000004"
+    }
+  ]
+}

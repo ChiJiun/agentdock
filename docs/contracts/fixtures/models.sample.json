@@ -1,0 +1,228 @@
+{
+  "projects": [
+    {
+      "project_id": "prj_01JDQ099000000000000000001",
+      "name": "agentdock",
+      "local_path": "D:/Code/agentdock",
+      "environment_id": "local",
+      "remote_origin": "https://github.com/example/agentdock.git",
+      "default_branch": "main",
+      "created_at": "2026-11-17T10:00:00.000Z"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "project_id": "prj_01JDQ099000000000000000001",
+      "objective": "Example",
+      "state": "interrupted",
+      "branch": "agentdock/x",
+      "primary_session_id": "ses_01JDQ099000000000000000001",
+      "interruption": {
+        "reason": "quota_exhausted",
+        "auto_resume_armed": true,
+        "summary_id": "sum_01JDQ099000000000000000001",
+        "retry_hint": {
+          "not_before": "2026-11-17T15:00:00.000Z",
+          "source": "provider_reported"
+        }
+      },
+      "auto_resume_policy": {
+        "on_quota_reset": true,
+        "on_rate_limit": false
+      },
+      "created_at": "2026-11-17T10:00:00.000Z",
+      "updated_at": "2026-11-17T10:00:00.000Z",
+      "last_seq": 42
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "ses_01JDQ099000000000000000001",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "role": "primary",
+      "adapter_id": "claude-code",
+      "state": "suspended",
+      "external_session_id": "acp-abc",
+      "launch_method": "new",
+      "capability_snapshot": {
+        "protocol": "acp",
+        "protocol_version": 1,
+        "track": "v1_stable",
+        "detected_at": "2026-11-17T10:00:00.000Z",
+        "agent_info": {
+          "name": "mock-acp-agent",
+          "version": "0.1.0"
+        },
+        "auth_method_ids": [],
+        "acp_agent_capabilities": {
+          "loadSession": false,
+          "promptCapabilities": {
+            "image": true,
+            "audio": false,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          },
+          "sessionCapabilities": {
+            "close": {}
+          },
+          "auth": {}
+        },
+        "features": {
+          "load_session": false,
+          "resume_session": false,
+          "close_session": true,
+          "list_sessions": false,
+          "delete_session": false,
+          "additional_directories": false,
+          "system_prompt": false,
+          "prompt_image": true,
+          "prompt_audio": false,
+          "prompt_embedded_context": true,
+          "mcp_http": true,
+          "mcp_sse": false,
+          "logout": false
+        },
+        "client_advertised": {
+          "fs_read_text_file": true,
+          "fs_write_text_file": true,
+          "terminal": true
+        },
+        "unstable_opt_ins": []
+      },
+      "collapsed": false,
+      "created_at": "2026-11-17T10:00:00.000Z"
+    },
+    {
+      "session_id": "ses_01JDQ099000000000000000002",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "parent_session_id": "ses_01JDQ099000000000000000001",
+      "role": "review",
+      "adapter_id": "codex",
+      "state": "closed",
+      "launch_method": "new",
+      "outcome": "succeeded",
+      "result_acknowledged_at": "2026-11-17T10:00:00.000Z",
+      "collapsed": true,
+      "collapsed_by": "auto",
+      "created_at": "2026-11-17T10:00:00.000Z",
+      "closed_at": "2026-11-17T10:00:00.000Z"
+    }
+  ],
+  "approvals": [
+    {
+      "approval_id": "apr_01JDQ099000000000000000001",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "source": "host_policy",
+      "state": "approved",
+      "operation_kind": "git_push",
+      "operation_fingerprint": "219eeee99ee0d2460fb16737b179bc9b40a874b1784c9b86df14eec8396c6e0f",
+      "operation_id": "op_01JDQ099000000000000000001",
+      "title": "push agentdock/x",
+      "scope": "once",
+      "return_state": "pr",
+      "requested_at": "2026-11-17T10:00:00.000Z",
+      "decided_at": "2026-11-17T10:00:00.000Z",
+      "decided_by": {
+        "kind": "user",
+        "id": "local-user"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "operation_id": "op_01JDQ099000000000000000001",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "kind": "git_push",
+      "repeatability": "non_repeatable",
+      "idempotency_key": "219eeee99ee0d2460fb16737b179bc9b40a874b1784c9b86df14eec8396c6e0f",
+      "target": {
+        "description": "push agentdock/x",
+        "remote": "origin",
+        "ref": "refs/heads/agentdock/x"
+      },
+      "approval_id": "apr_01JDQ099000000000000000001",
+      "reconcile_strategy": "remote_ref_compare",
+      "state": "reconciled_applied",
+      "attempt_count": 1
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "chk_01JDQ099000000000000000001",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "name": "cargo test",
+      "origin": "local",
+      "state": "passed",
+      "command": [
+        "cargo",
+        "test"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "started_at": "2026-11-17T10:00:00.000Z",
+      "finished_at": "2026-11-17T10:00:00.000Z",
+      "artifact": {
+        "path": "checks/chk_01JDQ099000000000000000001.log",
+        "sha256": "2ce5a984f81a15a3e7ebd1a802998b5a04adab2d853df2bb54e667be77865fed",
+        "bytes": 2048
+      }
+    }
+  ],
+  "usage": [
+    {
+      "usage_id": "use_01JDQ099000000000000000001",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "session_id": "ses_01JDQ099000000000000000001",
+      "source": "provider_reported",
+      "reporter": "acp_usage_update",
+      "measured_at": "2026-11-17T10:00:00.000Z",
+      "scope": "cumulative",
+      "context_window": {
+        "used": 1000,
+        "size": 200000
+      },
+      "cost": {
+        "amount": 0.12,
+        "unit": "USD",
+        "basis": "reported"
+      }
+    },
+    {
+      "usage_id": "use_01JDQ099000000000000000002",
+      "task_id": "tsk_01JDQ099000000000000000001",
+      "session_id": "ses_01JDQ099000000000000000001",
+      "source": "unknown",
+      "reporter": "none",
+      "measured_at": "2026-11-17T10:00:00.000Z",
+      "scope": "snapshot"
+    }
+  ],
+  "stream_messages": [
+    {
+      "kind": "heartbeat",
+      "authority_id": "local",
+      "head_seq": 42
+    },
+    {
+      "kind": "lagged",
+      "authority_id": "local",
+      "resume_after_seq": 17
+    },
+    {
+      "kind": "retention_gap",
+      "authority_id": "remote:vm1",
+      "requested_after_seq": 3,
+      "oldest_available_seq": 120
+    },
+    {
+      "kind": "events",
+      "authority_id": "local",
+      "events": [],
+      "next_after_seq": 42
+    }
+  ]
+}

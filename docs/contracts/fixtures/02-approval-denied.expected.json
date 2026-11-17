@@ -1,0 +1,12 @@
+{
+  "fixture": "02-approval-denied.jsonl",
+  "description": "ACP permission denied: the tool call never runs, the agent continues, then the user cancels the running task; a second task is cancelled while still queued.",
+  "final_task_states": {
+    "tsk_01JDQ002000000000000000001": "cancelled",
+    "tsk_01JDQ002000000000000000002": "cancelled"
+  },
+  "final_session_states": {
+    "ses_01JDQ002000000000000000001": "closed"
+  },
+  "attention": []
+}

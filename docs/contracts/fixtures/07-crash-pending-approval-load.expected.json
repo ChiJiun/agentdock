@@ -1,0 +1,11 @@
+{
+  "fixture": "07-crash-pending-approval-load.jsonl",
+  "description": "Host crashes while an ACP permission is pending: recovery invalidates it (never auto-approves). On resume the adapter advertised loadSession, so the session is reattached with session/load and replayed history is tagged acp_replay. The agent must ask again; later the user cancels during verification.",
+  "final_task_states": {
+    "tsk_01JDQ007000000000000000001": "cancelled"
+  },
+  "final_session_states": {
+    "ses_01JDQ007000000000000000001": "closed"
+  },
+  "attention": []
+}

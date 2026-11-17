@@ -1,0 +1,31 @@
+{
+  "fixture": "05-quota-interrupt-auto-resume.jsonl",
+  "description": "Quota exhausted mid-turn: host-written summary, auto-resume armed from a provider-reported reset time; the agent process dies while waiting and has no load/resume, so the task restarts with a new session seeded by the summary. Plus one task waiting for reset and one needing a decision.",
+  "final_task_states": {
+    "tsk_01JDQ005000000000000000001": "running",
+    "tsk_01JDQ005000000000000000002": "interrupted",
+    "tsk_01JDQ005000000000000000003": "interrupted"
+  },
+  "final_session_states": {
+    "ses_01JDQ005000000000000000001": "closed",
+    "ses_01JDQ005000000000000000002": "active"
+  },
+  "attention": [
+    {
+      "kind": "background",
+      "reason": "agent_working",
+      "task_id": "tsk_01JDQ005000000000000000001",
+      "session_id": "ses_01JDQ005000000000000000002"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "interruption_needs_decision",
+      "task_id": "tsk_01JDQ005000000000000000002"
+    },
+    {
+      "kind": "background",
+      "reason": "waiting_for_reset",
+      "task_id": "tsk_01JDQ005000000000000000003"
+    }
+  ]
+}

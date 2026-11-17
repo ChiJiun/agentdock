@@ -1,0 +1,1139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ChiJiun/agentdock/docs/contracts/schema/agentdock.schema.json",
+  "title": "AgentDock core contracts v1",
+  "description": "Canonical wire/storage contracts for Project, Task, Session, Event, Approval, Operation, Check and Usage. Source of truth for ADR-0003. Keys and enum values are snake_case. Optional fields are omitted when absent (never null). See docs/contracts/README.md for the Rust/TypeScript mapping.",
+  "$comment": "Only the JSON Schema keywords listed in docs/contracts/README.md (section 'Schema keyword subset') may be used, so that the stdlib validator in docs/contracts/validate_fixtures.py checks everything this file says.",
+  "$defs": {
+    "ProjectId": { "type": "string", "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "TaskId": { "type": "string", "pattern": "^tsk_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "SessionId": { "type": "string", "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "EventId": { "type": "string", "pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "ApprovalId": { "type": "string", "pattern": "^apr_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "OperationId": { "type": "string", "pattern": "^op_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "CheckId": { "type": "string", "pattern": "^chk_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "UsageId": { "type": "string", "pattern": "^use_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "SummaryId": { "type": "string", "pattern": "^sum_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "CheckpointId": { "type": "string", "pattern": "^cpt_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "TurnId": { "type": "string", "pattern": "^trn_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "AuthorityId": {
+      "description": "The store that minted the event cursor. 'local' for the desktop store; 'remote:<name>' for a remote worker journal.",
+      "type": "string",
+      "pattern": "^(local|remote:[a-z0-9][a-z0-9-]{0,47})$"
+    },
+    "AdapterId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$" },
+    "Timestamp": {
+      "description": "RFC 3339 UTC timestamp with millisecond precision.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "Seq": {
+      "description": "Monotonic, gap-free event cursor within one authority. Capped at 2^53-1 so TypeScript numbers stay exact.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "GitSha": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+    "RedactedText": {
+      "description": "Text that has already passed the redaction pipeline. Redacted spans are replaced with [REDACTED:<rule>].",
+      "type": "string",
+      "maxLength": 65536
+    },
+    "RelativePath": {
+      "description": "Forward-slash path relative to a known root (workspace or artifact store). Never absolute, never contains '..'.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\\\x00]+$"
+    },
+    "ArtifactRef": {
+      "description": "Pointer to content moved out of the event row (large output, compacted transcript, check logs).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": { "$ref": "#/$defs/RelativePath" },
+        "sha256": { "$ref": "#/$defs/Sha256" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TextOrRef": {
+      "description": "Inline redacted text, or a reference to it after retention compaction.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": { "$ref": "#/$defs/RedactedText" },
+        "text_ref": { "$ref": "#/$defs/ArtifactRef" }
+      },
+      "oneOf": [
+        { "required": ["text"], "not": { "required": ["text_ref"] } },
+        { "required": ["text_ref"], "not": { "required": ["text"] } }
+      ]
+    },
+
+    "TaskState": {
+      "type": "string",
+      "enum": ["queued", "preparing", "running", "awaiting_approval", "verifying", "review", "pr", "ci", "completed", "interrupted", "failed", "cancelled"]
+    },
+    "ResumePhase": {
+      "description": "Workflow phase a task re-enters after preparing on a resume/restart path.",
+      "type": "string",
+      "enum": ["running", "verifying", "review", "pr", "ci"]
+    },
+    "ApprovalReturnState": {
+      "description": "State a task returns to once an approval is resolved.",
+      "type": "string",
+      "enum": ["running", "pr", "ci"]
+    },
+    "ActorKind": {
+      "description": "Who caused a fact. 'adapter' means a signal from an ACP agent process interpreted by the host; an agent never changes task state directly.",
+      "type": "string",
+      "enum": ["user", "orchestrator", "policy", "adapter", "integration", "recovery"]
+    },
+    "Actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/ActorKind" },
+        "id": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "TaskTrigger": {
+      "type": "string",
+      "enum": [
+        "task_created", "scheduled", "user_cancel", "session_ready", "resume_phase_restored",
+        "interruption", "preparation_failed", "approval_requested", "implementation_done",
+        "unrecoverable_error", "approval_resolved", "checks_failed", "checks_passed",
+        "repair_limit_reached", "review_blocking_findings", "review_passed", "accepted_without_pr",
+        "pr_published", "operation_failed", "ci_failed", "ci_passed_accepted",
+        "resume_requested", "scheduled_resume", "abandoned", "retry_requested"
+      ]
+    },
+    "InterruptionReason": {
+      "type": "string",
+      "enum": [
+        "quota_exhausted", "rate_limited", "adapter_disconnected", "process_crashed", "host_crashed",
+        "auth_required", "user_paused", "remote_unreachable", "integration_unavailable"
+      ]
+    },
+    "HintSource": {
+      "description": "Where a time hint came from. 'unknown' means no reliable source; the hint then carries no time.",
+      "type": "string",
+      "enum": ["provider_reported", "user_configured", "unknown"]
+    },
+    "RetryHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "not_before": { "$ref": "#/$defs/Timestamp" },
+        "source": { "$ref": "#/$defs/HintSource" },
+        "detail": { "$ref": "#/$defs/RedactedText" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "source": { "const": "unknown" } } },
+          "then": { "not": { "required": ["not_before"] } },
+          "else": { "required": ["not_before"] }
+        }
+      ]
+    },
+    "Interruption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "auto_resume_armed"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/InterruptionReason" },
+        "detail": { "$ref": "#/$defs/RedactedText" },
+        "retry_hint": { "$ref": "#/$defs/RetryHint" },
+        "auto_resume_armed": {
+          "description": "True only when the reason is quota_exhausted or rate_limited, the task's auto_resume_policy opts in, and retry_hint has a not_before time. Never true after a crash.",
+          "type": "boolean"
+        },
+        "summary_id": { "$ref": "#/$defs/SummaryId" },
+        "open_operation_ids": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "auto_resume_armed": { "const": true } } },
+          "then": {
+            "required": ["retry_hint"],
+            "properties": {
+              "reason": { "enum": ["quota_exhausted", "rate_limited"] },
+              "retry_hint": { "properties": { "source": { "enum": ["provider_reported", "user_configured"] } } }
+            }
+          }
+        }
+      ]
+    },
+    "Failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "message": { "$ref": "#/$defs/RedactedText" }
+      }
+    },
+    "AutoResumePolicy": {
+      "description": "User opt-in for unattended resume. Crash-related interruptions are never auto-resumed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on_quota_reset", "on_rate_limit"],
+      "properties": {
+        "on_quota_reset": { "type": "boolean" },
+        "on_rate_limit": { "type": "boolean" }
+      }
+    },
+
+    "SessionState": {
+      "type": "string",
+      "enum": ["starting", "idle", "active", "awaiting_permission", "suspended", "disconnected", "closed", "failed"]
+    },
+    "SessionRole": {
+      "type": "string",
+      "enum": ["primary", "implementation", "review", "repair", "explore", "subtask"]
+    },
+    "SessionTrigger": {
+      "type": "string",
+      "enum": [
+        "launch", "session_ready", "launch_failed", "attach_rejected", "process_exited",
+        "prompt_submitted", "session_closed", "task_interrupted", "turn_ended", "permission_requested",
+        "permission_resolved", "protocol_error", "continue_prompt", "superseded", "reattach_attempt",
+        "abandoned", "host_recovery"
+      ]
+    },
+    "SessionOutcome": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "cancelled", "superseded", "abandoned"]
+    },
+    "AcpStopReason": {
+      "description": "ACP v1 StopReason, copied verbatim.",
+      "type": "string",
+      "enum": ["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]
+    },
+    "LaunchMethod": {
+      "description": "new = ACP session/new; load = session/load (requires agentCapabilities.loadSession, agent replays history); resume = session/resume (requires agentCapabilities.sessionCapabilities.resume, no replay).",
+      "type": "string",
+      "enum": ["new", "load", "resume"]
+    },
+    "CapabilitySnapshot": {
+      "description": "What the adapter advertised in the ACP initialize response for one agent process. Features are derived only from advertised capabilities; absent means false.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocol_version", "detected_at", "track", "features", "client_advertised", "acp_agent_capabilities"],
+      "properties": {
+        "protocol": { "const": "acp" },
+        "protocol_version": { "description": "Negotiated ACP protocolVersion (uint16).", "type": "integer", "minimum": 0, "maximum": 65535 },
+        "track": {
+          "description": "v1_stable is the default. v2_draft only behind an explicit opt-in feature flag.",
+          "type": "string",
+          "enum": ["v1_stable", "v2_draft"]
+        },
+        "detected_at": { "$ref": "#/$defs/Timestamp" },
+        "agent_info": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string", "maxLength": 256 },
+            "title": { "type": "string", "maxLength": 256 },
+            "version": { "type": "string", "maxLength": 128 }
+          }
+        },
+        "auth_method_ids": { "type": "array", "items": { "type": "string", "maxLength": 128 } },
+        "acp_agent_capabilities": {
+          "description": "The agentCapabilities object as received, with every _meta key removed. Opaque to AgentDock logic; kept for diagnostics and re-derivation.",
+          "type": "object"
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "load_session", "resume_session", "close_session", "list_sessions", "delete_session",
+            "additional_directories", "system_prompt", "prompt_image", "prompt_audio",
+            "prompt_embedded_context", "mcp_http", "mcp_sse", "logout"
+          ],
+          "properties": {
+            "load_session": { "description": "v1 agentCapabilities.loadSession == true", "type": "boolean" },
+            "resume_session": { "description": "v1 agentCapabilities.sessionCapabilities.resume present and not null", "type": "boolean" },
+            "close_session": { "description": "v1 sessionCapabilities.close present", "type": "boolean" },
+            "list_sessions": { "description": "v1 sessionCapabilities.list present", "type": "boolean" },
+            "delete_session": { "description": "v1 sessionCapabilities.delete present", "type": "boolean" },
+            "additional_directories": { "description": "v1 sessionCapabilities.additionalDirectories present", "type": "boolean" },
+            "system_prompt": { "description": "v1 sessionCapabilities.systemPrompt present", "type": "boolean" },
+            "prompt_image": { "description": "v1 promptCapabilities.image", "type": "boolean" },
+            "prompt_audio": { "description": "v1 promptCapabilities.audio", "type": "boolean" },
+            "prompt_embedded_context": { "description": "v1 promptCapabilities.embeddedContext", "type": "boolean" },
+            "mcp_http": { "description": "v1 mcpCapabilities.http", "type": "boolean" },
+            "mcp_sse": { "description": "v1 mcpCapabilities.sse", "type": "boolean" },
+            "logout": { "description": "v1 agentCapabilities.auth.logout present", "type": "boolean" }
+          }
+        },
+        "client_advertised": {
+          "description": "What AgentDock itself advertised in clientCapabilities for this process.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fs_read_text_file", "fs_write_text_file", "terminal"],
+          "properties": {
+            "fs_read_text_file": { "type": "boolean" },
+            "fs_write_text_file": { "type": "boolean" },
+            "terminal": { "type": "boolean" },
+            "elicitation": { "type": "boolean" },
+            "notices": { "type": "boolean" },
+            "compaction": { "type": "boolean" }
+          }
+        },
+        "unstable_opt_ins": {
+          "description": "Names of ACP unstable features explicitly enabled for this adapter (e.g. 'session_fork'). Empty by default.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+        }
+      }
+    },
+
+    "ApprovalState": {
+      "type": "string",
+      "enum": ["pending", "approved", "denied", "expired", "cancelled", "invalidated"]
+    },
+    "ApprovalSource": {
+      "description": "acp_permission = an ACP session/request_permission from the agent; host_policy = a gate AgentDock itself enforces (push, PR, merge, destructive command).",
+      "type": "string",
+      "enum": ["acp_permission", "host_policy"]
+    },
+    "ApprovalScope": {
+      "description": "AgentDock-side scope of a grant. ACP allow_always is recorded as the selected option but AgentDock never widens scope beyond what its own policy allows.",
+      "type": "string",
+      "enum": ["once", "session", "task"]
+    },
+    "AcpPermissionOptionKind": {
+      "description": "ACP v1 PermissionOptionKind, copied verbatim.",
+      "type": "string",
+      "enum": ["allow_once", "allow_always", "reject_once", "reject_always"]
+    },
+    "AcpPermissionContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_call_id", "options"],
+      "properties": {
+        "tool_call_id": { "type": "string", "maxLength": 256 },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["option_id", "kind"],
+            "properties": {
+              "option_id": { "type": "string", "maxLength": 256 },
+              "kind": { "$ref": "#/$defs/AcpPermissionOptionKind" }
+            }
+          }
+        }
+      }
+    },
+
+    "OperationKind": {
+      "type": "string",
+      "enum": ["git_push", "pr_create", "pr_comment", "pr_merge", "branch_delete", "worktree_remove", "destructive_command", "external_write"]
+    },
+    "Repeatability": {
+      "description": "repeatable: safe to re-run; idempotent_with_key: the target dedupes by idempotency_key; non_repeatable: must never be re-executed without reconciliation and a fresh approval.",
+      "type": "string",
+      "enum": ["repeatable", "idempotent_with_key", "non_repeatable"]
+    },
+    "ReconcileStrategy": {
+      "description": "Read-only probe used after a crash to learn whether an operation took effect.",
+      "type": "string",
+      "enum": ["remote_ref_compare", "pr_lookup_by_head", "pr_state_lookup", "branch_exists_lookup", "path_exists_lookup", "none"]
+    },
+    "OperationState": {
+      "type": "string",
+      "enum": ["recorded", "started", "succeeded", "failed", "outcome_unknown", "reconciled_applied", "reconciled_not_applied", "reconciled_undeterminable"]
+    },
+    "OperationTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description"],
+      "properties": {
+        "description": { "$ref": "#/$defs/RedactedText" },
+        "remote": { "type": "string", "maxLength": 256 },
+        "ref": { "type": "string", "maxLength": 256 },
+        "expected_sha": { "$ref": "#/$defs/GitSha" },
+        "pr_number": { "type": "integer", "minimum": 1 },
+        "path": { "$ref": "#/$defs/RelativePath" }
+      }
+    },
+
+    "CheckState": {
+      "type": "string",
+      "enum": ["running", "passed", "failed", "errored", "cancelled", "outcome_unknown"]
+    },
+    "CheckOrigin": { "type": "string", "enum": ["local", "ci"] },
+
+    "UsageSource": {
+      "description": "provider_reported: a number the agent or provider gave us; locally_estimated: AgentDock computed it (estimator required); unknown: no number exists.",
+      "type": "string",
+      "enum": ["provider_reported", "locally_estimated", "unknown"]
+    },
+    "UsageReporter": {
+      "type": "string",
+      "enum": ["acp_usage_update", "provider_api", "adapter_output", "host_estimator", "none"]
+    },
+    "TokenCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cache_read": { "type": "integer", "minimum": 0 },
+        "cache_write": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ContextWindow": {
+      "description": "Maps ACP v1 UsageUpdate.used / UsageUpdate.size. Describes the model context, not any subscription.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["used", "size"],
+      "properties": {
+        "used": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Cost": {
+      "description": "Maps ACP v1 Cost {amount, currency}. 'unit' is an ISO 4217 code or another unit such as 'credits'; AgentDock never converts credits to money.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "unit", "basis"],
+      "properties": {
+        "amount": { "type": "number", "minimum": 0 },
+        "unit": { "type": "string", "maxLength": 32 },
+        "basis": { "type": "string", "enum": ["reported", "estimated"] }
+      }
+    },
+    "Usage": {
+      "description": "One usage observation. There is deliberately no field for remaining subscription quota: AgentDock cannot know it, and the UI shows quota as unknown.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage_id", "task_id", "session_id", "source", "reporter", "measured_at", "scope"],
+      "properties": {
+        "usage_id": { "$ref": "#/$defs/UsageId" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "session_id": { "$ref": "#/$defs/SessionId" },
+        "source": { "$ref": "#/$defs/UsageSource" },
+        "reporter": { "$ref": "#/$defs/UsageReporter" },
+        "measured_at": { "$ref": "#/$defs/Timestamp" },
+        "scope": {
+          "description": "snapshot: point-in-time value (context window); cumulative: running total for the session (ACP cost); increment: delta for one turn.",
+          "type": "string",
+          "enum": ["snapshot", "cumulative", "increment"]
+        },
+        "turn_id": { "$ref": "#/$defs/TurnId" },
+        "provider": { "type": "string", "maxLength": 128 },
+        "model": { "type": "string", "maxLength": 128 },
+        "tokens": { "$ref": "#/$defs/TokenCounts" },
+        "context_window": { "$ref": "#/$defs/ContextWindow" },
+        "cost": { "$ref": "#/$defs/Cost" },
+        "estimator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version"],
+          "properties": {
+            "id": { "type": "string", "maxLength": 64 },
+            "version": { "type": "string", "maxLength": 32 }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "source": { "const": "unknown" } } },
+          "then": {
+            "properties": { "reporter": { "const": "none" } },
+            "not": { "anyOf": [ { "required": ["tokens"] }, { "required": ["context_window"] }, { "required": ["cost"] } ] }
+          }
+        },
+        {
+          "if": { "properties": { "source": { "const": "locally_estimated" } } },
+          "then": {
+            "required": ["estimator"],
+            "properties": { "reporter": { "const": "host_estimator" }, "cost": { "properties": { "basis": { "const": "estimated" } } } }
+          }
+        },
+        {
+          "if": { "properties": { "source": { "const": "provider_reported" } } },
+          "then": {
+            "not": { "required": ["estimator"] },
+            "properties": { "reporter": { "enum": ["acp_usage_update", "provider_api", "adapter_output"] }, "cost": { "properties": { "basis": { "const": "reported" } } } }
+          }
+        }
+      ]
+    },
+
+    "SummarySource": { "type": "string", "enum": ["agent_generated", "host_generated", "user_written"] },
+    "SummaryPurpose": { "type": "string", "enum": ["interruption", "handoff", "completion"] },
+
+    "Project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "name", "local_path", "environment_id", "created_at"],
+      "properties": {
+        "project_id": { "$ref": "#/$defs/ProjectId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "local_path": { "description": "Absolute, canonicalized (symlinks resolved) repository root on the authority's host.", "type": "string", "minLength": 1, "maxLength": 4096 },
+        "remote_origin": { "type": "string", "maxLength": 2048 },
+        "environment_id": { "type": "string", "pattern": "^(local|wsl:[A-Za-z0-9._-]{1,64}|remote:[a-z0-9][a-z0-9-]{0,47})$" },
+        "default_branch": { "type": "string", "maxLength": 256 },
+        "created_at": { "$ref": "#/$defs/Timestamp" }
+      }
+    },
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "project_id", "objective", "state", "auto_resume_policy", "created_at", "updated_at", "last_seq"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "project_id": { "$ref": "#/$defs/ProjectId" },
+        "objective": { "$ref": "#/$defs/RedactedText" },
+        "state": { "$ref": "#/$defs/TaskState" },
+        "issue_url": { "type": "string", "maxLength": 2048 },
+        "branch": { "type": "string", "maxLength": 256 },
+        "worktree_path": { "type": "string", "maxLength": 4096 },
+        "primary_session_id": { "$ref": "#/$defs/SessionId" },
+        "resume_phase": { "$ref": "#/$defs/ResumePhase" },
+        "interruption": { "$ref": "#/$defs/Interruption" },
+        "failure": { "$ref": "#/$defs/Failure" },
+        "auto_resume_policy": { "$ref": "#/$defs/AutoResumePolicy" },
+        "outcome_acknowledged_at": { "$ref": "#/$defs/Timestamp" },
+        "created_at": { "$ref": "#/$defs/Timestamp" },
+        "updated_at": { "$ref": "#/$defs/Timestamp" },
+        "last_seq": { "$ref": "#/$defs/Seq" }
+      }
+    },
+    "Session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "task_id", "role", "adapter_id", "state", "launch_method", "collapsed", "created_at"],
+      "properties": {
+        "session_id": { "$ref": "#/$defs/SessionId" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "parent_session_id": { "$ref": "#/$defs/SessionId" },
+        "role": { "$ref": "#/$defs/SessionRole" },
+        "adapter_id": { "$ref": "#/$defs/AdapterId" },
+        "state": { "$ref": "#/$defs/SessionState" },
+        "external_session_id": { "description": "ACP sessionId, opaque. Only meaningful to the adapter that issued it.", "type": "string", "maxLength": 512 },
+        "launch_method": { "$ref": "#/$defs/LaunchMethod" },
+        "supersedes_session_id": { "$ref": "#/$defs/SessionId" },
+        "handoff_summary_id": { "$ref": "#/$defs/SummaryId" },
+        "capability_snapshot": { "$ref": "#/$defs/CapabilitySnapshot" },
+        "outcome": { "$ref": "#/$defs/SessionOutcome" },
+        "result_acknowledged_at": { "$ref": "#/$defs/Timestamp" },
+        "collapsed": { "type": "boolean" },
+        "collapsed_by": { "type": "string", "enum": ["user", "auto"] },
+        "created_at": { "$ref": "#/$defs/Timestamp" },
+        "closed_at": { "$ref": "#/$defs/Timestamp" }
+      }
+    },
+    "Approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "task_id", "source", "state", "operation_kind", "operation_fingerprint", "title", "scope", "return_state", "requested_at"],
+      "properties": {
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "session_id": { "$ref": "#/$defs/SessionId" },
+        "source": { "$ref": "#/$defs/ApprovalSource" },
+        "state": { "$ref": "#/$defs/ApprovalState" },
+        "operation_kind": { "description": "OperationKind for host_policy approvals; 'tool_call' for ACP permissions.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "operation_fingerprint": { "description": "sha256 over the canonical JSON of {kind, target, parameters}. A grant only authorizes an execution with the same fingerprint.", "$ref": "#/$defs/Sha256" },
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "title": { "$ref": "#/$defs/RedactedText" },
+        "scope": { "$ref": "#/$defs/ApprovalScope" },
+        "return_state": { "$ref": "#/$defs/ApprovalReturnState" },
+        "acp": { "$ref": "#/$defs/AcpPermissionContext" },
+        "selected_option_id": { "type": "string", "maxLength": 256 },
+        "requested_at": { "$ref": "#/$defs/Timestamp" },
+        "expires_at": { "$ref": "#/$defs/Timestamp" },
+        "decided_at": { "$ref": "#/$defs/Timestamp" },
+        "decided_by": { "$ref": "#/$defs/Actor" }
+      }
+    },
+    "Operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "task_id", "kind", "repeatability", "idempotency_key", "target", "reconcile_strategy", "state", "attempt_count"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "kind": { "$ref": "#/$defs/OperationKind" },
+        "repeatability": { "$ref": "#/$defs/Repeatability" },
+        "idempotency_key": { "$ref": "#/$defs/Sha256" },
+        "target": { "$ref": "#/$defs/OperationTarget" },
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "reconcile_strategy": { "$ref": "#/$defs/ReconcileStrategy" },
+        "state": { "$ref": "#/$defs/OperationState" },
+        "attempt_count": { "type": "integer", "minimum": 0, "maximum": 1, "description": "Non-repeatable operations are executed at most once per operation_id. A retry is a new operation that supersedes this one." },
+        "supersedes_operation_id": { "$ref": "#/$defs/OperationId" }
+      }
+    },
+    "Check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "task_id", "name", "origin", "state", "started_at"],
+      "properties": {
+        "check_id": { "$ref": "#/$defs/CheckId" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "session_id": { "$ref": "#/$defs/SessionId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "origin": { "$ref": "#/$defs/CheckOrigin" },
+        "state": { "$ref": "#/$defs/CheckState" },
+        "command": { "description": "argv after redaction; never a shell string.", "type": "array", "items": { "$ref": "#/$defs/RedactedText" } },
+        "cwd": { "$ref": "#/$defs/RelativePath" },
+        "exit_code": { "type": "integer" },
+        "artifact": { "$ref": "#/$defs/ArtifactRef" },
+        "external_url": { "type": "string", "maxLength": 2048 },
+        "started_at": { "$ref": "#/$defs/Timestamp" },
+        "finished_at": { "$ref": "#/$defs/Timestamp" }
+      }
+    },
+
+    "AttentionKind": {
+      "description": "needs_reply: blocked on the user; needs_review: a result the user has not looked at; background: progressing without the user.",
+      "type": "string",
+      "enum": ["needs_reply", "needs_review", "background"]
+    },
+    "AttentionReason": {
+      "type": "string",
+      "enum": [
+        "approval_pending", "agent_turn_ended", "interruption_needs_decision", "failure_needs_decision",
+        "child_result_unviewed", "task_outcome_unviewed",
+        "agent_working", "workflow_step", "queued", "waiting_for_reset"
+      ]
+    },
+    "AttentionItem": {
+      "description": "Derived (never stored) to-do item. Computed purely from events by the rules in docs/contracts/attention.md.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason", "task_id"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/AttentionKind" },
+        "reason": { "$ref": "#/$defs/AttentionReason" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "session_id": { "$ref": "#/$defs/SessionId" },
+        "ref_id": { "description": "Approval id or other referenced entity id.", "type": "string", "maxLength": 64 }
+      }
+    },
+
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "task.created", "task.state_changed", "task.checkpoint_recorded", "task.outcome_acknowledged",
+        "session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted",
+        "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded",
+        "session.output_limited", "session.result_acknowledged", "session.collapsed", "session.expanded",
+        "approval.requested", "approval.resolved",
+        "operation.recorded", "operation.started", "operation.succeeded", "operation.failed",
+        "operation.outcome_unknown", "operation.reconciled",
+        "check.started", "check.finished",
+        "usage.reported",
+        "system.recovery_started", "system.recovery_completed"
+      ]
+    },
+    "Provenance": {
+      "description": "live: observed as it happened; acp_replay: history re-sent by an agent during session/load (never treated as new work); recovery: written by startup crash recovery.",
+      "type": "string",
+      "enum": ["live", "acp_replay", "recovery"]
+    },
+    "Redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "applied_rules"],
+      "properties": {
+        "policy_version": { "type": "integer", "minimum": 1 },
+        "applied_rules": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" } }
+      }
+    },
+
+    "TaskCreatedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective", "state", "auto_resume_policy"],
+      "properties": {
+        "objective": { "$ref": "#/$defs/RedactedText" },
+        "state": { "const": "queued" },
+        "issue_url": { "type": "string", "maxLength": 2048 },
+        "branch": { "type": "string", "maxLength": 256 },
+        "worktree_path": { "type": "string", "maxLength": 4096 },
+        "auto_resume_policy": { "$ref": "#/$defs/AutoResumePolicy" }
+      }
+    },
+    "TaskStateChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "trigger"],
+      "properties": {
+        "from": { "$ref": "#/$defs/TaskState" },
+        "to": { "$ref": "#/$defs/TaskState" },
+        "trigger": { "$ref": "#/$defs/TaskTrigger" },
+        "resume_phase": { "$ref": "#/$defs/ResumePhase" },
+        "return_state": { "$ref": "#/$defs/ApprovalReturnState" },
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "interruption": { "$ref": "#/$defs/Interruption" },
+        "failure": { "$ref": "#/$defs/Failure" },
+        "checkpoint_id": { "$ref": "#/$defs/CheckpointId" }
+      },
+      "allOf": [
+        { "if": { "properties": { "to": { "const": "interrupted" } } }, "then": { "required": ["interruption"] }, "else": { "not": { "required": ["interruption"] } } },
+        { "if": { "properties": { "to": { "const": "failed" } } }, "then": { "required": ["failure"] }, "else": { "not": { "required": ["failure"] } } },
+        { "if": { "properties": { "to": { "const": "awaiting_approval" } } }, "then": { "required": ["return_state", "approval_id"] } },
+        { "if": { "properties": { "from": { "const": "awaiting_approval" } } }, "then": { "required": ["approval_id"] } },
+        { "if": { "properties": { "from": { "const": "preparing" }, "to": { "enum": ["verifying", "review", "pr", "ci"] } } }, "then": { "required": ["resume_phase"] } },
+        { "if": { "properties": { "from": { "const": "interrupted" }, "to": { "const": "queued" } } }, "then": { "required": ["resume_phase"] } }
+      ]
+    },
+    "TaskCheckpointRecordedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint_id", "phase", "through_seq", "open_operation_ids", "pending_approval_ids"],
+      "properties": {
+        "checkpoint_id": { "$ref": "#/$defs/CheckpointId" },
+        "phase": { "$ref": "#/$defs/TaskState" },
+        "through_seq": { "$ref": "#/$defs/Seq" },
+        "worktree": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head_sha", "branch", "dirty"],
+          "properties": {
+            "head_sha": { "$ref": "#/$defs/GitSha" },
+            "branch": { "type": "string", "maxLength": 256 },
+            "dirty": { "type": "boolean" },
+            "diff_sha256": { "$ref": "#/$defs/Sha256" }
+          }
+        },
+        "open_operation_ids": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } },
+        "pending_approval_ids": { "type": "array", "items": { "$ref": "#/$defs/ApprovalId" } }
+      }
+    },
+    "TaskOutcomeAcknowledgedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acknowledged_state"],
+      "properties": { "acknowledged_state": { "$ref": "#/$defs/TaskState" } }
+    },
+    "SessionCreatedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "adapter_id", "launch_method"],
+      "properties": {
+        "role": { "$ref": "#/$defs/SessionRole" },
+        "parent_session_id": { "$ref": "#/$defs/SessionId" },
+        "adapter_id": { "$ref": "#/$defs/AdapterId" },
+        "launch_method": { "$ref": "#/$defs/LaunchMethod" },
+        "external_session_id": { "type": "string", "maxLength": 512 },
+        "supersedes_session_id": { "$ref": "#/$defs/SessionId" },
+        "handoff_summary_id": { "$ref": "#/$defs/SummaryId" }
+      },
+      "allOf": [
+        { "if": { "properties": { "launch_method": { "enum": ["load", "resume"] } } }, "then": { "required": ["external_session_id"] } }
+      ]
+    },
+    "SessionCapabilitiesDetectedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot"],
+      "properties": { "snapshot": { "$ref": "#/$defs/CapabilitySnapshot" } }
+    },
+    "SessionStateChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "trigger"],
+      "properties": {
+        "from": { "$ref": "#/$defs/SessionState" },
+        "to": { "$ref": "#/$defs/SessionState" },
+        "trigger": { "$ref": "#/$defs/SessionTrigger" },
+        "turn_id": { "$ref": "#/$defs/TurnId" },
+        "stop_reason": { "$ref": "#/$defs/AcpStopReason" },
+        "external_session_id": { "type": "string", "maxLength": 512 },
+        "launch_method": { "$ref": "#/$defs/LaunchMethod" },
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "outcome": { "$ref": "#/$defs/SessionOutcome" },
+        "error": { "$ref": "#/$defs/Failure" }
+      },
+      "allOf": [
+        { "if": { "properties": { "trigger": { "const": "turn_ended" } } }, "then": { "required": ["stop_reason", "turn_id"] } },
+        { "if": { "properties": { "trigger": { "const": "reattach_attempt" } } }, "then": { "required": ["launch_method"], "properties": { "launch_method": { "enum": ["load", "resume"] } } } },
+        { "if": { "properties": { "trigger": { "enum": ["prompt_submitted", "continue_prompt"] } } }, "then": { "required": ["turn_id"] } },
+        { "if": { "properties": { "trigger": { "const": "permission_requested" } } }, "then": { "required": ["approval_id"] } },
+        { "if": { "properties": { "to": { "enum": ["closed", "failed"] } } }, "then": { "required": ["outcome"] } },
+        { "if": { "properties": { "from": { "const": "awaiting_permission" }, "to": { "const": "active" } } }, "then": { "required": ["approval_id"] } }
+      ]
+    },
+    "SessionPromptSubmittedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_id", "origin", "content"],
+      "properties": {
+        "turn_id": { "$ref": "#/$defs/TurnId" },
+        "origin": { "type": "string", "enum": ["user", "orchestrator", "handoff"] },
+        "content": { "$ref": "#/$defs/TextOrRef" },
+        "handoff_summary_id": { "$ref": "#/$defs/SummaryId" }
+      }
+    },
+    "SessionMessageDeltaPayload": {
+      "description": "Coalesced ACP agent_message_chunk / agent_thought_chunk / user_message_chunk text.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "content"],
+      "properties": {
+        "turn_id": { "$ref": "#/$defs/TurnId" },
+        "channel": { "type": "string", "enum": ["agent_message", "agent_thought", "user_message"] },
+        "content": { "$ref": "#/$defs/TextOrRef" },
+        "coalesced_chunks": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "SessionToolCallPayload": {
+      "description": "Maps ACP tool_call and tool_call_update. rawInput/rawOutput are never stored inline; they go through redaction into an artifact.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_call_id", "status"],
+      "properties": {
+        "turn_id": { "$ref": "#/$defs/TurnId" },
+        "tool_call_id": { "type": "string", "maxLength": 256 },
+        "title": { "$ref": "#/$defs/RedactedText" },
+        "kind": { "type": "string", "enum": ["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"] },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "failed"] },
+        "locations": { "type": "array", "items": { "type": "string", "maxLength": 4096 } },
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "raw_io": { "$ref": "#/$defs/ArtifactRef" }
+      }
+    },
+    "SessionPlanUpdatedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["content", "priority", "status"],
+            "properties": {
+              "content": { "$ref": "#/$defs/RedactedText" },
+              "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+              "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+            }
+          }
+        }
+      }
+    },
+    "SessionSummaryRecordedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary_id", "source", "purpose", "through_seq", "content"],
+      "properties": {
+        "summary_id": { "$ref": "#/$defs/SummaryId" },
+        "source": { "$ref": "#/$defs/SummarySource" },
+        "purpose": { "$ref": "#/$defs/SummaryPurpose" },
+        "through_seq": { "$ref": "#/$defs/Seq" },
+        "content": { "$ref": "#/$defs/TextOrRef" }
+      }
+    },
+    "SessionOutputLimitedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit", "action"],
+      "properties": {
+        "turn_id": { "$ref": "#/$defs/TurnId" },
+        "limit": { "type": "string", "enum": ["max_turn_bytes", "max_turn_events", "max_message_bytes"] },
+        "action": { "type": "string", "enum": ["truncated", "turn_cancelled"] },
+        "dropped_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "EmptyPayload": { "type": "object", "additionalProperties": false, "properties": {} },
+    "SessionCollapsedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by"],
+      "properties": { "by": { "type": "string", "enum": ["user", "auto"] } }
+    },
+    "ApprovalRequestedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "source", "operation_kind", "operation_fingerprint", "title", "scope", "return_state"],
+      "properties": {
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "source": { "$ref": "#/$defs/ApprovalSource" },
+        "operation_kind": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "operation_fingerprint": { "$ref": "#/$defs/Sha256" },
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "title": { "$ref": "#/$defs/RedactedText" },
+        "scope": { "$ref": "#/$defs/ApprovalScope" },
+        "return_state": { "$ref": "#/$defs/ApprovalReturnState" },
+        "acp": { "$ref": "#/$defs/AcpPermissionContext" },
+        "expires_at": { "$ref": "#/$defs/Timestamp" }
+      },
+      "allOf": [
+        { "if": { "properties": { "source": { "const": "acp_permission" } } }, "then": { "required": ["acp"] }, "else": { "required": ["operation_id"], "not": { "required": ["acp"] } } }
+      ]
+    },
+    "ApprovalResolvedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "state"],
+      "properties": {
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "state": { "type": "string", "enum": ["approved", "denied", "expired", "cancelled", "invalidated"] },
+        "scope": { "$ref": "#/$defs/ApprovalScope" },
+        "policy_rule_id": { "type": "string", "maxLength": 128 },
+        "acp_outcome": {
+          "description": "What AgentDock answered to session/request_permission. 'cancelled' is mandatory for pending requests when the turn is cancelled.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome"],
+          "properties": {
+            "outcome": { "type": "string", "enum": ["selected", "cancelled"] },
+            "option_id": { "type": "string", "maxLength": 256 }
+          },
+          "allOf": [ { "if": { "properties": { "outcome": { "const": "selected" } } }, "then": { "required": ["option_id"] } } ]
+        }
+      }
+    },
+    "OperationRecordedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "kind", "repeatability", "idempotency_key", "target", "reconcile_strategy"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "kind": { "$ref": "#/$defs/OperationKind" },
+        "repeatability": { "$ref": "#/$defs/Repeatability" },
+        "idempotency_key": { "$ref": "#/$defs/Sha256" },
+        "target": { "$ref": "#/$defs/OperationTarget" },
+        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "reconcile_strategy": { "$ref": "#/$defs/ReconcileStrategy" },
+        "supersedes_operation_id": { "$ref": "#/$defs/OperationId" }
+      }
+    },
+    "OperationStartedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "approval_id"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "approval_id": { "$ref": "#/$defs/ApprovalId" }
+      }
+    },
+    "OperationSucceededPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "remote_sha": { "$ref": "#/$defs/GitSha" },
+            "pr_number": { "type": "integer", "minimum": 1 },
+            "url": { "type": "string", "maxLength": 2048 }
+          }
+        }
+      }
+    },
+    "OperationFailedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "error", "effect"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "error": { "$ref": "#/$defs/Failure" },
+        "effect": { "description": "Whether the failed attempt is known to have had no external effect.", "type": "string", "enum": ["none", "unknown"] }
+      }
+    },
+    "OperationOutcomeUnknownPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id"],
+      "properties": { "operation_id": { "$ref": "#/$defs/OperationId" } }
+    },
+    "OperationReconciledPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "finding"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "finding": { "type": "string", "enum": ["applied", "not_applied", "undeterminable"] },
+        "evidence": { "$ref": "#/$defs/RedactedText" }
+      }
+    },
+    "CheckStartedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "name", "origin"],
+      "properties": {
+        "check_id": { "$ref": "#/$defs/CheckId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "origin": { "$ref": "#/$defs/CheckOrigin" },
+        "command": { "type": "array", "items": { "$ref": "#/$defs/RedactedText" } },
+        "cwd": { "$ref": "#/$defs/RelativePath" },
+        "external_url": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "CheckFinishedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "state"],
+      "properties": {
+        "check_id": { "$ref": "#/$defs/CheckId" },
+        "state": { "type": "string", "enum": ["passed", "failed", "errored", "cancelled", "outcome_unknown"] },
+        "exit_code": { "type": "integer" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "artifact": { "$ref": "#/$defs/ArtifactRef" }
+      }
+    },
+    "UsageReportedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage"],
+      "properties": { "usage": { "$ref": "#/$defs/Usage" } }
+    },
+    "RecoveryStartedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous_run_id", "last_seq_before_crash"],
+      "properties": {
+        "previous_run_id": { "type": "string", "maxLength": 64 },
+        "last_seq_before_crash": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "RecoveryCompletedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tasks_interrupted", "sessions_disconnected", "approvals_invalidated", "operations_marked_unknown", "checks_marked_unknown"],
+      "properties": {
+        "tasks_interrupted": { "type": "array", "items": { "$ref": "#/$defs/TaskId" } },
+        "sessions_disconnected": { "type": "array", "items": { "$ref": "#/$defs/SessionId" } },
+        "approvals_invalidated": { "type": "array", "items": { "$ref": "#/$defs/ApprovalId" } },
+        "operations_marked_unknown": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } },
+        "checks_marked_unknown": { "type": "array", "items": { "$ref": "#/$defs/CheckId" } }
+      }
+    },
+
+    "EventEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "authority_id", "seq", "occurred_at", "recorded_at", "type", "actor", "provenance", "redaction", "payload"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/$defs/EventId" },
+        "authority_id": { "$ref": "#/$defs/AuthorityId" },
+        "seq": { "$ref": "#/$defs/Seq" },
+        "occurred_at": { "$ref": "#/$defs/Timestamp" },
+        "recorded_at": { "$ref": "#/$defs/Timestamp" },
+        "project_id": { "$ref": "#/$defs/ProjectId" },
+        "task_id": { "$ref": "#/$defs/TaskId" },
+        "session_id": { "$ref": "#/$defs/SessionId" },
+        "type": { "$ref": "#/$defs/EventType" },
+        "actor": { "$ref": "#/$defs/Actor" },
+        "provenance": { "$ref": "#/$defs/Provenance" },
+        "causation_id": { "$ref": "#/$defs/EventId" },
+        "correlation_id": { "type": "string", "maxLength": 64 },
+        "redaction": { "$ref": "#/$defs/Redaction" },
+        "payload": { "type": "object" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "enum": ["system.recovery_started", "system.recovery_completed"] } } },
+          "then": { "not": { "anyOf": [ { "required": ["task_id"] }, { "required": ["session_id"] } ] } },
+          "else": { "required": ["project_id", "task_id"] } },
+        { "if": { "properties": { "type": { "enum": ["session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted", "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded", "session.output_limited", "session.result_acknowledged", "session.collapsed", "session.expanded", "usage.reported"] } } },
+          "then": { "required": ["session_id"] } },
+        { "if": { "properties": { "provenance": { "const": "acp_replay" } } },
+          "then": { "properties": { "type": { "enum": ["session.message_delta", "session.tool_call", "session.plan_updated"] } } } },
+        { "if": { "properties": { "type": { "const": "task.created" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskCreatedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "task.state_changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskStateChangedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "task.checkpoint_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskCheckpointRecordedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "task.outcome_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskOutcomeAcknowledgedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.created" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCreatedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.capabilities_detected" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCapabilitiesDetectedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.state_changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionStateChangedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.prompt_submitted" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPromptSubmittedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.message_delta" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionMessageDeltaPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.tool_call" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionToolCallPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.plan_updated" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPlanUpdatedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.summary_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionSummaryRecordedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.output_limited" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionOutputLimitedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.result_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.collapsed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCollapsedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "session.expanded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
+        { "if": { "properties": { "type": { "const": "approval.requested" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalRequestedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "approval.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalResolvedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "operation.recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationRecordedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "operation.started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationStartedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "operation.succeeded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationSucceededPayload" } } } },
+        { "if": { "properties": { "type": { "const": "operation.failed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationFailedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "operation.outcome_unknown" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationOutcomeUnknownPayload" } } } },
+        { "if": { "properties": { "type": { "const": "operation.reconciled" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationReconciledPayload" } } } },
+        { "if": { "properties": { "type": { "const": "check.started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/CheckStartedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "check.finished" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/CheckFinishedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "usage.reported" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/UsageReportedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "system.recovery_started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RecoveryStartedPayload" } } } },
+        { "if": { "properties": { "type": { "const": "system.recovery_completed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RecoveryCompletedPayload" } } } }
+      ]
+    },
+
+    "StreamMessage": {
+      "description": "What a subscriber receives. Not stored. 'lagged' and 'retention_gap' tell the client to re-read from the store instead of trusting the live stream.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "authority_id"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["events", "lagged", "retention_gap", "heartbeat"] },
+        "authority_id": { "$ref": "#/$defs/AuthorityId" },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/EventEnvelope" } },
+        "next_after_seq": { "type": "integer", "minimum": 0 },
+        "resume_after_seq": { "type": "integer", "minimum": 0 },
+        "requested_after_seq": { "type": "integer", "minimum": 0 },
+        "oldest_available_seq": { "type": "integer", "minimum": 1 },
+        "head_seq": { "type": "integer", "minimum": 0 }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "events" } } }, "then": { "required": ["events", "next_after_seq"] } },
+        { "if": { "properties": { "kind": { "const": "lagged" } } }, "then": { "required": ["resume_after_seq"] } },
+        { "if": { "properties": { "kind": { "const": "retention_gap" } } }, "then": { "required": ["requested_after_seq", "oldest_available_seq"] } },
+        { "if": { "properties": { "kind": { "const": "heartbeat" } } }, "then": { "required": ["head_seq"] } }
+      ]
+    },
+
+    "FixtureExpectation": {
+      "description": "Sidecar file for a fixture: the projection the event stream must produce.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture", "description", "final_task_states", "final_session_states", "attention"],
+      "properties": {
+        "fixture": { "type": "string", "pattern": "^[0-9]{2}-[a-z0-9-]+\\.jsonl$" },
+        "description": { "type": "string" },
+        "final_task_states": { "type": "object", "additionalProperties": { "$ref": "#/$defs/TaskState" } },
+        "final_session_states": { "type": "object", "additionalProperties": { "$ref": "#/$defs/SessionState" } },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/AttentionItem" } }
+      }
+    },
+    "ModelSamples": {
+      "description": "Sample read-model objects, used to exercise the entity schemas.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projects", "tasks", "sessions", "approvals", "operations", "checks", "usage", "stream_messages"],
+      "properties": {
+        "projects": { "type": "array", "items": { "$ref": "#/$defs/Project" } },
+        "tasks": { "type": "array", "items": { "$ref": "#/$defs/Task" } },
+        "sessions": { "type": "array", "items": { "$ref": "#/$defs/Session" } },
+        "approvals": { "type": "array", "items": { "$ref": "#/$defs/Approval" } },
+        "operations": { "type": "array", "items": { "$ref": "#/$defs/Operation" } },
+        "checks": { "type": "array", "items": { "$ref": "#/$defs/Check" } },
+        "usage": { "type": "array", "items": { "$ref": "#/$defs/Usage" } },
+        "stream_messages": { "type": "array", "items": { "$ref": "#/$defs/StreamMessage" } }
+      }
+    }
+  }
+}

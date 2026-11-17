@@ -1,0 +1,17 @@
+{
+  "fixture": "04-disconnect-resume-reattach.jsonl",
+  "description": "Agent process exits mid-turn; the user resumes; the adapter advertised sessionCapabilities.resume so the same session is reattached; checks fail twice and the task fails.",
+  "final_task_states": {
+    "tsk_01JDQ004000000000000000001": "failed"
+  },
+  "final_session_states": {
+    "ses_01JDQ004000000000000000001": "closed"
+  },
+  "attention": [
+    {
+      "kind": "needs_reply",
+      "reason": "failure_needs_decision",
+      "task_id": "tsk_01JDQ004000000000000000001"
+    }
+  ]
+}
