@@ -47,8 +47,10 @@ export class SessionStore {
         status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
         selected_option TEXT
       );
-      CREATE TABLE IF NOT EXISTS attention_dismissals (
-        id TEXT PRIMARY KEY, dismissed_at TEXT NOT NULL
+      CREATE TABLE IF NOT EXISTS attention_views (
+        session_id TEXT PRIMARY KEY, cursor INTEGER NOT NULL,
+        status TEXT NOT NULL, viewed_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id)
       );
     `);
     // There are no automatically resumed agent connections at process restart.
@@ -85,14 +87,32 @@ export class SessionStore {
     return rows.map(r => ({ seq: r.seq, sessionId: r.session_id, kind: r.kind, data: JSON.parse(r.data), createdAt: r.created_at }));
   }
   latestEvent(sessionId) {
-    const row = this.db.prepare('SELECT seq,kind,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);
-    return row ?? null;
+    const row = this.db.prepare('SELECT seq,kind,data,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);
+    if (!row) return null;
+    // Only the stop reason is read back, never prompt/tool/agent text.
+    let stopReason = null;
+    if (row.kind === 'turn_finished') {
+      try {
+        const value = JSON.parse(row.data)?.stopReason;
+        stopReason = typeof value === 'string' ? value.slice(0, 40) : null;
+      } catch { stopReason = null; }
+    }
+    return { seq: row.seq, kind: row.kind, stopReason, createdAt: row.created_at };
   }
-  wasDismissed(id) {
-    return !!this.db.prepare('SELECT id FROM attention_dismissals WHERE id=?').get(id);
+  attentionView(sessionId) {
+    return this.db.prepare('SELECT cursor,status,viewed_at FROM attention_views WHERE session_id=?').get(sessionId) ?? null;
   }
-  dismissAttention(id) {
-    this.db.prepare('INSERT OR IGNORE INTO attention_dismissals(id,dismissed_at) VALUES(?,?)').run(id, new Date().toISOString());
+  /**
+   * Records that the user saw the session up to `cursor` while it had its
+   * current status. Never moves backwards; it changes no session state.
+   */
+  markViewed(sessionId, cursor) {
+    const session = this.get(sessionId);
+    if (!session) throw new Error('session not found');
+    this.db.prepare(`INSERT INTO attention_views(session_id,cursor,status,viewed_at) VALUES(?,?,?,?)
+      ON CONFLICT(session_id) DO UPDATE SET cursor=excluded.cursor,status=excluded.status,viewed_at=excluded.viewed_at
+      WHERE excluded.cursor>=attention_views.cursor`)
+      .run(sessionId, cursor, session.status, new Date().toISOString());
   }
   createApproval(approval) {
     this.db.prepare('INSERT INTO approvals VALUES(?,?,?,?,?,?,?,NULL)').run(
