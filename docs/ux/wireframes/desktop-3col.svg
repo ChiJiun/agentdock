@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 940" width="1440" height="940" role="img" aria-labelledby="t d">
+  <title id="t">AgentDock desktop wireframe, 3 columns (wide layout, 1280px and up)</title>
+  <desc id="d">Top bar with switcher trigger, usage and inbox; left sidebar with pinned and project groups and nested sub-tasks; main session column with header, timeline, approval card and composer with suggestions; right review panel with changes, checks and findings. Numbered callouts map to docs/ux/wireframes.md.</desc>
+  <style>
+    text { font-family: "Segoe UI", system-ui, sans-serif; fill: #1f2630; }
+    .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+    .s { font-size: 12px; } .m { font-size: 14px; } .l { font-size: 17px; font-weight: 600; } .xs { font-size: 11px; fill: #5b6472; }
+    .box { fill: #ffffff; stroke: #9aa3b0; stroke-width: 1; }
+    .sunk { fill: #eef0f3; stroke: #c4cad3; }
+    .line { stroke: #c4cad3; stroke-width: 1; }
+    .sel { fill: #dcefec; stroke: #0a6b66; stroke-width: 1.5; }
+    .acc { fill: #0a6b66; } .acct { fill: #ffffff; font-weight: 600; }
+    .warn { fill: #fbebd6; stroke: #8f4e00; stroke-width: 2; }
+    .dash { fill: none; stroke: #7a8394; stroke-dasharray: 5 4; }
+    .co circle { fill: #151a22; } .co text { fill: #ffffff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+    .ph { fill: #d5dae1; }
+  </style>
+  <rect width="1440" height="940" fill="#f5f6f8"/>
+
+  <!-- Top bar -->
+  <rect x="0" y="0" width="1440" height="48" fill="#f5f6f8" stroke="#c4cad3"/>
+  <text x="18" y="30" class="m">≡</text>
+  <rect x="44" y="17" width="14" height="5" class="acc"/><rect x="44" y="26" width="20" height="5" class="acc" opacity=".6"/>
+  <text x="72" y="30" class="m" font-weight="600">AgentDock</text>
+  <rect x="500" y="10" width="440" height="28" rx="4" class="box"/>
+  <text x="516" y="29" class="s" style="fill:#5b6472">⌕  Switch session or search…</text>
+  <text x="880" y="29" class="xs">Ctrl K</text>
+  <text x="1130" y="30" class="s">◔ Usage</text><rect x="1190" y="16" width="44" height="18" rx="9" class="dash"/><text x="1197" y="29" class="xs">≥80%</text>
+  <path d="M1258 30v-7a6 6 0 0 1 12 0v7l2 2h-16z M1262 35h4" fill="none" stroke="#8f4e00" stroke-width="1.6"/>
+  <rect x="1278" y="15" width="22" height="18" rx="2" fill="#8f4e00"/><text x="1282" y="29" class="s" style="fill:#fff" font-weight="700">!6</text>
+  <circle cx="1312" cy="24" r="5" fill="none" stroke="#1d5fc2" stroke-width="2" stroke-dasharray="20 12"/>
+  <text x="1340" y="30" class="s">◐</text><text x="1370" y="30" class="s">⌨</text><text x="1400" y="30" class="s">⚙</text>
+
+  <!-- Sidebar -->
+  <rect x="0" y="48" width="280" height="892" class="sunk"/>
+  <rect x="14" y="62" width="252" height="32" rx="4" class="acc"/><text x="28" y="83" class="s acct">+  New task</text><text x="222" y="83" class="xs" style="fill:#fff">Alt N</text>
+  <text x="18" y="122" class="xs" font-weight="600">▾ PINNED</text><text x="232" y="122" class="xs">Alt+1…3</text>
+  <rect x="10" y="130" width="262" height="28" rx="4" class="sel"/>
+  <text x="24" y="149" class="s">▾ ◌  Implement attention inbox pop…</text><text x="246" y="149" class="xs">1m</text>
+  <text x="44" y="177" class="s">◌  Write unit tests for atte…  ≋</text><text x="246" y="177" class="xs">now</text>
+  <text x="44" y="203" class="s">◷  Independent review (fresh…  ≋</text><text x="246" y="203" class="xs">2m</text>
+  <text x="44" y="229" class="s" font-weight="600">●✓ Explore existing…</text><rect x="168" y="217" width="40" height="16" rx="8" fill="none" stroke="#0a6b66"/><text x="174" y="229" class="xs" style="fill:#0a6b66">2 new</text><text x="246" y="229" class="xs">4m</text>
+  <text x="44" y="255" class="xs">›  ▤ Show 2 archived sub-tasks</text>
+  <text x="24" y="283" class="s">○✓ Migrate event store to SQLite…</text><text x="246" y="283" class="xs">2h</text>
+  <text x="24" y="309" class="s" font-weight="600">◆! Fix flaky worktree clea…</text><text x="246" y="309" class="xs">3m</text>
+  <text x="18" y="345" class="xs" font-weight="600">▾ agentdock</text><text x="256" y="345" class="xs">1</text>
+  <text x="24" y="371" class="s" font-weight="600">⏸ Set up CI for docs lint</text><text x="246" y="371" class="xs">3h</text>
+  <text x="24" y="397" class="xs">⌕ 26 archived — search with Ctrl+K</text>
+  <text x="18" y="433" class="xs" font-weight="600">▾ acp-adapter</text><text x="236" y="433" class="xs">◆ 1</text>
+  <text x="24" y="459" class="s" font-weight="600">▾ ▣? Draft README for adapter…</text><text x="246" y="459" class="xs">12m</text>
+  <text x="44" y="485" class="s" font-weight="600">▲! Collect capability flags…</text><text x="246" y="485" class="xs">15m</text>
+  <text x="18" y="521" class="xs" font-weight="600">▾ thesis-lab  ▭▭ remote</text>
+  <text x="24" y="547" class="s" font-weight="600">› ◌ Regenerate fig…</text><text x="150" y="547" class="xs">1 running · 3 new</text><text x="246" y="547" class="xs">now</text>
+  <text x="24" y="573" class="s" font-weight="600">◒× Benchmark baseline vs ro…</text><text x="246" y="573" class="xs">30m</text>
+
+  <!-- Main column -->
+  <rect x="280" y="48" width="720" height="892" fill="#ffffff" stroke="#c4cad3"/>
+  <text x="300" y="72" class="xs">▢ agentdock / ⑂ feat/inbox · wt/feat-inbox</text>
+  <text x="300" y="96" class="l">Implement attention inbox popover</text>
+  <rect x="300" y="106" width="80" height="20" rx="10" class="sunk"/><text x="310" y="120" class="xs">◌ Running</text>
+  <rect x="386" y="106" width="84" height="20" rx="10" class="box"/><text x="396" y="120" class="xs">▭ Local task</text>
+  <rect x="476" y="106" width="200" height="20" rx="10" class="box"/><text x="486" y="120" class="xs">CC Claude Code · model (adapter)</text>
+  <rect x="752" y="84" width="70" height="30" rx="4" class="box"/><text x="764" y="104" class="s">■ Stop</text>
+  <rect x="830" y="84" width="152" height="30" rx="4" class="box"/><text x="842" y="104" class="s">▯ Changes +254 −3</text>
+  <line x1="280" y1="138" x2="1000" y2="138" class="line"/>
+  <rect x="280" y="138" width="720" height="30" class="warn" stroke-width="0"/><text x="300" y="158" class="s">◆!  Approval required: git worktree remove --force …   (only while the card is scrolled away)</text><rect x="930" y="143" width="52" height="20" rx="4" class="box"/><text x="941" y="157" class="xs">Show</text>
+
+  <rect x="560" y="186" width="420" height="44" rx="10" class="sunk"/><text x="574" y="212" class="s">User message (right aligned)</text>
+  <text x="320" y="252" class="xs">CC Claude Code</text>
+  <rect x="320" y="260" width="560" height="10" rx="3" class="ph"/><rect x="320" y="276" width="460" height="10" rx="3" class="ph"/>
+  <rect x="320" y="298" width="660" height="92" rx="6" class="box"/><text x="334" y="318" class="s" font-weight="600">☰ Plan  2/5 done</text>
+  <text x="340" y="340" class="xs">✓ Read spec   ✓ classify() + tests   ◌ Build popover   ◷ Focus return   ◷ Tests + lint</text>
+  <rect x="320" y="400" width="660" height="30" rx="6" class="box"/><text x="334" y="420" class="s mono">›  tool: read_file  docs/ux/states-and-indicators.md</text><text x="910" y="420" class="xs">212 lines</text>
+  <rect x="320" y="438" width="660" height="30" rx="6" class="box"/><text x="334" y="458" class="s mono">›  tool: run  pnpm vitest run inbox</text><text x="912" y="458" class="xs">18 passed</text>
+  <rect x="320" y="480" width="660" height="150" rx="6" class="warn"/>
+  <text x="336" y="502" class="s" font-weight="700" style="fill:#8f4e00">◆!  APPROVAL REQUIRED</text>
+  <text x="336" y="524" class="m" font-weight="600">Run command</text>
+  <rect x="336" y="532" width="628" height="26" rx="4" fill="#eef0f3"/><text x="346" y="550" class="s mono">git worktree remove --force ../wt/fix-flake-old</text>
+  <text x="336" y="576" class="xs">Effect: deletes a worktree and discards uncommitted changes · Scope · Rule</text>
+  <rect x="336" y="590" width="104" height="28" rx="4" class="acc"/><text x="348" y="609" class="s acct">Approve once</text>
+  <rect x="448" y="590" width="58" height="28" rx="4" class="box"/><text x="460" y="609" class="s">Deny</text>
+  <text x="520" y="609" class="xs">No keyboard shortcut approves. Enforced by AgentDock.</text>
+  <rect x="560" y="648" width="160" height="28" rx="14" class="box"/><text x="576" y="667" class="s">↓ 3 new below · Jump</text>
+
+  <line x1="280" y1="696" x2="1000" y2="696" class="line"/>
+  <text x="320" y="720" class="xs">Suggested next:</text>
+  <rect x="408" y="706" width="170" height="22" rx="11" class="box"/><text x="420" y="721" class="xs">Focus on the failing test first</text>
+  <rect x="586" y="706" width="176" height="22" rx="11" class="box"/><text x="598" y="721" class="xs">Explain the plan before editing</text>
+  <rect x="770" y="706" width="136" height="22" rx="11" class="box"/><text x="782" y="721" class="xs">Pause after next file</text>
+  <rect x="320" y="740" width="660" height="110" rx="6" class="box" stroke-width="1.5"/>
+  <text x="338" y="768" class="m" style="fill:#5f6878">Focus on the failing test first</text><rect x="548" y="755" width="30" height="18" rx="2" class="sunk"/><text x="553" y="768" class="xs">Tab</text>
+  <text x="338" y="836" class="xs">Enter send · Shift+Enter newline · Tab inserts suggestion</text>
+  <rect x="826" y="818" width="60" height="24" rx="4" class="box"/><text x="838" y="834" class="xs">■ Stop</text>
+  <rect x="894" y="818" width="72" height="24" rx="4" class="acc"/><text x="906" y="834" class="xs acct">↑ Steer</text>
+
+  <!-- Review panel -->
+  <rect x="1000" y="48" width="440" height="892" fill="#ffffff" stroke="#c4cad3"/>
+  <text x="1018" y="76" class="m" font-weight="600">Review changes</text><text x="1414" y="76" class="m">×</text>
+  <text x="1018" y="94" class="xs mono">wt/feat-inbox vs main · 4 files +254 −3</text>
+  <text x="1018" y="124" class="s" font-weight="600">Changes (4)</text><line x1="1018" y1="132" x2="1100" y2="132" stroke="#0a6b66" stroke-width="2"/>
+  <text x="1118" y="124" class="s">Checks (1 failed)</text><text x="1240" y="124" class="s">Findings (1 blocking)</text>
+  <line x1="1000" y1="136" x2="1440" y2="136" class="line"/>
+  <rect x="1008" y="144" width="424" height="26" rx="4" class="sel"/>
+  <text x="1018" y="162" class="s mono">A  …/inbox/InboxButton.tsx</text><text x="1370" y="162" class="xs">+84 −0</text>
+  <text x="1018" y="190" class="s mono">A  …/inbox/classify.ts</text><text x="1370" y="190" class="xs">+61 −0</text>
+  <text x="1018" y="216" class="s mono">M  …/shell/TopBar.tsx</text><text x="1370" y="216" class="xs">+12 −3</text>
+  <text x="1018" y="242" class="s mono">A  …/inbox/classify.test.ts</text><text x="1370" y="242" class="xs">+97 −0</text>
+  <line x1="1000" y1="256" x2="1440" y2="256" class="line"/>
+  <rect x="1000" y="256" width="440" height="26" fill="#eef0f3"/><text x="1014" y="274" class="s mono" font-weight="600">packages/ui/src/inbox/InboxButton.tsx</text>
+  <text x="1014" y="302" class="xs mono">@@ -18,9 +18,14 @@</text>
+  <rect x="1000" y="310" width="440" height="20" fill="#fbe6e4"/><text x="1010" y="324" class="xs mono">−  if (state === "waiting") return "reply";</text>
+  <rect x="1000" y="330" width="440" height="20" fill="#e3f4e8"/><text x="1010" y="344" class="xs mono">+  if (state === "awaiting-approval") return "reply";</text>
+  <rect x="1000" y="350" width="440" height="20" fill="#e3f4e8"/><text x="1010" y="364" class="xs mono">+  if (state === "awaiting-input") return "reply";</text>
+  <text x="1010" y="384" class="xs mono">   if (id === currentId) return null;</text>
+  <text x="1014" y="420" class="xs">Diff lines carry “+” / “−” text and screen-reader prefixes, not colour alone.</text>
+  <line x1="1000" y1="786" x2="1440" y2="786" class="line"/>
+  <text x="1018" y="808" class="xs">Comment to the agent (sent into this session)</text>
+  <rect x="1018" y="816" width="404" height="56" rx="4" class="box"/>
+  <rect x="1018" y="882" width="130" height="26" rx="4" class="box"/><text x="1030" y="900" class="xs">▢ Send to session</text>
+
+  <!-- Callouts -->
+  <g class="co"><circle cx="490" cy="24" r="10"/><text x="490" y="28">1</text></g>
+  <g class="co"><circle cx="1120" cy="24" r="10"/><text x="1120" y="28">2</text></g>
+  <g class="co"><circle cx="1328" cy="12" r="10"/><text x="1328" y="16">3</text></g>
+  <g class="co"><circle cx="270" cy="78" r="10"/><text x="270" y="82">4</text></g>
+  <g class="co"><circle cx="270" cy="122" r="10"/><text x="270" y="126">5</text></g>
+  <g class="co"><circle cx="34" cy="255" r="10"/><text x="34" y="259">6</text></g>
+  <g class="co"><circle cx="270" cy="397" r="10"/><text x="270" y="401">7</text></g>
+  <g class="co"><circle cx="990" cy="100" r="10"/><text x="990" y="104">8</text></g>
+  <g class="co"><circle cx="990" cy="153" r="10"/><text x="990" y="157">9</text></g>
+  <g class="co"><circle cx="990" cy="414" r="10"/><text x="990" y="418">10</text></g>
+  <g class="co"><circle cx="990" cy="500" r="10"/><text x="990" y="504">11</text></g>
+  <g class="co"><circle cx="730" cy="662" r="10"/><text x="730" y="666">12</text></g>
+  <g class="co"><circle cx="990" cy="717" r="10"/><text x="990" y="721">13</text></g>
+  <g class="co"><circle cx="990" cy="760" r="10"/><text x="990" y="764">14</text></g>
+  <g class="co"><circle cx="1428" cy="124" r="10"/><text x="1428" y="128">15</text></g>
+  <g class="co"><circle cx="1428" cy="290" r="10"/><text x="1428" y="294">16</text></g>
+  <g class="co"><circle cx="1428" cy="808" r="10"/><text x="1428" y="812">17</text></g>
+  <text x="300" y="930" class="xs">Low-fidelity wireframe · glyphs approximate the shape-coded status icons (see states-and-indicators.md) · not to scale for typography</text>
+</svg>
