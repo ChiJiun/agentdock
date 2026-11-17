@@ -18,26 +18,28 @@ Status: Proposed with [ADR-0003](../decisions/0003-task-session-event-contracts.
 ## Validate
 
 ```sh
-python docs/contracts/validate_fixtures.py
+python -B docs/contracts/validate_fixtures.py
 ```
 
-Python ≥ 3.10, standard library only, no install. Exit code 0 means:
+Python ≥ 3.10, standard library only, no install. `-B` (or `PYTHONDONTWRITEBYTECODE=1`) keeps Python from writing a `__pycache__/` next to the scripts. Exit code 0 means:
 
 - the schema uses only the supported keyword subset (so nothing in it is silently ignored);
 - every fixture line is a valid `EventEnvelope`, every `*.expected.json` a valid `FixtureExpectation`, `models.sample.json` a valid `ModelSamples`;
-- semantic rules hold (gap-free cursor, legal transitions with allowed actors/triggers/conditions, approval/operation/check lifecycles, recovery invariants, no automatic replay of non-repeatable operations, capability-gated reattach, auto-resume and auto-collapse rules);
+- semantic rules hold (gap-free cursor, legal transitions with allowed actors/triggers/conditions, approval/operation/check lifecycles incl. abandon and supersede, blocking vs non-blocking approvals, user-only approval kinds, recomputed idempotency keys and fingerprints, operation kinds bound to task states, recovery invariants, bounded `resume_phase`, no automatic replay of non-repeatable operations, capability-gated reattach with `features` re-derived from raw ACP capabilities, tombstoned task deletion, auto-resume and auto-collapse rules);
 - each fixture's final task/session states and derived attention items equal its expectation;
 - every transition in `transitions.json` is exercised by at least one fixture;
 - no key anywhere implies a known subscription-quota balance;
-- 17 deliberate rule-breaking mutations are each rejected with the expected message.
+- 40 deliberate rule-breaking mutations are each rejected with the expected message (each asserts a specific error text, so a mutation caught by an unrelated rule fails the self-test).
 
-Regenerate fixtures after changing scenarios: `python docs/contracts/generate_fixtures.py` then validate. Fixtures are committed; the generator is a convenience, not a build step.
+Regenerate fixtures after changing scenarios: `python -B docs/contracts/generate_fixtures.py` then validate. Fixtures are committed; the generator is a convenience, not a build step.
 
 The validator implements a JSON Schema **subset**. Before relying on the schema in CI (issue #4), also run a full 2020-12 validator (e.g. `check-jsonschema` or the Rust `jsonschema` crate) over the same files.
 
 ### Schema keyword subset
 
-Allowed: `$schema`, `$id`, `$defs`, `$ref` (local only), `$comment`, `title`, `description`, `examples`, `type`, `properties`, `required`, `additionalProperties`, `items`, `minItems`, `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format` (annotation only), `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`. `validate_fixtures.py` fails if any other keyword appears.
+Patterns are ECMA-262 as JSON Schema requires. Python's `$` also matches before a trailing newline, so the validator rewrites every unescaped `$` outside a character class to `\Z` before compiling (`ecma_to_python`). Pattern checks are shape checks only: for `RelativePath` the backend must still canonicalize the path (resolve `..`, symlinks and junctions) and verify that it stays inside the task workspace; the regex is not a containment check.
+
+Allowed: `$schema`, `$id`, `$defs`, `$ref` (local only), `$comment`, `title`, `description`, `examples`, `type`, `properties`, `required`, `additionalProperties`, `items`, `minItems`, `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format` (`date-time` is asserted: the value must parse as a real date), `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`. `validate_fixtures.py` fails if any other keyword appears.
 
 ## Naming rules
 
@@ -49,6 +51,7 @@ Allowed: `$schema`, `$id`, `$defs`, `$ref` (local only), `$comment`, `title`, `d
 | IDs | `<prefix>_` + 26-char Crockford base32 ULID | `tsk_01JDQ001000000000000000001` |
 | ID prefixes | `prj` project, `tsk` task, `ses` session, `evt` event, `apr` approval, `op` operation, `chk` check, `use` usage, `sum` summary, `cpt` checkpoint, `trn` turn | |
 | Timestamps | RFC 3339 UTC, exactly millisecond precision, `Z` | `2026-11-17T02:00:07.000Z` |
+| Hashes | lowercase hex sha256 of canonical JSON (sorted keys, no whitespace, UTF-8, non-ASCII unescaped) | `idempotency_key`, `operation_fingerprint` |
 | Absent values | Omit the key. `null` is not used. | |
 | ACP values copied verbatim | Keep ACP's own spelling in values (`end_turn`, `allow_once`); ACP *keys* (camelCase) appear only inside the opaque `acp_agent_capabilities` object. | |
 
@@ -65,6 +68,8 @@ AgentDock keys stay `snake_case` end to end (Rust, SQLite, IPC, TypeScript). The
 | `Seq` | `u64`, with a debug assertion ≤ 2^53 − 1 |
 | `Timestamp` | `time::OffsetDateTime` / `chrono::DateTime<Utc>` serialized with exactly 3 fractional digits |
 | `EventEnvelope` + payload by `type` | envelope struct with `#[serde(flatten)] body: EventBody`, where `enum EventBody` is `#[serde(tag = "type", content = "payload")]` and each variant is `#[serde(rename = "task.state_changed")] TaskStateChanged(TaskStateChangedPayload)` |
+| unknown event types on read | `EventBody` needs a fallback so a newer writer's event does not fail the whole read: e.g. a hand-written `Deserialize` that maps an unrecognized `type` to `Unknown { type_: String, payload: serde_json::Value }` (plain `#[serde(other)]` only works for unit variants and would drop the payload). Writers never emit `Unknown`. |
+| tombstoned events | `tombstone: Option<Tombstone>`; when present, deserialize the body as `Unknown`/empty instead of the typed payload (the payload is `{}`) |
 | `if/then` constraints | constructor/validation functions + unit tests (serde alone does not enforce them) |
 | readers | do **not** use `deny_unknown_fields` on read paths, so additive fields from a newer writer are tolerated |
 

@@ -23,10 +23,10 @@
     },
     "AdapterId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$" },
     "Timestamp": {
-      "description": "RFC 3339 UTC timestamp with millisecond precision.",
+      "description": "RFC 3339 UTC timestamp with exactly millisecond precision. The pattern bounds each field; validate_fixtures.py additionally asserts format date-time (rejects e.g. February 30).",
       "type": "string",
       "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
     },
     "Seq": {
       "description": "Monotonic, gap-free event cursor within one authority. Capped at 2^53-1 so TypeScript numbers stay exact.",
@@ -42,11 +42,11 @@
       "maxLength": 65536
     },
     "RelativePath": {
-      "description": "Forward-slash path relative to a known root (workspace or artifact store). Never absolute, never contains '..'.",
+      "description": "Forward-slash path relative to a known root (workspace or artifact store). The pattern rejects absolute paths, drive letters, a leading '~', empty segments, '..' and any segment ending in a dot or space other than '.' itself (Windows trims those), backslashes, control characters (including newlines) and Windows-reserved characters. It is a shape check only: the backend MUST canonicalize (resolve symlinks) and verify containment in the root before using a path; never rely on this regex for security.",
       "type": "string",
       "minLength": 1,
       "maxLength": 1024,
-      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\\\x00]+$"
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!~)(?!.*//)(?!.*(^|/)(?!\\.(/|$))[^/]*[ .](/|$))[^\\\\\\x00-\\x1f:*?\"<>|]+$"
     },
     "ArtifactRef": {
       "description": "Pointer to content moved out of the event row (large output, compacted transcript, check logs).",
@@ -78,7 +78,7 @@
       "enum": ["queued", "preparing", "running", "awaiting_approval", "verifying", "review", "pr", "ci", "completed", "interrupted", "failed", "cancelled"]
     },
     "ResumePhase": {
-      "description": "Workflow phase a task re-enters after preparing on a resume/restart path.",
+      "description": "Workflow phase, ordered running < verifying < review < pr < ci. Used for the phase an interrupted task had reached (Interruption.phase) and the phase it re-enters after preparing (resume_phase), which may never be later than the phase reached.",
       "type": "string",
       "enum": ["running", "verifying", "review", "pr", "ci"]
     },
@@ -116,7 +116,7 @@
       "type": "string",
       "enum": [
         "quota_exhausted", "rate_limited", "adapter_disconnected", "process_crashed", "host_crashed",
-        "auth_required", "user_paused", "remote_unreachable", "integration_unavailable"
+        "auth_required", "user_paused", "remote_unreachable", "integration_unavailable", "session_unavailable"
       ]
     },
     "HintSource": {
@@ -144,9 +144,13 @@
     "Interruption": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["reason", "auto_resume_armed"],
+      "required": ["reason", "phase", "auto_resume_armed"],
       "properties": {
         "reason": { "$ref": "#/$defs/InterruptionReason" },
+        "phase": {
+          "description": "Furthest workflow phase the task had reached when interrupted: the state left if it is a phase; the approval return_state when leaving awaiting_approval; when leaving preparing, the resume_phase being restored, otherwise running. A later resume may re-enter this phase or an earlier one, never a later one.",
+          "$ref": "#/$defs/ResumePhase"
+        },
         "detail": { "$ref": "#/$defs/RedactedText" },
         "retry_hint": { "$ref": "#/$defs/RetryHint" },
         "auto_resume_armed": {
@@ -154,7 +158,7 @@
           "type": "boolean"
         },
         "summary_id": { "$ref": "#/$defs/SummaryId" },
-        "open_operation_ids": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } }
+        "open_operation_ids": { "description": "Operations whose outcome is unknown and must be reconciled before re-entering pr/ci.", "type": "array", "items": { "$ref": "#/$defs/OperationId" } }
       },
       "allOf": [
         {
@@ -338,12 +342,21 @@
 
     "OperationKind": {
       "type": "string",
-      "enum": ["git_push", "pr_create", "pr_comment", "pr_merge", "branch_delete", "worktree_remove", "destructive_command", "external_write"]
+      "enum": ["git_push", "pr_create", "pr_update", "pr_comment", "pr_merge", "branch_delete", "worktree_remove", "destructive_command", "external_write"]
     },
     "Repeatability": {
-      "description": "repeatable: safe to re-run; idempotent_with_key: the target dedupes by idempotency_key; non_repeatable: must never be re-executed without reconciliation and a fresh approval.",
+      "description": "non_repeatable: must never be re-executed without reconciliation and a fresh approval. idempotent_with_key: the target itself dedupes by idempotency_key (only pr_comment and external_write may claim it). Repeatable work (tests, lint) is a Check, not an Operation.",
       "type": "string",
-      "enum": ["repeatable", "idempotent_with_key", "non_repeatable"]
+      "enum": ["idempotent_with_key", "non_repeatable"]
+    },
+    "OperationKindRules": {
+      "description": "Binds operation kinds to repeatability. Git/PR/merge/branch/worktree/destructive operations are always non_repeatable.",
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["git_push", "pr_create", "pr_update", "pr_merge", "branch_delete", "worktree_remove", "destructive_command"] } } },
+          "then": { "properties": { "repeatability": { "const": "non_repeatable" } } }
+        }
+      ]
     },
     "ReconcileStrategy": {
       "description": "Read-only probe used after a crash to learn whether an operation took effect.",
@@ -352,7 +365,8 @@
     },
     "OperationState": {
       "type": "string",
-      "enum": ["recorded", "started", "succeeded", "failed", "outcome_unknown", "reconciled_applied", "reconciled_not_applied", "reconciled_undeterminable"]
+      "description": "recorded -> started -> succeeded | failed | outcome_unknown; outcome_unknown -> reconciled_*; recorded -> abandoned (never started: approval denied/expired/cancelled/invalidated, task left the phase, or crash recovery).",
+      "enum": ["recorded", "started", "succeeded", "failed", "outcome_unknown", "reconciled_applied", "reconciled_not_applied", "reconciled_undeterminable", "abandoned"]
     },
     "OperationTarget": {
       "type": "object",
@@ -539,7 +553,7 @@
     "Approval": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["approval_id", "task_id", "source", "state", "operation_kind", "operation_fingerprint", "title", "scope", "return_state", "requested_at"],
+      "required": ["approval_id", "task_id", "source", "state", "operation_kind", "operation_fingerprint", "title", "scope", "requested_at"],
       "properties": {
         "approval_id": { "$ref": "#/$defs/ApprovalId" },
         "task_id": { "$ref": "#/$defs/TaskId" },
@@ -547,11 +561,11 @@
         "source": { "$ref": "#/$defs/ApprovalSource" },
         "state": { "$ref": "#/$defs/ApprovalState" },
         "operation_kind": { "description": "OperationKind for host_policy approvals; 'tool_call' for ACP permissions.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
-        "operation_fingerprint": { "description": "sha256 over the canonical JSON of {kind, target, parameters}. A grant only authorizes an execution with the same fingerprint.", "$ref": "#/$defs/Sha256" },
+        "operation_fingerprint": { "description": "sha256 (lowercase hex) of the canonical JSON of {\"kind\": kind, \"target\": target}: keys sorted, no insignificant whitespace, UTF-8, non-ASCII unescaped. For host_policy approvals it equals the operation's idempotency_key; for ACP permissions kind is 'tool_call' and target is {tool_call_id, title}. A grant only authorizes an execution with the same fingerprint.", "$ref": "#/$defs/Sha256" },
         "operation_id": { "$ref": "#/$defs/OperationId" },
         "title": { "$ref": "#/$defs/RedactedText" },
         "scope": { "$ref": "#/$defs/ApprovalScope" },
-        "return_state": { "$ref": "#/$defs/ApprovalReturnState" },
+        "return_state": { "description": "Present only for task-blocking approvals (requested while the task is running, pr or ci). Absent for non-blocking approvals (verifying/review sessions, terminal-state cleanup).", "$ref": "#/$defs/ApprovalReturnState" },
         "acp": { "$ref": "#/$defs/AcpPermissionContext" },
         "selected_option_id": { "type": "string", "maxLength": 256 },
         "requested_at": { "$ref": "#/$defs/Timestamp" },
@@ -563,7 +577,8 @@
     "Operation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation_id", "task_id", "kind", "repeatability", "idempotency_key", "target", "reconcile_strategy", "state", "attempt_count"],
+      "required": ["operation_id", "task_id", "kind", "repeatability", "idempotency_key", "target", "approval_id", "reconcile_strategy", "state", "attempt_count"],
+      "allOf": [ { "$ref": "#/$defs/OperationKindRules" } ],
       "properties": {
         "operation_id": { "$ref": "#/$defs/OperationId" },
         "task_id": { "$ref": "#/$defs/TaskId" },
@@ -607,7 +622,8 @@
     "AttentionReason": {
       "type": "string",
       "enum": [
-        "approval_pending", "agent_turn_ended", "interruption_needs_decision", "failure_needs_decision",
+        "approval_pending", "agent_turn_ended", "output_limited", "session_unavailable", "phase_decision_pending",
+        "interruption_needs_decision", "failure_needs_decision",
         "child_result_unviewed", "task_outcome_unviewed",
         "agent_working", "workflow_step", "queued", "waiting_for_reset"
       ]
@@ -630,12 +646,13 @@
       "type": "string",
       "enum": [
         "task.created", "task.state_changed", "task.checkpoint_recorded", "task.outcome_acknowledged",
+        "task.policy_updated", "task.deleted",
         "session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted",
         "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded",
         "session.output_limited", "session.result_acknowledged", "session.collapsed", "session.expanded",
         "approval.requested", "approval.resolved",
         "operation.recorded", "operation.started", "operation.succeeded", "operation.failed",
-        "operation.outcome_unknown", "operation.reconciled",
+        "operation.outcome_unknown", "operation.reconciled", "operation.abandoned",
         "check.started", "check.finished",
         "usage.reported",
         "system.recovery_started", "system.recovery_completed"
@@ -714,6 +731,32 @@
         },
         "open_operation_ids": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } },
         "pending_approval_ids": { "type": "array", "items": { "$ref": "#/$defs/ApprovalId" } }
+      }
+    },
+    "TaskPolicyUpdatedPayload": {
+      "description": "User changed the task's auto_resume_policy. Disabling disarms an armed interruption; enabling never arms an existing interruption retroactively.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auto_resume_policy"],
+      "properties": { "auto_resume_policy": { "$ref": "#/$defs/AutoResumePolicy" } }
+    },
+    "TaskDeletedPayload": {
+      "description": "User deleted a terminal task. Every earlier event of the task is rewritten in place into a tombstone (same id/seq/type/routing fields, empty payload); the seq sequence stays gap-free.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["final_state", "events_tombstoned"],
+      "properties": {
+        "final_state": { "type": "string", "enum": ["completed", "cancelled", "failed"] },
+        "events_tombstoned": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "at"],
+      "properties": {
+        "reason": { "const": "task_deleted" },
+        "at": { "$ref": "#/$defs/Timestamp" }
       }
     },
     "TaskOutcomeAcknowledgedPayload": {
@@ -862,7 +905,7 @@
     "ApprovalRequestedPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["approval_id", "source", "operation_kind", "operation_fingerprint", "title", "scope", "return_state"],
+      "required": ["approval_id", "source", "operation_kind", "operation_fingerprint", "title", "scope"],
       "properties": {
         "approval_id": { "$ref": "#/$defs/ApprovalId" },
         "source": { "$ref": "#/$defs/ApprovalSource" },
@@ -904,16 +947,17 @@
     "OperationRecordedPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation_id", "kind", "repeatability", "idempotency_key", "target", "reconcile_strategy"],
+      "required": ["operation_id", "kind", "repeatability", "idempotency_key", "target", "approval_id", "reconcile_strategy"],
+      "allOf": [ { "$ref": "#/$defs/OperationKindRules" } ],
       "properties": {
         "operation_id": { "$ref": "#/$defs/OperationId" },
         "kind": { "$ref": "#/$defs/OperationKind" },
         "repeatability": { "$ref": "#/$defs/Repeatability" },
         "idempotency_key": { "$ref": "#/$defs/Sha256" },
         "target": { "$ref": "#/$defs/OperationTarget" },
-        "approval_id": { "$ref": "#/$defs/ApprovalId" },
+        "approval_id": { "description": "The host_policy approval that must be granted before operation.started. Recorded first, requested immediately after.", "$ref": "#/$defs/ApprovalId" },
         "reconcile_strategy": { "$ref": "#/$defs/ReconcileStrategy" },
-        "supersedes_operation_id": { "$ref": "#/$defs/OperationId" }
+        "supersedes_operation_id": { "description": "Only an operation known not to have taken effect (failed with effect none, reconciled_not_applied, reconciled_undeterminable, or abandoned) may be superseded, and only with a fresh approval.", "$ref": "#/$defs/OperationId" }
       }
     },
     "OperationStartedPayload": {
@@ -955,8 +999,21 @@
     "OperationOutcomeUnknownPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation_id"],
-      "properties": { "operation_id": { "$ref": "#/$defs/OperationId" } }
+      "required": ["operation_id", "cause"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "cause": { "description": "host_crash: written by recovery for an op left started; killed: the orchestrator killed a started op (task cancel or interrupt) before it reported.", "type": "string", "enum": ["host_crash", "killed"] }
+      }
+    },
+    "OperationAbandonedPayload": {
+      "description": "A recorded operation that was never started and never will be. Terminal; it may later be superseded by a new operation with a fresh approval.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "reason"],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "reason": { "type": "string", "enum": ["approval_denied", "approval_expired", "approval_cancelled", "approval_invalidated", "task_cancelled", "task_interrupted", "task_failed", "host_recovery"] }
+      }
     },
     "OperationReconciledPayload": {
       "type": "object",
@@ -1011,12 +1068,13 @@
     "RecoveryCompletedPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tasks_interrupted", "sessions_disconnected", "approvals_invalidated", "operations_marked_unknown", "checks_marked_unknown"],
+      "required": ["tasks_interrupted", "sessions_disconnected", "approvals_invalidated", "operations_marked_unknown", "operations_abandoned", "checks_marked_unknown"],
       "properties": {
         "tasks_interrupted": { "type": "array", "items": { "$ref": "#/$defs/TaskId" } },
         "sessions_disconnected": { "type": "array", "items": { "$ref": "#/$defs/SessionId" } },
         "approvals_invalidated": { "type": "array", "items": { "$ref": "#/$defs/ApprovalId" } },
         "operations_marked_unknown": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } },
+        "operations_abandoned": { "type": "array", "items": { "$ref": "#/$defs/OperationId" } },
         "checks_marked_unknown": { "type": "array", "items": { "$ref": "#/$defs/CheckId" } }
       }
     },
@@ -1041,6 +1099,7 @@
         "causation_id": { "$ref": "#/$defs/EventId" },
         "correlation_id": { "type": "string", "maxLength": 64 },
         "redaction": { "$ref": "#/$defs/Redaction" },
+        "tombstone": { "description": "Present only on events rewritten after task.deleted. The payload is then empty and per-type payload rules do not apply.", "$ref": "#/$defs/Tombstone" },
         "payload": { "type": "object" }
       },
       "allOf": [
@@ -1051,35 +1110,42 @@
           "then": { "required": ["session_id"] } },
         { "if": { "properties": { "provenance": { "const": "acp_replay" } } },
           "then": { "properties": { "type": { "enum": ["session.message_delta", "session.tool_call", "session.plan_updated"] } } } },
-        { "if": { "properties": { "type": { "const": "task.created" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskCreatedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "task.state_changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskStateChangedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "task.checkpoint_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskCheckpointRecordedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "task.outcome_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskOutcomeAcknowledgedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.created" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCreatedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.capabilities_detected" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCapabilitiesDetectedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.state_changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionStateChangedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.prompt_submitted" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPromptSubmittedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.message_delta" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionMessageDeltaPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.tool_call" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionToolCallPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.plan_updated" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPlanUpdatedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.summary_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionSummaryRecordedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.output_limited" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionOutputLimitedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.result_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.collapsed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCollapsedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "session.expanded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
-        { "if": { "properties": { "type": { "const": "approval.requested" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalRequestedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "approval.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalResolvedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "operation.recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationRecordedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "operation.started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationStartedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "operation.succeeded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationSucceededPayload" } } } },
-        { "if": { "properties": { "type": { "const": "operation.failed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationFailedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "operation.outcome_unknown" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationOutcomeUnknownPayload" } } } },
-        { "if": { "properties": { "type": { "const": "operation.reconciled" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationReconciledPayload" } } } },
-        { "if": { "properties": { "type": { "const": "check.started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/CheckStartedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "check.finished" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/CheckFinishedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "usage.reported" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/UsageReportedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "system.recovery_started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RecoveryStartedPayload" } } } },
-        { "if": { "properties": { "type": { "const": "system.recovery_completed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RecoveryCompletedPayload" } } } }
+        { "if": { "required": ["tombstone"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" }, "type": { "not": { "enum": ["task.deleted", "system.recovery_started", "system.recovery_completed"] } } } },
+          "else": { "allOf": [
+            { "if": { "properties": { "type": { "const": "task.created" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskCreatedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "task.state_changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskStateChangedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "task.checkpoint_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskCheckpointRecordedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "task.outcome_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskOutcomeAcknowledgedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.created" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCreatedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.capabilities_detected" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCapabilitiesDetectedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.state_changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionStateChangedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.prompt_submitted" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPromptSubmittedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.message_delta" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionMessageDeltaPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.tool_call" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionToolCallPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.plan_updated" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionPlanUpdatedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.summary_recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionSummaryRecordedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.output_limited" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionOutputLimitedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.result_acknowledged" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.collapsed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SessionCollapsedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "session.expanded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/EmptyPayload" } } } },
+            { "if": { "properties": { "type": { "const": "approval.requested" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalRequestedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "approval.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ApprovalResolvedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.recorded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationRecordedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationStartedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.succeeded" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationSucceededPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.failed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationFailedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.outcome_unknown" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationOutcomeUnknownPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.reconciled" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationReconciledPayload" } } } },
+            { "if": { "properties": { "type": { "const": "check.started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/CheckStartedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "check.finished" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/CheckFinishedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "usage.reported" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/UsageReportedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "system.recovery_started" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RecoveryStartedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "task.policy_updated" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskPolicyUpdatedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "task.deleted" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskDeletedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "operation.abandoned" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/OperationAbandonedPayload" } } } },
+            { "if": { "properties": { "type": { "const": "system.recovery_completed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RecoveryCompletedPayload" } } } }
+          ] } }
       ]
     },
 

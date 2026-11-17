@@ -14,13 +14,15 @@ What it checks:
   7. Negative self-test: a list of deliberate mutations (gap in cursor, re-running a push after a crash,
      recovery approving, early auto-resume, ...) must each be rejected with the expected message.
 
-Usage:  python docs/contracts/validate_fixtures.py   (exit code 0 = all good)
+Usage:  python -B docs/contracts/validate_fixtures.py   (exit code 0 = all good; -B avoids writing __pycache__)
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -28,7 +30,37 @@ SCHEMA_PATH = ROOT / "schema" / "agentdock.schema.json"
 TRANSITIONS_PATH = ROOT / "transitions.json"
 FIXTURES_DIR = ROOT / "fixtures"
 
-FORBIDDEN_NAME = re.compile(r"(remaining|quota_left|left_quota|balance|percent_left|allowance|quota_reset_at)", re.I)
+# Any property name (including inside opaque objects such as acp_agent_capabilities) that suggests a
+# known subscription balance. 'on_quota_reset' (a user policy flag) is the only quota-named key allowed.
+FORBIDDEN_NAME = re.compile(r"(remaining|_left|left_|balance|allowance|percent|pct|quota(?!_reset$))", re.I)
+
+
+def canonical_sha256(obj) -> str:
+    """sha256 of the canonical JSON form used for idempotency keys and approval fingerprints:
+    keys sorted, no insignificant whitespace, UTF-8, non-ASCII characters unescaped."""
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def ecma_to_python(pattern: str) -> str:
+    """JSON Schema patterns are ECMA-262; in Python '$' also matches before a trailing newline.
+    Replace every unescaped '$' outside a character class with '\\Z'."""
+    out, i, in_class = [], 0, False
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            out.append(pattern[i:i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+        elif ch == "$":
+            ch = r"\Z"
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 # --------------------------------------------------------------------------------------------
 # Minimal JSON Schema (2020-12 subset) validator
@@ -108,9 +140,16 @@ class Validator:
             if "maxLength" in schema and len(instance) > schema["maxLength"]:
                 errs.append(f"{path}: longer than {schema['maxLength']}")
             if "pattern" in schema:
-                rx = self._regex.setdefault(schema["pattern"], re.compile(schema["pattern"]))
+                rx = self._regex.get(schema["pattern"])
+                if rx is None:
+                    rx = self._regex[schema["pattern"]] = re.compile(ecma_to_python(schema["pattern"]))
                 if not rx.search(instance):
                     errs.append(f"{path}: {instance!r} does not match {schema['pattern']}")
+            if schema.get("format") == "date-time":
+                try:
+                    datetime.strptime(instance, "%Y-%m-%dT%H:%M:%S.%fZ")
+                except ValueError:
+                    errs.append(f"{path}: {instance!r} is not a valid date-time")
         if is_number(instance):
             if "minimum" in schema and instance < schema["minimum"]:
                 errs.append(f"{path}: {instance} < {schema['minimum']}")
@@ -180,9 +219,52 @@ def json_equal(a, b):
 # Semantic replay of a fixture
 # --------------------------------------------------------------------------------------------
 TERMINAL_TASK = {"completed", "cancelled"}
+ENDED_TASK = {"completed", "cancelled", "failed"}
 LIVE_SESSION = {"starting", "idle", "active", "awaiting_permission", "suspended"}
 IN_FLIGHT_TASK = {"preparing", "running", "awaiting_approval", "verifying", "review", "pr", "ci"}
 REPLY_ROLES = {"primary", "implementation", "repair"}
+PHASE_ORDER = ["running", "verifying", "review", "pr", "ci"]
+BLOCKING_APPROVAL_STATES = {"running", "pr", "ci"}
+NON_BLOCKING_APPROVAL_STATES = {"verifying", "review"}
+# Task states in which an operation kind may be recorded and started (docs/contracts/checkpoint-and-replay.md).
+OP_STATES = {
+    "git_push": {"pr"}, "pr_create": {"pr"}, "pr_update": {"pr"}, "pr_comment": {"review", "pr", "ci"},
+    "pr_merge": {"ci"}, "destructive_command": {"running"}, "external_write": {"running"},
+    "branch_delete": ENDED_TASK, "worktree_remove": ENDED_TASK,
+}
+CLEANUP_KINDS = {"branch_delete", "worktree_remove"}
+# Host-policy approvals that only a human may grant; policy may still deny or let them expire.
+HUMAN_ONLY_KINDS = {"pr_merge", "branch_delete", "worktree_remove", "destructive_command"}
+SUPERSEDABLE = {"reconciled_not_applied", "reconciled_undeterminable", "abandoned"}
+ATTENTION_STOPS = {"refusal", "max_tokens", "max_turn_requests"}
+
+
+def derive_features(raw):
+    """features as defined by docs/contracts/acp-capabilities.md, derived from ACP v1 agentCapabilities."""
+    def obj(x):
+        return isinstance(x, dict)
+    sc, pc = raw.get("sessionCapabilities") or {}, raw.get("promptCapabilities") or {}
+    mc, au = raw.get("mcpCapabilities") or {}, raw.get("auth") or {}
+    return {
+        "load_session": raw.get("loadSession") is True,
+        "resume_session": obj(sc.get("resume")), "close_session": obj(sc.get("close")),
+        "list_sessions": obj(sc.get("list")), "delete_session": obj(sc.get("delete")),
+        "additional_directories": obj(sc.get("additionalDirectories")), "system_prompt": obj(sc.get("systemPrompt")),
+        "prompt_image": pc.get("image") is True, "prompt_audio": pc.get("audio") is True,
+        "prompt_embedded_context": pc.get("embeddedContext") is True,
+        "mcp_http": mc.get("http") is True, "mcp_sse": mc.get("sse") is True, "logout": obj(au.get("logout")),
+    }
+
+
+def feature_errors(snapshot):
+    if snapshot["track"] != "v1_stable":
+        return []
+    raw = snapshot["acp_agent_capabilities"]
+    errs = [f"features.{k} does not match acp_agent_capabilities (derived {v})"
+            for k, v in derive_features(raw).items() if snapshot["features"].get(k) != v]
+    if '"_meta"' in json.dumps(raw):
+        errs.append("acp_agent_capabilities must be stored without _meta keys")
+    return errs
 
 
 class Replay:
@@ -200,6 +282,9 @@ class Replay:
         self.last_recorded = ""
         self.recovery = None
         self.consumed_approvals = set()
+        self.tombstoned = {}      # task_id -> list of tombstone 'at' values
+        self.live_counts = {}     # task_id -> number of non-tombstoned events
+        self.deleted = set()
 
     def err(self, ev, msg):
         self.errors.append(f"{self.name} seq={ev.get('seq')} {ev.get('type')}: {msg}")
@@ -228,11 +313,19 @@ class Replay:
             self.err(ev, "actor 'recovery' and provenance 'recovery' must go together")
         if self.recovery is not None and not ev["type"].startswith("system.") and not is_recovery_actor:
             self.err(ev, "only recovery-actor events may be written while recovery is in progress")
+        tid = ev.get("task_id")
+        if tid in self.deleted:
+            return self.err(ev, "event for a deleted task")
+        if "tombstone" in ev:
+            self.tombstoned.setdefault(tid, []).append(ev["tombstone"]["at"])
+            return
+        if tid is not None and ev["type"] != "task.deleted":
+            self.live_counts[tid] = self.live_counts.get(tid, 0) + 1
         if ev["provenance"] == "acp_replay":
             s = self.sessions.get(ev.get("session_id"))
             if not s or s["state"] != "starting" or s["launch_method"] != "load":
                 self.err(ev, "acp_replay events are only valid while a session/load is in progress")
-        if "task_id" in ev and ev["type"] != "task.created" and ev["task_id"] not in self.tasks:
+        if tid is not None and ev["type"] not in ("task.created", "task.deleted") and tid not in self.tasks:
             self.err(ev, "unknown task_id")
         if "session_id" in ev and ev["type"] != "session.created":
             s = self.sessions.get(ev["session_id"])
@@ -250,14 +343,45 @@ class Replay:
         if ev["actor"]["kind"] != "user":
             self.err(ev, "T01 actor must be user")
         self.tasks[tid] = {
-            "state": "queued", "policy": p["auto_resume_policy"], "interruption": None, "resume_phase": None,
-            "return_state": None, "entered_seq": ev["seq"], "ack_seq": 0, "state_entered": {"queued": ev["seq"]},
+            "state": "queued", "policy": dict(p["auto_resume_policy"]), "interruption": None, "resume_phase": None,
+            "return_state": None, "approval_id": None, "entered_seq": ev["seq"], "ack_seq": 0,
+            "state_entered": {"queued": ev["seq"]},
         }
+
+    def task_policy_updated(self, ev, p):
+        t = self.tasks.get(ev["task_id"])
+        if t is None:
+            return
+        if ev["actor"]["kind"] != "user":
+            self.err(ev, "only the user changes auto_resume_policy")
+        t["policy"] = dict(p["auto_resume_policy"])
+        intr = t["interruption"]
+        if t["state"] == "interrupted" and intr and intr["auto_resume_armed"]:
+            flag = {"quota_exhausted": "on_quota_reset", "rate_limited": "on_rate_limit"}[intr["reason"]]
+            if not t["policy"][flag]:
+                t["interruption"] = dict(intr, auto_resume_armed=False)  # disabling disarms; enabling never arms
+
+    def task_deleted(self, ev, p):
+        tid = ev["task_id"]
+        if ev["actor"]["kind"] != "user":
+            self.err(ev, "only the user deletes a task")
+        if self.live_counts.get(tid):
+            self.err(ev, f"{self.live_counts[tid]} event(s) of the deleted task were not tombstoned")
+        marks = self.tombstoned.get(tid, [])
+        if len(marks) != p["events_tombstoned"]:
+            self.err(ev, f"events_tombstoned={p['events_tombstoned']} but {len(marks)} tombstones precede it")
+        if not marks:
+            self.err(ev, "task.deleted without any tombstoned history")
+        if any(m != ev["recorded_at"] for m in marks):
+            self.err(ev, "tombstone.at must equal the task.deleted recorded_at")
+        self.deleted.add(tid)
+        self.tasks.pop(tid, None)
 
     def task_state_changed(self, ev, p):
         t = self.tasks.get(ev["task_id"])
         if t is None:
             return
+        tid = ev["task_id"]
         frm, to = p["from"], p["to"]
         if t["state"] != frm:
             return self.err(ev, f"from={frm} but task is {t['state']}")
@@ -271,24 +395,37 @@ class Replay:
         if p["trigger"] not in edge["triggers"]:
             self.err(ev, f"{edge['id']}: trigger {p['trigger']} not in {edge['triggers']}")
         for cond in edge.get("conditions", []):
-            getattr(self, "cond_" + cond)(ev, p, t, ev["task_id"])
+            getattr(self, "cond_" + cond)(ev, p, t, tid)
+        self._generic_task_rules(ev, p, t, tid)
         if to == "interrupted":
             intr = p["interruption"]
             if actor == "recovery" and intr["reason"] != "host_crashed":
                 self.err(ev, "recovery may only interrupt with reason host_crashed")
             if intr["auto_resume_armed"]:
-                flag = {"quota_exhausted": "on_quota_reset", "rate_limited": "on_rate_limit"}[intr["reason"]]
-                if not t["policy"][flag]:
+                flag = {"quota_exhausted": "on_quota_reset", "rate_limited": "on_rate_limit"}.get(intr["reason"])
+                if flag is None:
+                    self.err(ev, f"auto_resume_armed is only allowed for quota_exhausted/rate_limited")
+                elif not t["policy"][flag]:
                     self.err(ev, f"auto_resume_armed but task policy {flag} is false")
+            if frm in PHASE_ORDER:
+                phase = frm
+            elif frm == "awaiting_approval":
+                phase = t["return_state"]
+            else:  # preparing
+                phase = t["resume_phase"] or "running"
+            if intr["phase"] != phase:
+                self.err(ev, f"interruption.phase must be {phase} (the phase being left), not {intr['phase']}")
             t["interruption"] = intr
+        if to == "queued":  # T44 records where to resume; T47 (retry) restarts from running
+            t["resume_phase"] = p.get("resume_phase")
         if frm == "interrupted":
             t["interruption"] = None
-        if frm == "interrupted" and to == "queued":
-            t["resume_phase"] = p["resume_phase"]
         if to == "awaiting_approval":
-            t["return_state"] = p["return_state"]
+            t["return_state"], t["approval_id"] = p["return_state"], p["approval_id"]
             if p["return_state"] != frm:
                 self.err(ev, f"return_state {p['return_state']} must equal the state being left ({frm})")
+        if frm == "awaiting_approval":
+            t["approval_id"] = None
         if frm == "preparing" and to in ("verifying", "review", "pr", "ci") and t["resume_phase"] != to:
             self.err(ev, f"preparing -> {to} requires the task's recorded resume_phase to be {to}")
         if frm == "preparing" and to in IN_FLIGHT_TASK:
@@ -298,23 +435,59 @@ class Replay:
             t["state_entered"][to] = ev["seq"]
         t["entered_seq"] = ev["seq"]
 
+    def _generic_task_rules(self, ev, p, t, tid):
+        to = p["to"]
+        if to != "awaiting_approval":
+            for aid, a in self.approvals.items():
+                if a["task_id"] == tid and a["state"] == "pending":
+                    self.err(ev, f"approval {aid} still pending while the task moves to {to}; resolve it first")
+        for oid, op in self.operations.items():
+            if op["task_id"] != tid:
+                continue
+            if op["state"] == "recorded":
+                a = self.approvals.get(op["approval"])
+                if a and a["state"] in ("denied", "expired", "cancelled", "invalidated"):
+                    self.err(ev, f"operation {oid} is still recorded although its approval was {a['state']}; "
+                                 f"record operation.abandoned first")
+            if op["state"] in ("recorded", "started") and to != "awaiting_approval" and to not in OP_STATES[op["kind"]]:
+                self.err(ev, f"operation {oid} ({op['kind']}) is {op['state']} but the task moves to {to}")
+
     def cond_resume_phase_equals_to(self, ev, p, t, tid):
         if p.get("resume_phase") != p["to"]:
             self.err(ev, "resume_phase must equal 'to'")
+
+    def cond_resume_phase_within_interrupted_phase(self, ev, p, t, tid):
+        phase = (t["interruption"] or {}).get("phase", "running")
+        if PHASE_ORDER.index(p["resume_phase"]) > PHASE_ORDER.index(phase):
+            self.err(ev, f"resume_phase {p['resume_phase']} is beyond the interrupted phase {phase}")
 
     def cond_no_unreconciled_operations(self, ev, p, t, tid):
         for oid, op in self.operations.items():
             if op["task_id"] == tid and op["state"] in ("recorded", "started", "outcome_unknown"):
                 self.err(ev, f"operation {oid} is {op['state']}; reconcile before re-entering {p['to']}")
 
+    def cond_no_open_operations(self, ev, p, t, tid):
+        for oid, op in self.operations.items():
+            if op["task_id"] == tid and op["state"] in ("recorded", "started"):
+                self.err(ev, f"operation {oid} is {op['state']}; abandon it (or kill it and record outcome_unknown) "
+                             f"before the task leaves {p['from']}")
+        for aid, a in self.approvals.items():
+            if a["task_id"] == tid and a["state"] == "approved" and a["source"] == "host_policy" \
+                    and aid not in self.consumed_approvals:
+                self.err(ev, f"approval {aid} is approved but unused; invalidate it before the task leaves {p['from']}")
+
     def cond_approval_requested_before(self, ev, p, t, tid):
         a = self.approvals.get(p["approval_id"])
         if not a or a["state"] != "pending" or a["task_id"] != tid:
-            self.err(ev, "approval must be recorded as pending before the task waits on it")
+            return self.err(ev, "approval must be recorded as pending before the task waits on it")
+        if a["return_state"] != p["from"]:
+            self.err(ev, "only a blocking approval whose return_state is the current state can put the task into awaiting_approval")
 
     def cond_return_state_matches(self, ev, p, t, tid):
         if p["to"] != t["return_state"]:
             self.err(ev, f"must return to {t['return_state']}, not {p['to']}")
+        if p.get("approval_id") != t["approval_id"]:
+            self.err(ev, "approval_id must be the approval the task was waiting on")
 
     def cond_approval_resolved_before(self, ev, p, t, tid):
         a = self.approvals.get(p.get("approval_id"))
@@ -341,10 +514,17 @@ class Replay:
             if c["state"] != "passed":
                 self.err(ev, f"{origin} check {c['name']} is {c['state']}")
 
+    def _op_done(self, tid, kinds):
+        return any(op["task_id"] == tid and op["kind"] in kinds and op["state"] in ("succeeded", "reconciled_applied")
+                   for op in self.operations.values())
+
     def cond_pr_operation_succeeded(self, ev, p, t, tid):
-        if not any(op["task_id"] == tid and op["kind"] in ("pr_create", "pr_update") and op["state"] in ("succeeded", "reconciled_applied")
-                   for op in self.operations.values()):
-            self.err(ev, "pr -> ci requires a succeeded (or reconciled-applied) pr_create/pr_update operation")
+        if not self._op_done(tid, ("pr_create", "pr_update")):
+            self.err(ev, f"{p['from']} -> ci requires a succeeded (or reconciled-applied) pr_create/pr_update operation")
+
+    def cond_merge_evidence_if_integration(self, ev, p, t, tid):
+        if ev["actor"]["kind"] == "integration" and not self._op_done(tid, ("pr_merge",)):
+            self.err(ev, "integration may complete a task only with merge evidence (a succeeded pr_merge operation)")
 
     def cond_orchestrator_only_if_auto_resume_armed_and_due(self, ev, p, t, tid):
         actor = ev["actor"]["kind"]
@@ -363,7 +543,7 @@ class Replay:
         t = self.tasks[ev["task_id"]]
         if ev["actor"]["kind"] != "user":
             self.err(ev, "only the user acknowledges outcomes")
-        if p["acknowledged_state"] != t["state"] or t["state"] not in ("completed", "failed", "cancelled"):
+        if p["acknowledged_state"] != t["state"] or t["state"] not in ENDED_TASK:
             self.err(ev, "acknowledged_state must be the current completed/failed/cancelled state")
         t["ack_seq"] = ev["seq"]
 
@@ -387,13 +567,15 @@ class Replay:
             "task_id": ev["task_id"], "role": p["role"], "parent": parent, "state": "starting",
             "launch_method": p["launch_method"], "external_id": p.get("external_session_id"),
             "snapshot": None, "snapshot_seq": 0, "launch_seq": ev["seq"], "last_stop": None,
-            "outcome": None, "closed_seq": 0, "ack_seq": 0, "collapsed": None,
+            "outcome": None, "closed_seq": 0, "ack_seq": 0, "collapsed": None, "limited_turn": None,
         }
 
     def session_caps(self, ev, p):
         s = self.sessions[ev["session_id"]]
         if s["state"] != "starting":
             self.err(ev, "capabilities are detected right after initialize, while starting")
+        for e in feature_errors(p["snapshot"]):
+            self.err(ev, e)
         s["snapshot"], s["snapshot_seq"] = p["snapshot"], ev["seq"]
 
     def session_state_changed(self, ev, p):
@@ -430,7 +612,8 @@ class Replay:
         if to == "idle" and frm == "starting" and p.get("external_session_id"):
             s["external_id"] = p["external_session_id"]
         if p["trigger"] == "turn_ended":
-            s["last_stop"] = p["stop_reason"]
+            limited = p["stop_reason"] == "cancelled" and s["limited_turn"] == p["turn_id"]
+            s["last_stop"] = "output_limited" if limited else p["stop_reason"]
         elif to in ("active", "awaiting_permission"):
             s["last_stop"] = None
         if to in ("closed", "failed"):
@@ -454,6 +637,13 @@ class Replay:
 
     def prompt(self, ev, p):
         self.turns[p["turn_id"]] = ev["session_id"]
+
+    def output_limited(self, ev, p):
+        s = self.sessions[ev["session_id"]]
+        if p["action"] == "turn_cancelled":
+            if s["state"] not in ("active", "awaiting_permission") or not p.get("turn_id"):
+                self.err(ev, "turn_cancelled output limits apply to the session's active turn (turn_id required)")
+            s["limited_turn"] = p.get("turn_id")
 
     def session_ack(self, ev, p):
         s = self.sessions[ev["session_id"]]
@@ -485,25 +675,71 @@ class Replay:
         aid = p["approval_id"]
         if aid in self.approvals:
             return self.err(ev, "approval already exists")
-        if p["source"] == "acp_permission" and "session_id" not in ev:
-            self.err(ev, "ACP permission approvals are session-scoped")
-        if ev["actor"]["kind"] not in ("policy", "adapter"):
-            self.err(ev, "approvals are requested by policy or adapter")
-        self.approvals[aid] = {"task_id": ev["task_id"], "session_id": ev.get("session_id"), "state": "pending",
-                               "source": p["source"], "fingerprint": p["operation_fingerprint"],
+        tid = ev["task_id"]
+        st = self.tasks[tid]["state"]
+        rs = p.get("return_state")
+        kind = p["operation_kind"]
+        if p["source"] == "acp_permission":
+            if "session_id" not in ev:
+                self.err(ev, "ACP permission approvals are session-scoped")
+            elif self.sessions[ev["session_id"]]["state"] != "active":
+                self.err(ev, "ACP permission requests arrive during an active turn")
+            if ev["actor"]["kind"] != "adapter":
+                self.err(ev, "ACP permission approvals are requested by the adapter")
+            want = canonical_sha256({"kind": "tool_call", "target": {"tool_call_id": p["acp"]["tool_call_id"],
+                                                                       "title": p["title"]}})
+            if p["operation_fingerprint"] != want:
+                self.err(ev, "ACP operation_fingerprint is not sha256(canonical {kind: tool_call, target: {tool_call_id, title}})")
+        else:
+            if ev["actor"]["kind"] != "policy":
+                self.err(ev, "host_policy approvals are requested by policy")
+            op = self.operations.get(p["operation_id"])
+            if op is None or op["task_id"] != tid or op["state"] != "recorded" or op["approval"] != aid:
+                self.err(ev, "host_policy approval must follow operation.recorded of the same task naming this approval_id")
+            elif kind != op["kind"] or p["operation_fingerprint"] != op["key"]:
+                self.err(ev, "host_policy operation_kind/operation_fingerprint must equal the operation's kind/idempotency_key")
+        if st in BLOCKING_APPROVAL_STATES:
+            if rs != st:
+                self.err(ev, f"an approval requested while the task is {st} blocks it: return_state must be {st}")
+        elif st in NON_BLOCKING_APPROVAL_STATES:
+            if rs is not None:
+                self.err(ev, f"approval requested while task is {st} is non-blocking and must not carry return_state")
+        elif st in ENDED_TASK:
+            if p["source"] != "host_policy" or kind not in CLEANUP_KINDS or rs is not None:
+                self.err(ev, f"only non-blocking cleanup approvals ({', '.join(sorted(CLEANUP_KINDS))}) exist for a {st} task")
+        else:
+            self.err(ev, f"approvals cannot be requested while the task is {st}")
+        self.approvals[aid] = {"task_id": tid, "session_id": ev.get("session_id"), "state": "pending",
+                               "source": p["source"], "fingerprint": p["operation_fingerprint"], "kind": kind,
+                               "return_state": rs,
                                "options": {o["option_id"]: o["kind"] for o in p.get("acp", {}).get("options", [])}}
 
     def approval_resolved(self, ev, p):
-        a = self.approvals.get(p["approval_id"])
+        aid = p["approval_id"]
+        a = self.approvals.get(aid)
         if a is None:
             return self.err(ev, "unknown approval")
-        if a["state"] != "pending":
-            return self.err(ev, f"approval already {a['state']}")
         state, actor = p["state"], ev["actor"]["kind"]
+        unused_grant = (a["state"] == "approved" and a["source"] == "host_policy" and state == "invalidated"
+                        and aid not in self.consumed_approvals)
+        if a["state"] != "pending" and not unused_grant:
+            return self.err(ev, f"approval already {a['state']}")
         allowed = {"approved": {"user", "policy"}, "denied": {"user", "policy"}, "expired": {"policy", "orchestrator"},
-                   "cancelled": {"user", "orchestrator"}, "invalidated": {"recovery"}}[state]
+                   "cancelled": {"user", "orchestrator"}, "invalidated": {"recovery", "orchestrator"}}[state]
         if actor not in allowed:
             self.err(ev, f"{state} cannot be decided by {actor}")
+        if state == "approved" and actor != "user" and a["source"] == "host_policy" and a["kind"] in HUMAN_ONLY_KINDS:
+            self.err(ev, f"approval for {a['kind']} can only be granted by the user")
+        if actor == "policy" and state in ("approved", "denied") and not p.get("policy_rule_id"):
+            self.err(ev, "policy decisions must name policy_rule_id")
+        if state == "invalidated" and actor == "orchestrator" and not unused_grant:
+            s = self.sessions.get(a["session_id"]) if a["session_id"] else None
+            if s is None or s["state"] in LIVE_SESSION:
+                self.err(ev, "the orchestrator only invalidates unused grants or requests whose session is gone")
+        if a["state"] == "pending" and a["return_state"] is not None:
+            t = self.tasks[a["task_id"]]
+            if t["state"] != "awaiting_approval" or t["approval_id"] != aid:
+                self.err(ev, "a blocking approval is resolved only while the task is awaiting_approval on it")
         out = p.get("acp_outcome")
         if a["source"] == "acp_permission" and state != "invalidated":
             if out is None:
@@ -524,19 +760,38 @@ class Replay:
         oid = p["operation_id"]
         if oid in self.operations:
             return self.err(ev, "operation already recorded")
+        tid = ev["task_id"]
+        st = self.tasks[tid]["state"]
+        if st not in OP_STATES[p["kind"]]:
+            self.err(ev, f"cannot record {p['kind']} while task is {st}")
+        if p["idempotency_key"] != canonical_sha256({"kind": p["kind"], "target": p["target"]}):
+            self.err(ev, "idempotency_key is not sha256(canonical {kind, target})")
+        if p["approval_id"] in self.approvals:
+            self.err(ev, "each operation needs a fresh approval id")
         sup = p.get("supersedes_operation_id")
+        if sup:
+            other = self.operations.get(sup)
+            if other is None:
+                self.err(ev, "supersedes an unknown operation")
+            elif other["key"] != p["idempotency_key"] or other["task_id"] != tid:
+                self.err(ev, "supersedes_operation_id must name an operation of the same task with the same idempotency_key")
+        superseded = {o["sup"] for o in self.operations.values() if o["sup"]}
         for other_id, other in self.operations.items():
             if other["key"] != p["idempotency_key"]:
                 continue
-            if other_id == sup and other["state"] in ("failed", "reconciled_not_applied", "reconciled_undeterminable"):
-                if other["state"] == "failed" and other["effect"] != "none":
+            if other_id == sup:
+                if (other["state"] in SUPERSEDABLE
+                        or (other["state"] == "failed" and other["effect"] == "none")
+                        or (other["state"] == "outcome_unknown" and other["rep"] == "idempotent_with_key")):
+                    continue
+                if other["state"] == "failed":
                     self.err(ev, "superseding a failed attempt with unknown effect requires reconciliation first")
-                continue
+                    continue
+            elif other_id in superseded:
+                continue  # an earlier link of the same supersede chain
             self.err(ev, f"same idempotency_key as {other_id} ({other['state']}); non-repeatable work must not be redone")
-        if sup and sup not in self.operations:
-            self.err(ev, "supersedes an unknown operation")
-        self.operations[oid] = {"task_id": ev["task_id"], "kind": p["kind"], "key": p["idempotency_key"],
-                                "rep": p["repeatability"], "approval": p.get("approval_id"),
+        self.operations[oid] = {"task_id": tid, "kind": p["kind"], "key": p["idempotency_key"],
+                                "rep": p["repeatability"], "approval": p["approval_id"], "sup": sup,
                                 "state": "recorded", "effect": None, "seq": ev["seq"]}
 
     def operation_started(self, ev, p):
@@ -547,30 +802,51 @@ class Replay:
             return self.err(ev, f"operation is {op['state']}; an operation id executes at most once")
         if ev["actor"]["kind"] == "recovery":
             self.err(ev, "crash recovery never (re)starts an operation")
-        a = self.approvals.get(p["approval_id"])
-        if op["rep"] != "repeatable":
-            if not a or a["state"] != "approved":
-                self.err(ev, "non-repeatable operation started without an approved approval")
-            elif a["fingerprint"] != op["key"]:
-                self.err(ev, "approval fingerprint does not match the operation idempotency_key")
-            if p["approval_id"] in self.consumed_approvals:
-                self.err(ev, "approval already consumed by another execution")
-        if op["approval"] and op["approval"] != p["approval_id"]:
+        st = self.tasks[op["task_id"]]["state"]
+        if st not in OP_STATES[op["kind"]]:
+            self.err(ev, f"operation {op['kind']} cannot start while task is {st}")
+        if op["approval"] != p["approval_id"]:
             self.err(ev, "started with a different approval than recorded")
+        a = self.approvals.get(p["approval_id"])
+        if not a or a["state"] != "approved":
+            self.err(ev, "operation started without an approved approval")
+        elif a["task_id"] != op["task_id"]:
+            self.err(ev, "approval belongs to another task")
+        elif a["fingerprint"] != op["key"]:
+            self.err(ev, "approval fingerprint does not match the operation idempotency_key")
+        if p["approval_id"] in self.consumed_approvals:
+            self.err(ev, "approval already consumed by another execution")
         self.consumed_approvals.add(p["approval_id"])
-        if self.tasks[op["task_id"]]["state"] in TERMINAL_TASK:
-            self.err(ev, "no operations for a terminal task")
         op["state"] = "started"
 
     def operation_finished(self, ev, p, new_state):
         op = self.operations.get(p["operation_id"])
         if op is None or op["state"] != "started":
             return self.err(ev, f"operation must be started to become {new_state}")
-        if new_state == "outcome_unknown" and ev["actor"]["kind"] != "recovery":
-            self.err(ev, "outcome_unknown is assigned by crash recovery")
+        if new_state == "outcome_unknown":
+            want = {"host_crash": "recovery", "killed": "orchestrator"}[p["cause"]]
+            if ev["actor"]["kind"] != want:
+                self.err(ev, f"outcome_unknown with cause {p['cause']} is assigned by {want}")
         op["state"] = new_state
         if new_state == "failed":
             op["effect"] = p["effect"]
+
+    def operation_abandoned(self, ev, p):
+        op = self.operations.get(p["operation_id"])
+        if op is None or op["state"] != "recorded":
+            return self.err(ev, "only recorded (never started) operations can be abandoned")
+        actor, reason = ev["actor"]["kind"], p["reason"]
+        if actor not in ("orchestrator", "policy", "user", "recovery"):
+            self.err(ev, f"operations are not abandoned by {actor}")
+        if (actor == "recovery") != (reason == "host_recovery"):
+            self.err(ev, "reason host_recovery goes with the recovery actor")
+        a = self.approvals.get(op["approval"])
+        astate = a["state"] if a else None
+        if reason.startswith("approval_") and astate != reason[len("approval_"):]:
+            self.err(ev, f"reason {reason} but the approval is {astate}")
+        if astate == "pending" or (astate == "approved" and op["approval"] not in self.consumed_approvals):
+            self.err(ev, f"approval {op['approval']} is {astate}; resolve or invalidate it before abandoning")
+        op["state"] = "abandoned"
 
     def operation_reconciled(self, ev, p):
         op = self.operations.get(p["operation_id"])
@@ -613,7 +889,8 @@ class Replay:
             self.err(ev, "recovery already in progress")
         if ev["actor"]["kind"] != "recovery":
             self.err(ev, "recovery events need the recovery actor")
-        self.recovery = {"tasks": set(), "sessions": set(), "approvals": set(), "ops": set(), "checks": set()}
+        self.recovery = {"tasks": set(), "sessions": set(), "approvals": set(), "ops": set(), "abandoned": set(),
+                         "checks": set()}
 
     def recovery_completed(self, ev, p):
         r = self.recovery
@@ -622,9 +899,11 @@ class Replay:
         for aid, a in self.approvals.items():
             if a["state"] == "pending":
                 self.err(ev, f"approval {aid} still pending after recovery")
+            elif a["state"] == "approved" and a["source"] == "host_policy" and aid not in self.consumed_approvals:
+                self.err(ev, f"approval {aid} is approved but unused after recovery; a grant never survives a crash")
         for oid, op in self.operations.items():
-            if op["state"] == "started":
-                self.err(ev, f"operation {oid} still 'started' after recovery")
+            if op["state"] in ("started", "recorded"):
+                self.err(ev, f"operation {oid} still {op['state']} after recovery")
         for cid, c in self.checks.items():
             if c["state"] == "running":
                 self.err(ev, f"check {cid} still running after recovery")
@@ -636,21 +915,42 @@ class Replay:
                 self.err(ev, f"task {tid} still {t['state']} after recovery")
         expect = {"tasks_interrupted": r["tasks"], "sessions_disconnected": r["sessions"],
                   "approvals_invalidated": r["approvals"], "operations_marked_unknown": r["ops"],
-                  "checks_marked_unknown": r["checks"]}
+                  "operations_abandoned": r["abandoned"], "checks_marked_unknown": r["checks"]}
         for key, actual in expect.items():
             if set(p[key]) != actual:
                 self.err(ev, f"{key} lists {sorted(p[key])}, recovery changed {sorted(actual)}")
         self.recovery = None
 
+    def finish(self):
+        """End-of-stream invariants."""
+        if self.recovery is not None:
+            self.errors.append(f"{self.name}: recovery never completed")
+        for oid, op in self.operations.items():
+            a = self.approvals.get(op["approval"])
+            if op["state"] == "recorded" and a and a["state"] in ("denied", "expired", "cancelled", "invalidated"):
+                self.errors.append(f"{self.name}: operation {oid} is still recorded although its approval was {a['state']}")
+        for tid in self.tombstoned:
+            if tid not in self.deleted:
+                self.errors.append(f"{self.name}: tombstoned events of {tid} without task.deleted")
+
     # -- dispatcher -----------------------------------------------------------------------------
     def apply(self, ev):
         self.envelope(ev)
+        if "tombstone" in ev or (ev.get("task_id") in self.deleted and ev["type"] != "task.deleted"):
+            return
+        # Unknown task/session ids were already reported by envelope(); do not replay against missing state.
+        if "task_id" in ev and ev["type"] not in ("task.created", "task.deleted") and ev["task_id"] not in self.tasks:
+            return
+        if "session_id" in ev and ev["type"] != "session.created" and ev["session_id"] not in self.sessions:
+            return
         p, t = ev["payload"], ev["type"]
         handler = {
             "task.created": self.task_created, "task.state_changed": self.task_state_changed,
-            "task.outcome_acknowledged": self.task_ack,
+            "task.outcome_acknowledged": self.task_ack, "task.policy_updated": self.task_policy_updated,
+            "task.deleted": self.task_deleted,
             "session.created": self.session_created, "session.capabilities_detected": self.session_caps,
             "session.state_changed": self.session_state_changed, "session.prompt_submitted": self.prompt,
+            "session.output_limited": self.output_limited,
             "session.result_acknowledged": self.session_ack, "session.collapsed": self.session_collapsed,
             "session.expanded": self.session_expanded, "session.summary_recorded": self.summary,
             "approval.requested": self.approval_requested, "approval.resolved": self.approval_resolved,
@@ -658,7 +958,7 @@ class Replay:
             "operation.succeeded": lambda e, q: self.operation_finished(e, q, "succeeded"),
             "operation.failed": lambda e, q: self.operation_finished(e, q, "failed"),
             "operation.outcome_unknown": lambda e, q: self.operation_finished(e, q, "outcome_unknown"),
-            "operation.reconciled": self.operation_reconciled,
+            "operation.reconciled": self.operation_reconciled, "operation.abandoned": self.operation_abandoned,
             "check.started": self.check_started, "check.finished": self.check_finished,
             "usage.reported": self.usage,
             "system.recovery_started": self.recovery_started, "system.recovery_completed": self.recovery_completed,
@@ -678,18 +978,33 @@ class Replay:
             r["approvals"].add(p["approval_id"])
         elif t == "operation.outcome_unknown":
             r["ops"].add(p["operation_id"])
+        elif t == "operation.abandoned":
+            r["abandoned"].add(p["operation_id"])
         elif t == "check.finished" and p["state"] == "outcome_unknown":
             r["checks"].add(p["check_id"])
 
     # -- derived attention (docs/contracts/attention.md) ---------------------------------------
     def attention(self):
         items = set()
+        pending_tasks = {a["task_id"] for a in self.approvals.values() if a["state"] == "pending"}
         for tid, t in self.tasks.items():
             st = t["state"]
+            sessions = [s for s in self.sessions.values() if s["task_id"] == tid]
             if st == "queued":
                 items.add(("background", "queued", tid, None, None))
-            elif st in ("preparing", "verifying", "review", "pr", "ci"):
+            elif st == "preparing":
                 items.add(("background", "workflow_step", tid, None, None))
+            elif st in ("verifying", "review", "pr", "ci"):
+                progressing = (any(s["state"] in ("starting", "active") for s in sessions)
+                               or any(c["task_id"] == tid and c["state"] == "running" for c in self.checks.values())
+                               or any(o["task_id"] == tid and o["state"] == "started" for o in self.operations.values()))
+                if progressing:
+                    items.add(("background", "workflow_step", tid, None, None))
+                elif tid not in pending_tasks:
+                    items.add(("needs_reply", "phase_decision_pending", tid, None, None))
+            elif st == "running":
+                if not any(s["role"] in REPLY_ROLES and s["state"] in LIVE_SESSION for s in sessions):
+                    items.add(("needs_reply", "session_unavailable", tid, None, None))
             elif st == "interrupted":
                 if (t["interruption"] or {}).get("auto_resume_armed"):
                     items.add(("background", "waiting_for_reset", tid, None, None))
@@ -706,9 +1021,12 @@ class Replay:
             task_state = self.tasks[s["task_id"]]["state"]
             if s["state"] == "active":
                 items.add(("background", "agent_working", s["task_id"], sid, None))
-            if (s["state"] == "idle" and s["last_stop"] not in (None, "cancelled") and task_state == "running"
-                    and s["role"] in REPLY_ROLES):
-                items.add(("needs_reply", "agent_turn_ended", s["task_id"], sid, None))
+            if s["state"] == "idle" and task_state in IN_FLIGHT_TASK:
+                if s["last_stop"] == "output_limited":
+                    items.add(("needs_reply", "output_limited", s["task_id"], sid, None))
+                elif s["last_stop"] in ATTENTION_STOPS or (
+                        s["last_stop"] == "end_turn" and task_state == "running" and s["role"] in REPLY_ROLES):
+                    items.add(("needs_reply", "agent_turn_ended", s["task_id"], sid, None))
             if (s["parent"] and s["state"] in ("closed", "failed") and s["outcome"] in ("succeeded", "failed")
                     and s["ack_seq"] <= s["closed_seq"]):
                 items.add(("needs_review", "child_result_unviewed", s["task_id"], sid, None))
@@ -745,6 +1063,12 @@ def main():
     samples = json.loads(samples_path.read_text(encoding="utf-8"))
     errors += [f"models.sample.json {e}" for e in v.errors(samples, defs["ModelSamples"])]
     scan_forbidden_keys(samples, "models.sample.json", errors)
+    for s in samples.get("sessions", []):
+        if "capability_snapshot" in s:
+            errors += [f"models.sample.json {s['session_id']}: {e}" for e in feature_errors(s["capability_snapshot"])]
+    for o in samples.get("operations", []):
+        if o["idempotency_key"] != canonical_sha256({"kind": o["kind"], "target": o["target"]}):
+            errors.append(f"models.sample.json {o['operation_id']}: idempotency_key is not sha256(canonical {{kind, target}})")
 
     covered = set()
     fixtures = sorted(FIXTURES_DIR.glob("*.jsonl"))
@@ -821,8 +1145,7 @@ def run_stream(name, events, transitions, v, defs):
         valid.append(ev)
     for ev in valid:
         replay.apply(ev)
-    if replay.recovery is not None:
-        replay.errors.append(f"{name}: recovery never completed")
+    replay.finish()
     return errors + replay.errors, replay
 
 
@@ -876,7 +1199,12 @@ def _m_recovery_approves(ev):
 
 
 def _m_keep_pending_after_crash(ev):
-    del ev[_find(ev, "approval.resolved", lambda e: e["payload"]["state"] == "invalidated")]
+    # Drop both the invalidation and the interruption (which would otherwise hit T20's own pending check first).
+    i = _find(ev, "approval.resolved", lambda e: e["payload"]["state"] == "invalidated")
+    aid = ev[i]["payload"]["approval_id"]
+    del ev[i]
+    del ev[_find(ev, "task.state_changed", lambda e: e["payload"]["to"] == "interrupted"
+                 and e["payload"].get("approval_id") == aid)]
     return _renumber(ev)
 
 
@@ -907,9 +1235,16 @@ def _m_collapse_before_ack(ev):
     return _renumber(ev)
 
 
-def _m_quota_field(ev):
+def _m_quota_field_schema(ev):
     i = _find(ev, "usage.reported")
     ev[i]["payload"]["usage"]["quota_remaining"] = 0.3
+    return ev
+
+
+def _m_opaque_quota_key(ev):
+    # acp_agent_capabilities is opaque to the schema, so only the forbidden-name scan can catch this.
+    i = _find(ev, "session.capabilities_detected")
+    ev[i]["payload"]["snapshot"]["acp_agent_capabilities"]["remainingQuota"] = 5
     return ev
 
 
@@ -943,10 +1278,178 @@ def _m_verify_with_failed_check(ev):
     return ev
 
 
-def _m_raw_secret_field(ev):
+def _m_raw_io_inline(ev):
     i = _find(ev, "session.tool_call")
     ev[i]["payload"]["rawInput"] = {"cmd": "echo $TOKEN"}
     return ev
+
+
+def _m_acp_fingerprint(ev):
+    i = _find(ev, "approval.requested", lambda e: e["payload"]["source"] == "acp_permission")
+    ev[i]["payload"]["operation_fingerprint"] = "0" * 64
+    return ev
+
+
+# -- operations / approvals (review round 1: B1-B4, E1-E14) ------------------------------------
+def _new_event(ev, ref, etype, actor, payload, n):
+    e = {k: v for k, v in ev[ref].items() if k in ("schema_version", "authority_id", "occurred_at", "recorded_at",
+                                                    "project_id", "task_id", "redaction")}
+    e.update({"id": f"evt_ZZZZZZZZZZZZZZZZZZZZZZZZ{n:02d}", "seq": 0, "type": etype, "actor": actor,
+              "provenance": "recovery" if actor["kind"] == "recovery" else "live", "payload": payload})
+    return e
+
+
+def _drop(ev, pred):
+    return _renumber([e for e in ev if not pred(e)])
+
+
+def _m_e1_recovery_keeps_recorded_op(ev):
+    i = _find(ev, "operation.abandoned", lambda e: e["payload"]["reason"] == "host_recovery")
+    del ev[i]
+    ev[_find(ev, "system.recovery_completed")]["payload"]["operations_abandoned"] = []
+    return _renumber(ev)
+
+
+def _m_e1_recovery_keeps_unused_grant(ev):
+    i = _find(ev, "approval.resolved", lambda e: e["actor"]["kind"] == "recovery")
+    del ev[i]
+    ev[_find(ev, "system.recovery_completed")]["payload"]["approvals_invalidated"] = []
+    return _renumber(ev)
+
+
+def _m_e1_start_after_crash(ev):
+    i = _find(ev, "operation.abandoned", lambda e: e["payload"]["reason"] == "host_recovery")
+    oid = ev[i]["payload"]["operation_id"]
+    aid = next(e["payload"]["approval_id"] for e in ev if e["type"] == "operation.recorded"
+               and e["payload"]["operation_id"] == oid)
+    ev = [e for e in ev if not (e["actor"]["kind"] == "recovery" and e["type"] in ("operation.abandoned", "approval.resolved"))]
+    j = _find(ev, "system.recovery_completed")
+    ev[j]["payload"]["operations_abandoned"] = ev[j]["payload"]["approvals_invalidated"] = []
+    ev.insert(j + 1, _new_event(ev, j - 1, "operation.started", {"kind": "orchestrator"},
+                                {"operation_id": oid, "approval_id": aid}, 1))
+    return _renumber(ev)
+
+
+def _m_e2a_denied_op_left_recorded(ev):
+    return _drop(ev, lambda e: e["type"] == "operation.abandoned" and e["payload"]["reason"] == "approval_denied")
+
+
+def _m_e2b_supersede_recorded_op(ev):
+    i = _find(ev, "operation.recorded")
+    clone = json.loads(json.dumps(ev[i]))
+    clone["id"] = "evt_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    clone["payload"].update(operation_id="op_ZZZZZZZZZZZZZZZZZZZZZZZZ01", approval_id="apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01",
+                            supersedes_operation_id=ev[i]["payload"]["operation_id"])
+    ev.insert(i + 1, clone)
+    return _renumber(ev)
+
+
+def _m_e4_cancel_with_started_op(ev):
+    return _drop(ev, lambda e: e["type"] == "operation.outcome_unknown" and e["payload"]["cause"] == "killed")
+
+
+def _m_e5_review_approval_blocks(ev):
+    i = _find(ev, "approval.requested", lambda e: e["payload"]["source"] == "acp_permission"
+              and "return_state" not in e["payload"])
+    ev[i]["payload"]["return_state"] = "running"
+    return ev
+
+
+def _m_e6_integration_completes_without_merge(ev):
+    i = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_merge")
+    oid, aid = ev[i]["payload"]["operation_id"], ev[i]["payload"]["approval_id"]
+    return _drop(ev, lambda e: e["payload"].get("operation_id") == oid or e["payload"].get("approval_id") == aid)
+
+
+def _m_e7_trailing_newline_id(ev):
+    tid = ev[0]["task_id"]
+    for e in ev:
+        if e.get("task_id") == tid:
+            e["task_id"] = tid + "\n"
+    return ev
+
+
+def _m_e7_impossible_date(ev):
+    ev[0]["occurred_at"] = "2026-02-30T00:00:00.000Z"
+    return ev
+
+
+def _m_e8a_key_not_canonical(ev):
+    i = _find(ev, "operation.recorded")
+    ev[i]["payload"]["idempotency_key"] = "f" * 64
+    ev[_find(ev, "approval.requested", lambda e: e["payload"].get("operation_id") == ev[i]["payload"]["operation_id"])][
+        "payload"]["operation_fingerprint"] = "f" * 64
+    return ev
+
+
+def _m_e8b_push_claims_idempotent(ev):
+    ev[_find(ev, "operation.recorded")]["payload"]["repeatability"] = "idempotent_with_key"
+    return ev
+
+
+def _m_e8b_push_without_approval_id(ev):
+    ev[_find(ev, "operation.recorded")]["payload"].pop("approval_id")
+    return ev
+
+
+def _m_e9_push_during_review(ev):
+    j = len(ev) - 1
+    task = ev[j]["task_id"]  # fixture 10 ends with task E entering review
+    target = {"description": "push from review", "remote": "origin", "ref": "refs/heads/agentdock/e"}
+    ev.append(_new_event(ev, j, "operation.recorded", {"kind": "orchestrator"}, {
+        "operation_id": "op_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "kind": "git_push", "repeatability": "non_repeatable",
+        "idempotency_key": canonical_sha256({"kind": "git_push", "target": target}), "target": target,
+        "approval_id": "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "reconcile_strategy": "remote_ref_compare"}, 1))
+    ev[-1]["task_id"] = task
+    return _renumber(ev)
+
+
+def _m_e12_features_mismatch(ev):
+    for e in ev:
+        if e["type"] == "session.capabilities_detected":
+            e["payload"]["snapshot"]["acp_agent_capabilities"]["sessionCapabilities"].pop("resume", None)
+    return ev
+
+
+def _m_e13_policy_approves_merge(ev):
+    i = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_merge")
+    aid = ev[i]["payload"]["approval_id"]
+    j = _find(ev, "approval.resolved", lambda e: e["payload"]["approval_id"] == aid)
+    ev[j]["actor"] = {"kind": "policy", "id": "auto-merge-rule"}
+    ev[j]["payload"]["policy_rule_id"] = "auto_merge_when_green"
+    ev[j + 1]["actor"] = {"kind": "policy", "id": "auto-merge-rule"}
+    return ev
+
+
+def _m_e14_resume_beyond_phase(ev):
+    i = _find(ev, "task.state_changed", lambda e: e["payload"]["trigger"] == "resume_requested")
+    ev[i]["payload"]["resume_phase"] = "ci"
+    return ev
+
+
+def _m_wrong_interruption_phase(ev):
+    i = _find(ev, "task.state_changed", lambda e: e["payload"]["to"] == "interrupted")
+    ev[i]["payload"]["interruption"]["phase"] = "pr"
+    return ev
+
+
+def _m_abandon_while_approval_pending(ev):
+    i = _find(ev, "operation.abandoned", lambda e: e["payload"]["reason"] == "approval_denied")
+    ev[i - 1], ev[i] = ev[i], ev[i - 1]
+    return _renumber(ev)
+
+
+def _m_tombstone_count(ev):
+    ev[_find(ev, "task.deleted")]["payload"]["events_tombstoned"] += 1
+    return ev
+
+
+def _m_event_after_delete(ev):
+    i = _find(ev, "task.deleted")
+    clone = json.loads(json.dumps(ev[i]))
+    clone["id"] = "evt_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    ev.append(clone)
+    return _renumber(ev)
 
 
 MUTATIONS = [
@@ -954,19 +1457,42 @@ MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_illegal_transition, "illegal task transition"),
     ("01-happy-path-pr.jsonl", _m_collapse_primary, "never auto-collapsed"),
     ("01-happy-path-pr.jsonl", _m_collapse_before_ack, "auto-collapse requires"),
-    ("01-happy-path-pr.jsonl", _m_quota_field, "quota_remaining"),
+    ("01-happy-path-pr.jsonl", _m_quota_field_schema, "quota_remaining: not allowed"),
+    ("01-happy-path-pr.jsonl", _m_opaque_quota_key, "'remainingQuota' implies a known quota balance"),
     ("01-happy-path-pr.jsonl", _m_unknown_usage_with_numbers, "must not match"),
     ("01-happy-path-pr.jsonl", _m_act_before_approval_persisted, "must be persisted before"),
     ("01-happy-path-pr.jsonl", _m_verify_with_failed_check, "local check cargo test is failed"),
-    ("01-happy-path-pr.jsonl", _m_raw_secret_field, "rawInput"),
+    ("01-happy-path-pr.jsonl", _m_raw_io_inline, "payload.rawInput: not allowed"),
+    ("01-happy-path-pr.jsonl", _m_acp_fingerprint, "ACP operation_fingerprint is not sha256"),
+    ("01-happy-path-pr.jsonl", _m_e2b_supersede_recorded_op, "(recorded); non-repeatable work must not be redone"),
+    ("01-happy-path-pr.jsonl", _m_e7_trailing_newline_id, "\\n' does not match ^tsk_"),
+    ("01-happy-path-pr.jsonl", _m_e7_impossible_date, "is not a valid date-time"),
+    ("01-happy-path-pr.jsonl", _m_e8a_key_not_canonical, "idempotency_key is not sha256(canonical {kind, target})"),
+    ("01-happy-path-pr.jsonl", _m_e8b_push_claims_idempotent, "expected const 'non_repeatable'"),
+    ("01-happy-path-pr.jsonl", _m_e8b_push_without_approval_id, "missing required 'approval_id'"),
     ("04-disconnect-resume-reattach.jsonl", _m_load_without_capability, "without advertised load_session"),
     ("04-disconnect-resume-reattach.jsonl", _m_replay_outside_load, "acp_replay events are only valid"),
+    ("04-disconnect-resume-reattach.jsonl", _m_e12_features_mismatch, "features.resume_session does not match"),
+    ("04-disconnect-resume-reattach.jsonl", _m_e14_resume_beyond_phase, "resume_phase ci is beyond the interrupted phase running"),
     ("05-quota-interrupt-auto-resume.jsonl", _m_early_auto_resume, "before retry_hint.not_before"),
     ("06-crash-unknown-push.jsonl", _m_rerun_push_after_crash, "executes at most once"),
     ("06-crash-unknown-push.jsonl", _m_recovery_starts_op, "never (re)starts"),
     ("06-crash-unknown-push.jsonl", _m_auto_resume_after_crash, "automatic resume without an armed auto_resume"),
     ("07-crash-pending-approval-load.jsonl", _m_recovery_approves, "approved cannot be decided by recovery"),
-    ("07-crash-pending-approval-load.jsonl", _m_keep_pending_after_crash, "still pending"),
+    ("07-crash-pending-approval-load.jsonl", _m_keep_pending_after_crash, "still pending after recovery"),
+    ("08-review-loop-pause-children.jsonl", _m_wrong_interruption_phase, "interruption.phase must be review"),
+    ("09-pr-ci-edges.jsonl", _m_e6_integration_completes_without_merge, "only with merge evidence"),
+    ("09-pr-ci-edges.jsonl", _m_e13_policy_approves_merge, "approval for pr_merge can only be granted by the user"),
+    ("10-prepare-pause-abandon.jsonl", _m_e9_push_during_review, "cannot record git_push while task is review"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_e1_recovery_keeps_recorded_op, "still recorded after recovery"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_e1_recovery_keeps_unused_grant, "approved but unused after recovery"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_e1_start_after_crash, "cannot start while task is interrupted"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_e2a_denied_op_left_recorded, "still recorded although its approval was denied"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_e4_cancel_with_started_op, "is started; abandon it"),
+    ("11-push-denied-abandon-supersede.jsonl", _m_abandon_while_approval_pending, "is pending; resolve or invalidate it"),
+    ("12-session-edge-cases.jsonl", _m_e5_review_approval_blocks, "is non-blocking and must not carry return_state"),
+    ("12-session-edge-cases.jsonl", _m_tombstone_count, "events_tombstoned=4 but 3 tombstones"),
+    ("12-session-edge-cases.jsonl", _m_event_after_delete, "event for a deleted task"),
 ]
 
 

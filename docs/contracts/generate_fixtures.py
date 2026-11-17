@@ -5,7 +5,7 @@ The event streams are written with small helpers so that cursors, ids and timest
 consistent. Expected final states and attention items are written by hand in each scenario
 below (they are NOT computed from the events), so validate_fixtures.py is an independent check.
 
-Usage:  python docs/contracts/generate_fixtures.py && python docs/contracts/validate_fixtures.py
+Usage:  python -B docs/contracts/generate_fixtures.py && python -B docs/contracts/validate_fixtures.py
 Standard library only.
 """
 from __future__ import annotations
@@ -29,7 +29,12 @@ def adapter(aid):
 
 
 def sha(obj) -> str:
-    return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    """Canonical JSON (sorted keys, no whitespace, UTF-8, non-ASCII unescaped) -> sha256 hex."""
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+PHASES = ("running", "verifying", "review", "pr", "ci")
 
 
 def caps(at, load=False, resume=False, close=True, list_=False):
@@ -73,7 +78,7 @@ class Fx:
         self.counters = {}
         self.project = self.id("prj")
         self.task_state, self.session_state, self.session_task = {}, {}, {}
-        self.return_state = {}
+        self.return_state, self.resume_phase = {}, {}
 
     # -- primitives --------------------------------------------------------------------------
     def id(self, prefix):
@@ -120,11 +125,21 @@ class Fx:
         if to == "awaiting_approval":
             self.return_state[tid] = frm
             payload["return_state"] = frm
+        if to == "queued":
+            self.resume_phase[tid] = extra.get("resume_phase")
         self.emit("task.state_changed", actor, payload, task=tid)
         self.task_state[tid] = to
 
+    def phase_of(self, tid):
+        st = self.task_state[tid]
+        if st in PHASES:
+            return st
+        if st == "awaiting_approval":
+            return self.return_state[tid]
+        return self.resume_phase.get(tid) or "running"  # preparing
+
     def interrupt(self, tid, reason, actor, armed=False, hint=None, summary=None, ops=None, approval=None):
-        intr = {"reason": reason, "auto_resume_armed": armed}
+        intr = {"reason": reason, "phase": self.phase_of(tid), "auto_resume_armed": armed}
         if hint:
             intr["retry_hint"] = hint
         if summary:
@@ -142,6 +157,16 @@ class Fx:
 
     def ack_task(self, tid):
         self.emit("task.outcome_acknowledged", USER, {"acknowledged_state": self.task_state[tid]}, task=tid)
+
+    def delete_task(self, tid):
+        """task.deleted, then rewrite every earlier event of the task into a tombstone (seq stays gap-free)."""
+        history = [e for e in self.events if e.get("task_id") == tid]
+        self.emit("task.deleted", USER, {"final_state": self.task_state[tid], "events_tombstoned": len(history)},
+                  task=tid)
+        at = self.events[-1]["recorded_at"]
+        for e in history:
+            e["payload"] = {}
+            e["tombstone"] = {"reason": "task_deleted", "at": at}
 
     # -- sessions ----------------------------------------------------------------------------
     def session(self, tid, role="primary", adapter_id="claude-code", method="new", parent=None, external=None,
@@ -214,33 +239,39 @@ class Fx:
         return sumid
 
     # -- approvals ---------------------------------------------------------------------------
-    def acp_permission(self, sid, turn, title, call_id):
+    def acp_permission(self, sid, turn, title, call_id, blocking=True):
+        """blocking: the task is running and waits in awaiting_approval; otherwise (verifying/review sessions)
+        the approval carries no return_state and the task state does not change."""
         tid = self.session_task[sid]
         ad = adapter(self.adapters[sid])
         self.emit("session.tool_call", ad, {"turn_id": turn, "tool_call_id": call_id, "title": title,
                                             "kind": "execute", "status": "pending"}, task=tid, session=sid)
         aid = self.id("apr")
-        self.emit("approval.requested", ad, {
-            "approval_id": aid, "source": "acp_permission", "operation_kind": "tool_call",
-            "operation_fingerprint": sha({"kind": "tool_call", "tool_call_id": call_id, "title": title}),
-            "title": title, "scope": "once", "return_state": "running",
-            "acp": {"tool_call_id": call_id, "options": [
-                {"option_id": "allow", "kind": "allow_once"}, {"option_id": "always", "kind": "allow_always"},
-                {"option_id": "reject", "kind": "reject_once"}]}}, task=tid, session=sid)
+        p = {"approval_id": aid, "source": "acp_permission", "operation_kind": "tool_call",
+             "operation_fingerprint": sha({"kind": "tool_call", "target": {"tool_call_id": call_id, "title": title}}),
+             "title": title, "scope": "once",
+             "acp": {"tool_call_id": call_id, "options": [
+                 {"option_id": "allow", "kind": "allow_once"}, {"option_id": "always", "kind": "allow_always"},
+                 {"option_id": "reject", "kind": "reject_once"}]}}
+        if blocking:
+            p["return_state"] = self.task_state[tid]
+        self.emit("approval.requested", ad, p, task=tid, session=sid)
         self.sst(sid, "awaiting_permission", "permission_requested", approval_id=aid)
-        self.tr(tid, "awaiting_approval", "approval_requested", ad, approval_id=aid)
+        if blocking:
+            self.tr(tid, "awaiting_approval", "approval_requested", ad, approval_id=aid)
         return aid
 
-    def resolve_acp(self, sid, aid, approve=True):
+    def resolve_acp(self, sid, aid, approve=True, blocking=True):
         tid = self.session_task[sid]
         self.emit("approval.resolved", USER, {"approval_id": aid, "state": "approved" if approve else "denied",
                                               "scope": "once", "acp_outcome": {"outcome": "selected",
                                                                                 "option_id": "allow" if approve else "reject"}},
                   task=tid, session=sid)
         self.sst(sid, "active", "permission_resolved", USER, approval_id=aid)
-        self.tr(tid, "running", "approval_resolved", USER, approval_id=aid)
+        if blocking:
+            self.tr(tid, "running", "approval_resolved", USER, approval_id=aid)
 
-    def host_op(self, tid, kind, target, strategy, supersedes=None):
+    def host_op(self, tid, kind, target, strategy, supersedes=None, blocking=True):
         oid, aid = self.id("op"), self.id("apr")
         key = sha({"kind": kind, "target": target})
         p = {"operation_id": oid, "kind": kind, "repeatability": "non_repeatable", "idempotency_key": key,
@@ -248,16 +279,28 @@ class Fx:
         if supersedes:
             p["supersedes_operation_id"] = supersedes
         self.emit("operation.recorded", ORCH, p, task=tid)
-        self.emit("approval.requested", POLICY, {
-            "approval_id": aid, "source": "host_policy", "operation_kind": kind, "operation_fingerprint": key,
-            "operation_id": oid, "title": target["description"], "scope": "once",
-            "return_state": self.task_state[tid]}, task=tid)
-        self.tr(tid, "awaiting_approval", "approval_requested", POLICY, approval_id=aid)
+        req = {"approval_id": aid, "source": "host_policy", "operation_kind": kind, "operation_fingerprint": key,
+               "operation_id": oid, "title": target["description"], "scope": "once"}
+        if blocking:
+            req["return_state"] = self.task_state[tid]
+        self.emit("approval.requested", POLICY, req, task=tid)
+        if blocking:
+            self.tr(tid, "awaiting_approval", "approval_requested", POLICY, approval_id=aid)
         return oid, aid
 
-    def approve_op(self, tid, aid):
+    def approve_op(self, tid, aid, blocking=True):
         self.emit("approval.resolved", USER, {"approval_id": aid, "state": "approved", "scope": "once"}, task=tid)
-        self.tr(tid, self.return_state[tid], "approval_resolved", USER, approval_id=aid)
+        if blocking:
+            self.tr(tid, self.return_state[tid], "approval_resolved", USER, approval_id=aid)
+
+    def reject_op(self, tid, aid, oid, state="denied", actor=USER, rule=None):
+        """Denied/expired host approval: the recorded operation is abandoned before the task moves on."""
+        p = {"approval_id": aid, "state": state}
+        if rule:
+            p["policy_rule_id"] = rule
+        self.emit("approval.resolved", actor, p, task=tid)
+        self.emit("operation.abandoned", ORCH, {"operation_id": oid, "reason": "approval_" + state}, task=tid)
+        self.tr(tid, self.return_state[tid], "approval_resolved", actor, approval_id=aid)
 
     def run_op(self, tid, oid, aid, result=None):
         self.emit("operation.started", ORCH, {"operation_id": oid, "approval_id": aid}, task=tid)
@@ -385,6 +428,12 @@ def f01():
     fx.close(p, "succeeded")
     fx.emit("session.result_acknowledged", USER, {}, task=t, session=r)
     fx.emit("session.collapsed", ORCH, {"by": "auto"}, task=t, session=r)
+    # Cleanup after completion: a non-blocking host-policy approval (no return_state, no task transition).
+    branch = f"agentdock/{t[-4:]}"
+    oid, aid = fx.host_op(t, "worktree_remove", {"description": f"remove the worktree of {branch}", "ref": branch},
+                          "path_exists_lookup", blocking=False)
+    fx.approve_op(t, aid, blocking=False)
+    fx.run_op(t, oid, aid, {})
     fx.write({t: "completed"}, {p: "closed", r: "closed"},
              [att("needs_review", "task_outcome_unviewed", t)])
 
@@ -517,11 +566,11 @@ def f06():
     fx.run_op(t, oid, aid)
     fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-7", "last_seq_before_crash": len(fx.events)})
     fx.sst(p, "disconnected", "host_recovery", RECOV)
-    fx.emit("operation.outcome_unknown", RECOV, {"operation_id": oid}, task=t)
+    fx.emit("operation.outcome_unknown", RECOV, {"operation_id": oid, "cause": "host_crash"}, task=t)
     fx.interrupt(t, "host_crashed", RECOV, ops=[oid])
     fx.emit("system.recovery_completed", RECOV, {"tasks_interrupted": [t], "sessions_disconnected": [p],
                                                  "approvals_invalidated": [], "operations_marked_unknown": [oid],
-                                                 "checks_marked_unknown": []})
+                                                 "operations_abandoned": [], "checks_marked_unknown": []})
     fx.tr(t, "queued", "resume_requested", USER, resume_phase="pr")
     fx.tr(t, "preparing", "scheduled")
     fx.emit("operation.reconciled", INTEG, {"operation_id": oid, "finding": "applied",
@@ -561,7 +610,7 @@ def f07():
     fx.interrupt(t, "host_crashed", RECOV, approval=a)
     fx.emit("system.recovery_completed", RECOV, {"tasks_interrupted": [t], "sessions_disconnected": [p],
                                                  "approvals_invalidated": [a], "operations_marked_unknown": [],
-                                                 "checks_marked_unknown": []})
+                                                 "operations_abandoned": [], "checks_marked_unknown": []})
     fx.tr(t, "queued", "resume_requested", USER, resume_phase="running")
     fx.tr(t, "preparing", "scheduled")
     fx.sst(p, "starting", "reattach_attempt", ORCH, launch_method="load")
@@ -742,21 +791,198 @@ def f10():
              {sa: "closed", sb: "closed", sc: "closed", sd: "closed", se: "suspended"},
              [att("needs_reply", "failure_needs_decision", a),
               att("needs_reply", "failure_needs_decision", b),
-              att("background", "workflow_step", e)])
+              att("needs_reply", "phase_decision_pending", e)])
+
+
+def f11():
+    fx = Fx(11, "push-denied-abandon-supersede", "Host-policy operation edges: a denied push is abandoned, the task is "
+            "paused and resumed into pr, and a superseding push with a fresh approval runs; merge is user-approved and "
+            "gives the integration its completion evidence; an expired destructive-command approval; a push killed by "
+            "cancellation (outcome_unknown, cause killed) and reconciled afterwards; a crash between approval and start "
+            "(recovery invalidates the unused grant and abandons the recorded operation).")
+    a = fx.task("A: push denied, re-requested later")
+    pa = fx.drive_to(a, "pr")
+    branch = f"agentdock/{a[-4:]}"
+    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
+              "expected_sha": "2" * 40}
+    oid, aid = fx.host_op(a, "git_push", target, "remote_ref_compare")
+    fx.reject_op(a, aid, oid, "denied")
+    fx.interrupt(a, "user_paused", USER)
+    fx.tr(a, "queued", "resume_requested", USER, resume_phase="pr")
+    fx.tr(a, "preparing", "scheduled")
+    fx.tr(a, "pr", "resume_phase_restored", resume_phase="pr")
+    oid2, aid2 = fx.host_op(a, "git_push", target, "remote_ref_compare", supersedes=oid)
+    fx.approve_op(a, aid2)
+    fx.run_op(a, oid2, aid2, {"remote_sha": "2" * 40})
+    oid3, aid3 = fx.host_op(a, "pr_create", {"description": f"open PR from {branch} into main", "ref": branch},
+                            "pr_lookup_by_head")
+    fx.approve_op(a, aid3)
+    fx.run_op(a, oid3, aid3, {"pr_number": 51})
+    fx.tr(a, "ci", "pr_published", INTEG)
+    fx.check(a, "ci / build", origin="ci")
+    oid4, aid4 = fx.host_op(a, "pr_merge", {"description": "merge PR #51 with a merge commit", "pr_number": 51},
+                            "pr_state_lookup")
+    fx.approve_op(a, aid4)
+    fx.run_op(a, oid4, aid4, {"pr_number": 51})
+    fx.tr(a, "completed", "ci_passed_accepted", INTEG)
+    fx.close(pa, "succeeded")
+
+    b = fx.task("B: destructive command approval expires")
+    pb = fx.drive_to(b, "running")
+    turn = fx.prompt(pb, "Reset the local test database.")
+    oid, aid = fx.host_op(b, "destructive_command", {"description": "drop and recreate the local test database",
+                                                     "path": "target/test-db"}, "none")
+    fx.reject_op(b, aid, oid, "expired", actor=POLICY)
+    fx.tr(b, "cancelled", "user_cancel", USER)
+    fx.end_turn(pb, turn, stop="cancelled")
+    fx.close(pb, "cancelled")
+
+    c = fx.task("C: cancelled while a push is running")
+    pc = fx.drive_to(c, "pr")
+    branch = f"agentdock/{c[-4:]}"
+    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
+              "expected_sha": "4" * 40}
+    oid, aid = fx.host_op(c, "git_push", target, "remote_ref_compare")
+    fx.approve_op(c, aid)
+    fx.run_op(c, oid, aid)
+    fx.emit("operation.outcome_unknown", ORCH, {"operation_id": oid, "cause": "killed"}, task=c)
+    fx.tr(c, "cancelled", "user_cancel", USER)
+    fx.emit("operation.reconciled", INTEG, {"operation_id": oid, "finding": "not_applied",
+                                            "evidence": "origin " + target["ref"] + " does not exist"}, task=c)
+    fx.close(pc, "cancelled")
+
+    d = fx.task("D: crash after approval, before start")
+    pd = fx.drive_to(d, "pr")
+    branch = f"agentdock/{d[-4:]}"
+    target = {"description": f"push {branch} to origin", "remote": "origin", "ref": f"refs/heads/{branch}",
+              "expected_sha": "5" * 40}
+    oid, aid = fx.host_op(d, "git_push", target, "remote_ref_compare")
+    fx.approve_op(d, aid)
+    fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-11", "last_seq_before_crash": len(fx.events)})
+    fx.emit("approval.resolved", RECOV, {"approval_id": aid, "state": "invalidated"}, task=d)
+    fx.emit("operation.abandoned", RECOV, {"operation_id": oid, "reason": "host_recovery"}, task=d)
+    fx.sst(pd, "disconnected", "host_recovery", RECOV)
+    fx.interrupt(d, "host_crashed", RECOV)
+    fx.emit("system.recovery_completed", RECOV, {"tasks_interrupted": [d], "sessions_disconnected": [pd],
+                                                 "approvals_invalidated": [aid], "operations_marked_unknown": [],
+                                                 "operations_abandoned": [oid], "checks_marked_unknown": []})
+    fx.tr(d, "queued", "resume_requested", USER, resume_phase="pr")
+    fx.tr(d, "preparing", "scheduled")
+    fx.tr(d, "pr", "resume_phase_restored", resume_phase="pr")
+    oid2, aid2 = fx.host_op(d, "git_push", target, "remote_ref_compare", supersedes=oid)
+    fx.approve_op(d, aid2)
+    fx.run_op(d, oid2, aid2, {"remote_sha": "5" * 40})
+    oid3, aid3 = fx.host_op(d, "pr_create", {"description": f"open PR from {branch} into main", "ref": branch},
+                            "pr_lookup_by_head")
+    fx.approve_op(d, aid3)
+    fx.run_op(d, oid3, aid3, {"pr_number": 52})
+    fx.tr(d, "ci", "pr_published", INTEG)
+    fx.check(d, "ci / build", origin="ci", finish=False)
+    fx.write({a: "completed", b: "cancelled", c: "cancelled", d: "ci"},
+             {pa: "closed", pb: "closed", pc: "closed", pd: "disconnected"},
+             [att("needs_review", "task_outcome_unviewed", a),
+              att("background", "workflow_step", d)])
+
+
+def f12():
+    fx = Fx(12, "session-edge-cases", "Session and attention edges: a rejected reattach interrupts the task with "
+            "session_unavailable; disabling auto-resume disarms a waiting task whose suspended agent then fails; a "
+            "running task whose idle agent crashed; a turn cancelled by the output limit; a review session with a "
+            "non-blocking ACP approval that fails while asking, followed by a refusal; a session closed while starting; "
+            "and a deleted task whose history is tombstoned.")
+    g = fx.task("G: deleted after cancellation")
+    fx.tr(g, "cancelled", "user_cancel", USER)
+    fx.ack_task(g)
+
+    a = fx.task("A: reattach rejected")
+    fx.tr(a, "preparing", "scheduled")
+    pa = fx.session(a, resume=True)
+    fx.ready(pa)
+    fx.tr(a, "running", "session_ready")
+    turn = fx.prompt(pa, "Refactor the CLI parser.")
+    fx.say(pa, turn, "Working on it.")
+    fx.sst(pa, "disconnected", "process_exited")
+    fx.interrupt(a, "adapter_disconnected", adapter("claude-code"))
+    fx.tr(a, "queued", "resume_requested", USER, resume_phase="running")
+    fx.tr(a, "preparing", "scheduled")
+    fx.sst(pa, "starting", "reattach_attempt", ORCH, launch_method="resume")
+    fx.caps(pa, resume=True)
+    fx.sst(pa, "failed", "attach_rejected", outcome="failed", error={"code": "session_not_found"})
+    fx.interrupt(a, "session_unavailable", ORCH)
+
+    b = fx.task("B: auto-resume disabled while waiting", quota=True)
+    pb = fx.drive_to(b, "running")
+    turn = fx.prompt(pb, "Generate the API client.")
+    s1 = fx.summary(pb, "interruption", "Host summary: client half generated; no open operations.")
+    fx.sst(pb, "suspended", "task_interrupted")
+    fx.interrupt(b, "quota_exhausted", adapter("claude-code"), armed=True, summary=s1,
+                 hint={"not_before": fx.at(hours=5), "source": "provider_reported"})
+    fx.emit("task.policy_updated", USER, {"auto_resume_policy": {"on_quota_reset": False, "on_rate_limit": False}},
+            task=b)
+    fx.sst(pb, "failed", "protocol_error", outcome="failed", error={"code": "invalid_json_rpc"})
+
+    c = fx.task("C: agent crashed between turns")
+    pc = fx.drive_to(c, "running")
+    turn = fx.prompt(pc, "Add input validation.")
+    fx.end_turn(pc, turn)
+    fx.sst(pc, "failed", "protocol_error", outcome="failed", error={"code": "agent_crashed"})
+
+    d = fx.task("D: runaway output")
+    pd = fx.drive_to(d, "running")
+    turn = fx.prompt(pd, "Print the dependency graph.")
+    fx.emit("session.output_limited", ORCH, {"turn_id": turn, "limit": "max_turn_bytes", "action": "turn_cancelled",
+                                             "dropped_bytes": 1048576}, task=d, session=pd)
+    fx.end_turn(pd, turn, stop="cancelled")
+
+    e = fx.task("E: review session edges")
+    pe = fx.drive_to(e, "review")
+    r = fx.session(e, role="review", adapter_id="codex", parent=pe)
+    fx.ready(r)
+    rt = fx.prompt(r, "Review independently.", origin="orchestrator")
+    a1 = fx.acp_permission(r, rt, "Run cargo clippy", "call-r1", blocking=False)
+    fx.resolve_acp(r, a1, approve=True, blocking=False)
+    a2 = fx.acp_permission(r, rt, "Run cargo audit", "call-r2", blocking=False)
+    fx.emit("approval.resolved", ORCH, {"approval_id": a2, "state": "cancelled", "acp_outcome": {"outcome": "cancelled"}},
+            task=e, session=r)
+    fx.sst(r, "failed", "protocol_error", outcome="failed", error={"code": "agent_crashed"})
+    r2 = fx.session(e, role="review", adapter_id="codex", parent=pe)
+    fx.ready(r2)
+    rt2 = fx.prompt(r2, "Review again.", origin="orchestrator")
+    fx.say(r2, rt2, "I cannot review this change.")
+    fx.end_turn(r2, rt2, stop="refusal")
+
+    f = fx.task("F: cancelled while the agent starts")
+    fx.tr(f, "preparing", "scheduled")
+    sf = fx.session(f)
+    fx.tr(f, "cancelled", "user_cancel", USER)
+    fx.sst(sf, "closed", "session_closed", ORCH, outcome="cancelled")
+
+    fx.delete_task(g)
+    fx.write({a: "interrupted", b: "interrupted", c: "running", d: "running", e: "review", f: "cancelled"},
+             {pa: "failed", pb: "failed", pc: "failed", pd: "idle", pe: "idle", r: "failed", r2: "idle", sf: "closed"},
+             [att("needs_reply", "interruption_needs_decision", a),
+              att("needs_reply", "interruption_needs_decision", b),
+              att("needs_reply", "session_unavailable", c),
+              att("needs_reply", "output_limited", d, pd),
+              att("needs_reply", "phase_decision_pending", e),
+              att("needs_reply", "agent_turn_ended", e, r2),
+              att("needs_review", "child_result_unviewed", e, r)])
 
 
 def samples():
     fx = Fx(99, "samples", "")
     prj, tsk, ses, child = fx.project, fx.id("tsk"), fx.id("ses"), fx.id("ses")
     apr, op, chk, use, sumid = fx.id("apr"), fx.id("op"), fx.id("chk"), fx.id("use"), fx.id("sum")
-    key = sha({"kind": "git_push", "target": "origin refs/heads/agentdock/x"})
+    op_target = {"description": "push agentdock/x", "remote": "origin", "ref": "refs/heads/agentdock/x"}
+    key = sha({"kind": "git_push", "target": op_target})
     ts = "2026-11-17T10:00:00.000Z"
     doc = {
         "projects": [{"project_id": prj, "name": "agentdock", "local_path": "D:/Code/agentdock", "environment_id": "local",
                       "remote_origin": "https://github.com/example/agentdock.git", "default_branch": "main", "created_at": ts}],
         "tasks": [{"task_id": tsk, "project_id": prj, "objective": "Example", "state": "interrupted",
                    "branch": "agentdock/x", "primary_session_id": ses,
-                   "interruption": {"reason": "quota_exhausted", "auto_resume_armed": True, "summary_id": sumid,
+                   "interruption": {"reason": "quota_exhausted", "phase": "running", "auto_resume_armed": True,
+                                    "summary_id": sumid,
                                     "retry_hint": {"not_before": "2026-11-17T15:00:00.000Z", "source": "provider_reported"}},
                    "auto_resume_policy": {"on_quota_reset": True, "on_rate_limit": False},
                    "created_at": ts, "updated_at": ts, "last_seq": 42}],
@@ -772,8 +998,7 @@ def samples():
                        "title": "push agentdock/x", "scope": "once", "return_state": "pr", "requested_at": ts,
                        "decided_at": ts, "decided_by": USER}],
         "operations": [{"operation_id": op, "task_id": tsk, "kind": "git_push", "repeatability": "non_repeatable",
-                        "idempotency_key": key, "target": {"description": "push agentdock/x", "remote": "origin",
-                                                           "ref": "refs/heads/agentdock/x"},
+                        "idempotency_key": key, "target": op_target,
                         "approval_id": apr, "reconcile_strategy": "remote_ref_compare", "state": "reconciled_applied",
                         "attempt_count": 1}],
         "checks": [{"check_id": chk, "task_id": tsk, "name": "cargo test", "origin": "local", "state": "passed",
@@ -796,6 +1021,6 @@ def samples():
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    for fn in (f01, f02, f03, f04, f05, f06, f07, f08, f09, f10, samples):
+    for fn in (f01, f02, f03, f04, f05, f06, f07, f08, f09, f10, f11, f12, samples):
         fn()
     print(f"wrote fixtures to {OUT}")

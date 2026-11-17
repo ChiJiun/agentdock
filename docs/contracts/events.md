@@ -42,6 +42,7 @@ The UI never writes events. It calls typed Rust commands (`create_task`, `resolv
 | `provenance` | `live`; `acp_replay` (history re-sent by an agent during `session/load` — only `session.message_delta`, `session.tool_call`, `session.plan_updated`, and only while that load is in progress); `recovery` (written by crash recovery). |
 | `causation_id`, `correlation_id` | Optional links (the event that caused this one; the turn/operation it belongs to). |
 | `redaction` | Always present. Payloads are redacted **before** they are written; there is no unredacted copy in the event store. |
+| `tombstone` | Only on events of a deleted task, rewritten in place after `task.deleted` (`{reason: task_deleted, at}`); the payload is then `{}`. See Retention. |
 | `payload` | Shape fixed by `type` (see catalog). Optional fields are omitted, never `null`. |
 
 ## Event catalog
@@ -54,6 +55,8 @@ Retention class: **D** = durable (kept for the task's lifetime, never compacted)
 | `task.state_changed` | D | `from`, `to`, `trigger`; `interruption` iff `to=interrupted`; `failure` iff `to=failed`; `return_state` + `approval_id` when entering `awaiting_approval`; `resume_phase` on resume paths. |
 | `task.checkpoint_recorded` | D | See [checkpoint-and-replay.md](checkpoint-and-replay.md#checkpoints). |
 | `task.outcome_acknowledged` | D | User has seen a `completed`/`failed`/`cancelled` outcome. Drives attention. |
+| `task.policy_updated` | D | User changed `auto_resume_policy`. Turning a flag off disarms an armed interruption; turning it on never arms one retroactively. |
+| `task.deleted` | D | User deleted a `completed`/`cancelled`/`failed` task: `final_state`, `events_tombstoned`. See Retention. |
 | `session.created` | D | `role`, `parent_session_id?`, `adapter_id`, `launch_method`, `supersedes_session_id?`, `handoff_summary_id?`. |
 | `session.capabilities_detected` | D | `CapabilitySnapshot` for this process (after every `initialize`). |
 | `session.state_changed` | D | See state machine. Carries ACP `stop_reason` on `turn_ended`. |
@@ -62,11 +65,11 @@ Retention class: **D** = durable (kept for the task's lifetime, never compacted)
 | `session.tool_call` | T | ACP `tool_call` / `tool_call_update` (status, kind, title, locations). `rawInput`/`rawOutput` never inline; only a redacted `raw_io` artifact. |
 | `session.plan_updated` | T | ACP `plan` entries. |
 | `session.summary_recorded` | D | Interruption / handoff / completion summary; `source` = `agent_generated`, `host_generated`, `user_written`. |
-| `session.output_limited` | D | A per-turn output cap was hit; content truncated or turn cancelled. |
+| `session.output_limited` | D | A per-turn output cap was hit; content truncated or turn cancelled (`turn_cancelled` requires `turn_id`; attention shows `output_limited`). |
 | `session.result_acknowledged` | D | User has seen a finished (child) session's result. |
 | `session.collapsed` / `session.expanded` | D | UI grouping; `by: auto` only under the rule in [state-machines.md](state-machines.md#collapsing-child-sessions). |
-| `approval.requested` / `approval.resolved` | D | See ADR "Approvals". |
-| `operation.recorded` / `.started` / `.succeeded` / `.failed` / `.outcome_unknown` / `.reconciled` | D | Non-repeatable side effects. See [checkpoint-and-replay.md](checkpoint-and-replay.md#non-repeatable-operations). |
+| `approval.requested` / `approval.resolved` | D | See ADR "Approvals". `return_state` only on blocking approvals. An approved but unused host-policy grant may later be `invalidated`. |
+| `operation.recorded` / `.started` / `.succeeded` / `.failed` / `.outcome_unknown` / `.reconciled` / `.abandoned` | D | Non-repeatable side effects. `outcome_unknown` carries `cause` (`host_crash` by recovery, `killed` by the orchestrator). `abandoned` ends a never-started operation. See [checkpoint-and-replay.md](checkpoint-and-replay.md#non-repeatable-operations). |
 | `check.started` / `check.finished` | D | Local or CI checks; logs go to an artifact. |
 | `usage.reported` | D | One `Usage` observation with its `source`. |
 | `system.recovery_started` / `system.recovery_completed` | D | Bracket crash recovery. |
@@ -78,7 +81,7 @@ Mapping from ACP v1 (`session/update` variants and methods) is in [acp-capabilit
 - `seq` is assigned inside the same transaction that appends the event: `seq = last_seq + 1` under SQLite's single writer. It is **strictly increasing and gap-free per `authority_id`**. A gap therefore always means data loss or a bug, and a subscriber can detect it.
 - `seq` fits in 53 bits (`≤ 2^53 − 1`) so TypeScript `number` stays exact. Rust uses `u64`.
 - The cursor a client holds is the pair `(authority_id, seq)`; "give me everything after `seq`" is the only read-position API.
-- Retention never removes a row from the sequence (see Retention), so `seq` stays gap-free even after compaction.
+- Retention never removes a row from the sequence (see Retention), so `seq` stays gap-free even after compaction or task deletion (tombstones).
 - Remote work: the remote worker is the authority and mints its own `seq`. The desktop stores a mirror keyed by `(authority_id, seq)` and never mints `seq` for a remote authority. Reconnect = request `after_seq` = last mirrored `seq`. User actions on remote tasks are commands sent to the worker, not locally appended events.
 
 ## Subscriptions and backpressure
@@ -104,7 +107,8 @@ The UI never blocks the writer: slow UI subscribers get `lagged`, the store keep
 
 | Class | Policy (proposal; configurable) |
 | --- | --- |
-| Durable | Kept as long as the task exists. Deleting a task is an explicit, confirmed user action that removes its events and artifacts together. |
+| Durable | Kept as long as the task exists. |
+| Task deletion | An explicit, confirmed user action on a `completed`/`cancelled`/`failed` task. AgentDock appends `task.deleted{final_state, events_tombstoned}` and, in the same transaction, rewrites every earlier event of that task (including its sessions' events) into a **tombstone**: `id`, `seq`, `type`, `authority_id`, timestamps, `actor`, `provenance`, routing ids and `redaction` stay; the payload becomes `{}` and `tombstone: {reason: task_deleted, at}` is added (`at` = the `task.deleted` `recorded_at`). Artifacts of the task are deleted. Rows are never removed, so `seq` stays gap-free and a subscriber holding an old cursor still sees a contiguous sequence; projections skip tombstones. No event may reference the task after `task.deleted`. Tombstoning is the only in-place rewrite of an event, and it only ever removes content. |
 | Transcript | Inline until the task's transcript exceeds 64 MiB or the task has been terminal for 30 days; then payload `content.text` is moved to a content-addressed artifact and replaced by `content.text_ref` (`ArtifactRef` with `sha256`, `bytes`). The row, `seq`, `type` and metadata stay. If the artifact is later pruned, the store reports `retention_gap`. |
 | Artifacts | Check logs, raw tool I/O (redacted), compacted transcript. Relative paths under the app data directory; never inside the user's repository. |
 

@@ -8,7 +8,7 @@ Field and method names below were checked against the official artifacts, not wr
 
 | Source | Revision checked (2026-11-17) | What was read |
 | --- | --- | --- |
-| [agent-client-protocol](https://github.com/agentclientprotocol/agent-client-protocol) | `4aab69b4e6bcb53965ff5b1141d2f04a62a25c6c` (2026-11-16) | `schema/v1/schema.json` and `schema/v1/meta.json` (v1 JSON Schema release marker `1.32.0`), `schema/v2/schema.json` + `meta.json` (`2.0.0-alpha.16`), `agent-client-protocol-schema/src/v1/agent.rs` (Rust crate `agent-client-protocol-schema` `1.18.0`), `docs/announcements/acp-v2-draft.mdx` |
+| [agent-client-protocol](https://github.com/agentclientprotocol/agent-client-protocol) | `4aab69b4e6bcb53965ff5b1141d2f04a62a25c6c` (2026-11-16) | `schema/v1/schema.json` and `schema/v1/meta.json` (`meta.json` only says `"version": 1`; the v1 schema release `1.32.0` comes from `schema/v1/Cargo.toml` and `CHANGELOG.md`), `schema/v2/schema.json` + `meta.json` (`2.0.0-alpha.16`), `agent-client-protocol-schema/src/v1/agent.rs` (Rust crate `agent-client-protocol-schema` `1.18.0`), `docs/announcements/acp-v2-draft.mdx` |
 | [ACP v1 Session Setup](https://agentclientprotocol.com/protocol/v1/session-setup) | page as served on 2026-11-17 | semantics of `session/load`, `session/resume`, `session/close` |
 | [ACP Rust SDK](https://github.com/agentclientprotocol/rust-sdk) | `6a4a95cabed1b5307651a19771c20b91bb6566ea` (same commit as `docs/sources.md`) | workspace `Cargo.toml` (crate `agent-client-protocol` `5.3.0`, pins `agent-client-protocol-schema = "=1.18.0"`), `README.md` (`Client.v1()` / `.v2()`, `agent_client_protocol::v1` / `::v2`, `unstable_protocol_v2` feature) |
 
@@ -53,6 +53,8 @@ For every agent **process** (initial launch and every reattach):
 | `prompt_image` / `prompt_audio` / `prompt_embedded_context` | `promptCapabilities.image` / `.audio` / `.embeddedContext` |
 | `mcp_http` / `mcp_sse` | `mcpCapabilities.http` / `.sse` |
 | `logout` | `agentCapabilities.auth.logout` is an object |
+
+For `track: v1_stable`, `validate_fixtures.py` re-derives every `features.*` value from `acp_agent_capabilities` with exactly this table and rejects a snapshot that disagrees or that still contains a `_meta` key. A snapshot can therefore not claim `resume_session` (and unlock `S20` with `launch_method: resume`) unless the raw capabilities advertise it.
 
 ## What the UI may claim
 

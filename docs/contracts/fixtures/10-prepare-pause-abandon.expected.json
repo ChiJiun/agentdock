@@ -27,8 +27,8 @@
       "task_id": "tsk_01JDQ010000000000000000002"
     },
     {
-      "kind": "background",
-      "reason": "workflow_step",
+      "kind": "needs_reply",
+      "reason": "phase_decision_pending",
       "task_id": "tsk_01JDQ010000000000000000005"
     }
   ]

@@ -21,7 +21,7 @@ AgentDock will orchestrate external ACP agents (Claude Code, Codex, Octomind) on
 
 - [`schema/agentdock.schema.json`](../contracts/schema/agentdock.schema.json) defines `Project`, `Task`, `Session`, `Approval`, `Operation`, `Check`, `Usage`, `CapabilitySnapshot`, `EventEnvelope` with one payload per event type, `StreamMessage`, and `AttentionItem`.
 - [`transitions.json`](../contracts/transitions.json) lists every legal task and session transition with allowed actors, triggers, durability and conditions.
-- Mock fixtures under [`fixtures/`](../contracts/fixtures/) cover all 47 task and 21 session transitions, including disconnect, cancellation, denied approval, quota interruption and host crash. [`validate_fixtures.py`](../contracts/validate_fixtures.py) checks them with the Python standard library only.
+- Mock fixtures under [`fixtures/`](../contracts/fixtures/) cover all 47 task and 25 session transitions, including disconnect, cancellation, denied approval, quota interruption and host crash. [`validate_fixtures.py`](../contracts/validate_fixtures.py) checks them with the Python standard library only.
 - Naming: `snake_case` keys and enum values everywhere (Rust, SQLite, IPC, TypeScript); event types `<entity>.<past_tense_verb>`; prefixed ULID IDs; RFC 3339 UTC millisecond timestamps; omit absent fields, no `null`. Rust/TypeScript mapping rules: [contracts README](../contracts/README.md#rust-mapping-for-issue-4).
 
 ### 2. Task state graph
@@ -29,13 +29,14 @@ AgentDock will orchestrate external ACP agents (Claude Code, Codex, Octomind) on
 States: `queued`, `preparing`, `running`, `awaiting_approval`, `verifying`, `review`, `pr`, `ci`, `completed`, `interrupted`, `failed`, `cancelled`. Full graph and conditions: [state-machines.md](../contracts/state-machines.md).
 
 - Terminal: `completed`, `cancelled`. `failed` is resumable only by an explicit user retry.
-- `awaiting_approval` is entered from `running`, `pr` or `ci` and returns to exactly the state it came from (`return_state`).
-- `interrupted` is the single "stopped but resumable" state and always carries an `Interruption` (reason, optional retry hint, auto-resume flag, summary, open operations). "Paused" is `interrupted{reason: user_paused}`.
-- Resume always goes `interrupted → queued → preparing →` the recorded `resume_phase` (`running`, `verifying`, `review`, `pr`, `ci`). Re-entering `pr`/`ci` requires every operation of the task to be reconciled.
+- `awaiting_approval` is entered from `running`, `pr` or `ci` and returns to exactly the state it came from (`return_state`). Approvals raised in `verifying`/`review` (review child sessions) and cleanup approvals after the task ended are non-blocking: no `return_state`, no task transition.
+- `interrupted` is the single "stopped but resumable" state and always carries an `Interruption` (reason, `phase`, optional retry hint, auto-resume flag, summary, open operations). "Paused" is `interrupted{reason: user_paused}`.
+- Resume always goes `interrupted → queued → preparing →` the recorded `resume_phase` (`running`, `verifying`, `review`, `pr`, `ci`), which must be at or before `Interruption.phase` so a resume never skips verification, review or PR creation. Re-entering `pr`/`ci` requires every operation of the task to be reconciled; entering `ci` additionally requires a succeeded PR operation.
+- Leaving a phase for `interrupted`, `cancelled` or `failed` first closes its operations: recorded ones are abandoned, unused grants invalidated, started ones killed and recorded as `outcome_unknown{cause: killed}`.
 - The agent never changes task state; ACP traffic is input (actor `adapter`) interpreted by the orchestrator.
 - Every transition is persisted before it is reported (`persist_then_report`). Transitions that authorize a side effect are persisted before the effect (`persist_then_act`): scheduling, cancellation, approval resolution, entering `awaiting_approval`, resume and retry.
 
-Sessions have their own small graph (`starting`, `idle`, `active`, `awaiting_permission`, `suspended`, `disconnected`, `closed`, `failed`) with `parent_session_id`, `role`, `outcome`, `supersedes_session_id` and `handoff_summary_id`.
+Sessions have their own small graph (including protocol errors while idle, asking for permission or suspended, and closing a session that is still starting) — `starting`, `idle`, `active`, `awaiting_permission`, `suspended`, `disconnected`, `closed`, `failed` — with `parent_session_id`, `role`, `outcome`, `supersedes_session_id` and `handoff_summary_id`.
 
 ### 3. Three separate notions of "resume"
 
@@ -52,7 +53,7 @@ The UI may only claim an agent session is reconnectable when the capability is a
 - Envelope: `id`, `authority_id`, `seq`, `occurred_at`, `recorded_at`, `project_id`/`task_id` (absent only for `system.*`), `session_id?`, `type`, `actor`, `provenance` (`live`, `acp_replay`, `recovery`), `causation_id?`, `correlation_id?`, `redaction`, `payload` (already redacted).
 - Cursor: `seq` is assigned in the append transaction, strictly increasing and **gap-free per authority**, capped at 2^53 − 1. Readers use `(authority_id, seq)`; a remote worker is its own authority.
 - Backpressure: streaming chunks are coalesced; state-changing events are never coalesced or dropped; per-turn output caps produce `session.output_limited`; a slow subscriber gets `lagged` and re-reads from the store; as a last resort AgentDock stops reading the agent's stdout. Nothing is auto-answered under pressure.
-- Retention: durable events stay for the task's lifetime; transcript payloads may be compacted into content-addressed artifacts without removing rows (the cursor stays gap-free); `retention_gap` tells a client what is archived.
+- Retention: durable events stay for the task's lifetime; transcript payloads may be compacted into content-addressed artifacts without removing rows (the cursor stays gap-free); `retention_gap` tells a client what is archived. Deleting a task appends `task.deleted` and rewrites the task's earlier events into tombstones (empty payload, same `seq`), so deletion removes content but never creates a gap.
 - Redaction before persistence: environment values, MCP `env`/`headers`, auth headers, secret patterns and ACP `_meta` never reach the store; `rawInput`/`rawOutput` only as redacted artifacts.
 
 Details: [events.md](../contracts/events.md).
@@ -65,9 +66,9 @@ Details: [events.md](../contracts/events.md).
 
 ### 6. Approvals and non-repeatable operations
 
-- Approvals come from ACP `session/request_permission` (`acp_permission`) or from host policy (`host_policy` for push, PR, merge, destructive commands). An approval is persisted as `pending` before the user sees it and its resolution is persisted before the agent is answered or the operation runs. Only `user` or `policy` actors can approve or deny; agent text never can.
-- Every side effect AgentDock controls is an `Operation` with `repeatability`, an `idempotency_key` equal to the approval's `operation_fingerprint`, and a read-only `reconcile_strategy`. An operation id executes at most once; an approval with scope `once` is consumed by one execution; a duplicate key is allowed only as an explicit `supersedes_operation_id` of a failed-without-effect or reconciled-not-applied/undeterminable operation, with a new approval.
-- **After a crash nothing is replayed automatically**: pending approvals become `invalidated`, started operations become `outcome_unknown`, running checks become `outcome_unknown`, live sessions become `disconnected`, in-flight tasks become `interrupted{host_crashed}` with auto-resume disabled. Reconciliation happens later, live and read-only, and resuming into `pr`/`ci` waits for it.
+- Approvals come from ACP `session/request_permission` (`acp_permission`) or from host policy (`host_policy` for push, PR, merge, destructive commands). An approval is persisted as `pending` before the user sees it and its resolution is persisted before the agent is answered or the operation runs. Only `user` or `policy` actors can approve or deny; agent text never can. Approvals for `pr_merge`, `branch_delete`, `worktree_remove` and `destructive_command` can be granted **only by the user**; policy may deny them or let them expire, and every policy decision names its rule.
+- Every side effect AgentDock controls is an `Operation` with `repeatability` (bound to its kind by the schema: git/PR/merge/branch/worktree/destructive kinds are always `non_repeatable`; repeatable work is a `Check`), an `idempotency_key` = sha256 of canonical `{kind, target}` that equals the approval's `operation_fingerprint`, and a read-only `reconcile_strategy`. Each kind may only be recorded and started in specific task states (push/PR in `pr`, merge in `ci`, destructive commands in `running`, cleanup after the task ended). An operation id executes at most once (`recorded → started → …`, or `recorded → abandoned` when it never starts); an approval with scope `once` is consumed by one execution; a duplicate key is allowed only as an explicit `supersedes_operation_id` of an abandoned, failed-without-effect or reconciled-not-applied/undeterminable operation, with a new approval.
+- **After a crash nothing is replayed automatically**: pending approvals and approved-but-unused grants become `invalidated`, recorded operations become `abandoned`, started operations become `outcome_unknown`, running checks become `outcome_unknown`, live sessions become `disconnected`, in-flight tasks become `interrupted{host_crashed}` with auto-resume disabled. Reconciliation happens later, live and read-only, and resuming into `pr`/`ci` waits for it.
 
 ### 7. Usage and quota
 
@@ -77,10 +78,10 @@ Details: [events.md](../contracts/events.md).
 
 ### 8. Harness scenarios
 
-- **Resume at quota reset**: `auto_resume_armed` only for quota/rate limits, only with the task's opt-in and a provider-reported or user-configured `not_before`; the orchestrator resumes with `scheduled_resume` no earlier than that time.
+- **Resume at quota reset**: `auto_resume_armed` only for quota/rate limits, only with the task's opt-in and a provider-reported or user-configured `not_before`; the orchestrator resumes with `scheduled_resume` no earlier than that time. `task.policy_updated` lets the user turn this off later, which disarms a waiting task.
 - **Summary on interruption**: `session.summary_recorded{purpose: interruption}`; host-generated by default because a quota-stopped agent cannot write one; used as the handoff for a restarted session.
 - **Main and child sessions**: `parent_session_id`; a child auto-collapses only after it finished and the user acknowledged its result; parent-less sessions are never auto-collapsed.
-- **Three to-do lists**: `AttentionItem` (`needs_reply`, `needs_review`, `background`) is derived purely from events by the rules in [attention.md](../contracts/attention.md); every fixture asserts its expected items.
+- **Three to-do lists**: `AttentionItem` (`needs_reply`, `needs_review`, `background`) is derived purely from events by the rules in [attention.md](../contracts/attention.md); every fixture asserts its expected items. A phase that is not progressing (`phase_decision_pending`), a running task without a live agent (`session_unavailable`), output-limit cancellations (`output_limited`) and refusals of any session role are surfaced as needs-reply items, not hidden as background work.
 
 ## Alternatives considered
 
@@ -109,12 +110,14 @@ Details: [events.md](../contracts/events.md).
 4. Rust-first (`schemars` + `ts-rs`) vs schema-first (`typify` + `json-schema-to-typescript`) generation for #4.
 5. When v2 support starts: allow `turn_ended` without `stop_reason` (v2 makes it optional), or add an explicit `unreported` value?
 6. Retention defaults (64 MiB transcript per task, 30 days after terminal) and output caps (8 MiB / 20,000 events per turn) — acceptable starting points?
+7. Which host-policy approvals may a policy rule grant without a human? Current proposal: `git_push` (never force), `pr_create`, `pr_update`, `pr_comment`, `external_write` may be policy-approved; `pr_merge`, `branch_delete`, `worktree_remove`, `destructive_command` are user-only. Making `git_push` user-only as well is a one-line change in the validator and the classification table.
+8. A task has at most one blocking approval at a time (`awaiting_approval` holds one `approval_id`). If two sessions of a running task ask for permission at once, the second request is held by the adapter until the first is resolved. Acceptable, or should `awaiting_approval` track a set?
 
 ## Acceptance mapping (issue #3)
 
 | Acceptance item | Where |
 | --- | --- |
 | ADR and typed schema with Rust/TypeScript mapping plan | this ADR; `docs/contracts/schema/agentdock.schema.json`; `docs/contracts/README.md` |
-| Mock event fixtures for all transitions incl. disconnect, cancellation, denied approval | `docs/contracts/fixtures/` (10 streams, 68/68 transitions; validated) |
+| Mock event fixtures for all transitions incl. disconnect, cancellation, denied approval | `docs/contracts/fixtures/` (12 streams, 72/72 transitions, 40 negative mutations; validated) |
 | Checkpoint consistency and replay policy documented | `docs/contracts/checkpoint-and-replay.md` |
 | No unsupported resume or quota claims in contract | capability-gated `LaunchMethod`/`features`; no quota-balance fields (validator-enforced); `Usage.source`; `retry_hint.source` |
