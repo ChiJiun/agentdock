@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 900" width="1500" height="900" role="img" aria-labelledby="t d">
+  <title id="t">AgentDock narrow-window wireframes (below 960px): main only, sidebar drawer, review drawer</title>
+  <desc id="d">Three frames. A: single main column with condensed top bar. B: sessions sidebar as a modal drawer from the left over a scrim. C: review panel as a drawer from the right covering the main column.</desc>
+  <style>
+    text { font-family: "Segoe UI", system-ui, sans-serif; fill: #1f2630; }
+    .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+    .s { font-size: 12px; } .m { font-size: 14px; } .h { font-size: 16px; font-weight: 600; } .xs { font-size: 11px; fill: #5b6472; }
+    .frame { fill: #ffffff; stroke: #5b6472; stroke-width: 1.5; }
+    .bar { fill: #f5f6f8; stroke: #c4cad3; }
+    .box { fill: #ffffff; stroke: #9aa3b0; }
+    .sunk { fill: #eef0f3; stroke: #c4cad3; }
+    .sel { fill: #dcefec; stroke: #0a6b66; stroke-width: 1.5; }
+    .acc { fill: #0a6b66; } .acct { fill: #fff; font-weight: 600; }
+    .scrim { fill: #0f1217; opacity: .4; }
+    .ph { fill: #d5dae1; }
+    .warn { fill: #fbebd6; stroke: #8f4e00; stroke-width: 2; }
+    .cap { font-size: 15px; font-weight: 700; }
+  </style>
+  <rect width="1500" height="900" fill="#f5f6f8"/>
+
+  <!-- Frame A -->
+  <text x="40" y="34" class="cap">A · Narrow (&lt; 960px): main column only</text>
+  <rect x="40" y="48" width="440" height="820" rx="6" class="frame"/>
+  <rect x="40" y="48" width="440" height="44" class="bar"/>
+  <text x="54" y="76" class="m">≡</text><rect x="80" y="62" width="200" height="22" rx="4" class="box"/><text x="90" y="77" class="xs">⌕ Switch session…</text>
+  <text x="300" y="77" class="xs">◔ ≥80%</text><rect x="352" y="62" width="22" height="16" rx="2" fill="#8f4e00"/><text x="356" y="75" class="xs" style="fill:#fff" font-weight="700">!6</text><text x="384" y="77" class="xs">◌  ◐  ⚙</text>
+  <text x="56" y="114" class="xs">acp-adapter / fix/worktree-flake</text>
+  <text x="56" y="136" class="h">Fix flaky worktree cleanup test</text>
+  <rect x="56" y="146" width="118" height="20" rx="10" fill="#fbebd6"/><text x="66" y="160" class="xs" style="fill:#8f4e00">◆! Needs approval</text>
+  <rect x="180" y="146" width="84" height="20" rx="10" class="box"/><text x="190" y="160" class="xs">▭ Local task</text>
+  <rect x="56" y="174" width="140" height="26" rx="4" class="box"/><text x="66" y="191" class="s">▯ Changes +31 −11</text>
+  <rect x="56" y="216" width="408" height="10" rx="3" class="ph"/><rect x="56" y="232" width="320" height="10" rx="3" class="ph"/>
+  <rect x="56" y="256" width="408" height="190" rx="6" class="warn"/>
+  <text x="70" y="278" class="s" font-weight="700" style="fill:#8f4e00">◆! APPROVAL REQUIRED</text>
+  <text x="70" y="300" class="m" font-weight="600">Run command</text>
+  <rect x="70" y="308" width="380" height="44" rx="4" fill="#eef0f3"/><text x="80" y="326" class="s mono">git worktree remove --force</text><text x="80" y="342" class="s mono">../wt/fix-flake-old</text>
+  <text x="70" y="372" class="xs">Commands wrap; never hidden behind a scrollbar.</text>
+  <rect x="70" y="390" width="104" height="28" rx="4" class="acc"/><text x="82" y="409" class="s acct">Approve once</text>
+  <rect x="182" y="390" width="58" height="28" rx="4" class="box"/><text x="194" y="409" class="s">Deny</text>
+  <rect x="56" y="700" width="408" height="22" rx="11" class="box"/><text x="68" y="715" class="xs">Suggested: Why do you need --force here? · Dry run first</text>
+  <rect x="56" y="730" width="408" height="120" rx="6" class="box"/>
+  <text x="70" y="756" class="m" style="fill:#5f6878">Why do you need --force here?  [Tab]</text>
+  <rect x="392" y="818" width="62" height="24" rx="4" class="acc"/><text x="402" y="834" class="xs acct">↑ Send</text>
+
+  <!-- Frame B -->
+  <text x="530" y="34" class="cap">B · Sidebar as modal drawer (Ctrl+B or ≡)</text>
+  <rect x="530" y="48" width="440" height="820" rx="6" class="frame"/>
+  <rect x="530" y="48" width="440" height="44" class="bar"/>
+  <text x="544" y="76" class="m">≡</text><text x="570" y="77" class="xs">⌕ Switch session…</text><text x="880" y="77" class="xs">!6  ◌  ⚙</text>
+  <rect x="530" y="92" width="440" height="776" class="ph"/>
+  <rect x="530" y="92" width="440" height="776" class="scrim"/>
+  <rect x="530" y="92" width="320" height="776" class="sunk"/>
+  <rect x="542" y="104" width="296" height="30" rx="4" class="acc"/><text x="556" y="124" class="s acct">+ New task</text>
+  <text x="546" y="160" class="xs" font-weight="600">▾ PINNED</text>
+  <rect x="538" y="168" width="304" height="26" rx="4" class="sel"/><text x="550" y="186" class="s">▾ ◌ Implement attention inbox popover</text>
+  <text x="568" y="212" class="s">◌ Write unit tests for attention…  ≋</text>
+  <text x="568" y="236" class="s">◷ Independent review (fresh…)  ≋</text>
+  <text x="568" y="260" class="s" font-weight="600">●✓ Explore existing session model</text>
+  <text x="568" y="284" class="xs">› ▤ Show 2 archived sub-tasks</text>
+  <text x="550" y="310" class="s" font-weight="600">◆! Fix flaky worktree cleanup test</text>
+  <text x="546" y="342" class="xs" font-weight="600">▾ agentdock</text>
+  <text x="550" y="366" class="s">⏸ Set up CI for docs lint</text>
+  <text x="546" y="398" class="xs" font-weight="600">▾ thesis-lab ▭▭</text>
+  <text x="550" y="422" class="s">› ◌ Regenerate figures · 1 running</text>
+  <text x="546" y="816" class="xs">Focus moves into the drawer; content behind is inert.</text>
+  <text x="546" y="832" class="xs">Esc / scrim click closes and returns focus. Choosing a</text>
+  <text x="860" y="430" class="xs" style="fill:#ffffff">scrim</text>
+
+  <!-- Frame C -->
+  <text x="1020" y="34" class="cap">C · Review as drawer (Ctrl+Shift+G)</text>
+  <rect x="1020" y="48" width="440" height="820" rx="6" class="frame"/>
+  <rect x="1020" y="48" width="440" height="44" class="bar"/>
+  <text x="1034" y="76" class="m">≡</text><text x="1060" y="77" class="xs">⌕ Switch session…</text><text x="1370" y="77" class="xs">!6  ◌  ⚙</text>
+  <rect x="1020" y="92" width="440" height="776" fill="#ffffff"/>
+  <text x="1036" y="118" class="h">Review changes</text><text x="1440" y="118" class="m">×</text>
+  <text x="1036" y="136" class="xs mono">wt/sqlite-events vs main · 4 files +254 −180</text>
+  <text x="1036" y="164" class="s" font-weight="600">Changes 4</text><line x1="1036" y1="170" x2="1106" y2="170" stroke="#0a6b66" stroke-width="2"/>
+  <text x="1126" y="164" class="s">Checks 1 failed</text><text x="1236" y="164" class="s">Findings 1 blocking</text>
+  <line x1="1020" y1="176" x2="1460" y2="176" stroke="#c4cad3"/>
+  <rect x="1026" y="184" width="428" height="24" rx="4" class="sel"/><text x="1036" y="201" class="s mono">A  …/migrations/0003_events.sql</text>
+  <text x="1036" y="228" class="s mono">M  …/store/src/events.rs</text>
+  <text x="1036" y="252" class="s mono">D  …/store/src/legacy_json.rs</text>
+  <text x="1036" y="276" class="s mono">A  …/store/tests/replay.rs</text>
+  <rect x="1020" y="290" width="440" height="24" fill="#eef0f3"/><text x="1034" y="307" class="s mono" font-weight="600">migrations/0003_events.sql</text>
+  <rect x="1020" y="322" width="440" height="20" fill="#fbe6e4"/><text x="1030" y="336" class="xs mono">−  old line</text>
+  <rect x="1020" y="342" width="440" height="20" fill="#e3f4e8"/><text x="1030" y="356" class="xs mono">+  new line</text>
+  <rect x="1020" y="362" width="440" height="20" fill="#e3f4e8"/><text x="1030" y="376" class="xs mono">+  new line</text>
+  <text x="1036" y="420" class="xs">Below 600px the drawer is full width; between 960 and 1279px</text>
+  <text x="1036" y="436" class="xs">it overlays the main column at 440px with a scrim.</text>
+  <rect x="1036" y="770" width="408" height="50" rx="4" class="box"/><text x="1046" y="790" class="xs">Comment to the agent…</text>
+  <rect x="1036" y="828" width="120" height="24" rx="4" class="box"/><text x="1046" y="844" class="xs">Send to session</text>
+  <text x="546" y="848" class="xs">session closes the drawer and focuses the session heading.</text>
+</svg>
