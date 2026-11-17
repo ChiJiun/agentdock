@@ -19,6 +19,8 @@ let root: Root | undefined;
 let container: HTMLDivElement | undefined;
 let requests: { path: string; method: string; data?: unknown }[] = [];
 let approvals: unknown[] = [];
+let attentionItems: unknown[] = [];
+let availableSessions = [session];
 
 function mockedFetch(path: string | URL | Request, options?: RequestInit): Promise<Response> {
   const uri = typeof path === 'string' ? path : path instanceof URL ? path.toString() : path.url;
@@ -27,8 +29,9 @@ function mockedFetch(path: string | URL | Request, options?: RequestInit): Promi
   requests.push({ path: uri, method, data });
   if (uri.endsWith('/api/health')) return Promise.resolve(returnJson({ok:true,protocol:'ACP v1',mode:'local-development'}));
   if (uri.endsWith('/api/adapters')) return Promise.resolve(returnJson([{id:'mock',label:'ACP mock'}]));
+  if (uri.endsWith('/api/attention')) return Promise.resolve(returnJson(attentionItems));
   if (uri.endsWith('/api/workspaces')) return Promise.resolve(returnJson([{path:'/mock/project'}]));
-  if (uri === '/api/sessions' && method === 'GET') return Promise.resolve(returnJson([session]));
+  if (uri === '/api/sessions' && method === 'GET') return Promise.resolve(returnJson(availableSessions));
   if (uri.includes('/events')) return Promise.resolve(returnJson([]));
   if (uri.includes('/approvals') && method === 'GET') return Promise.resolve(returnJson(approvals));
   if (uri.includes('/approvals/') && method === 'POST') return Promise.resolve(returnJson({ok:true}));
@@ -48,6 +51,8 @@ async function render(settings = structuredClone(DEFAULT_SETTINGS)) {
 beforeEach(() => {
   requests=[];
   approvals=[];
+  attentionItems=[];
+  availableSessions=[session];
   vi.stubGlobal('fetch', vi.fn(mockedFetch));
 });
 afterEach(() => {
@@ -84,6 +89,37 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect((sent?.data as {text:string}).text).toContain('繁體中文');
     expect((sent?.data as {text:string}).text).toContain('Explain the code');
     expect(ui.textContent).toContain('盡力遵循');
+  });
+
+  it('renders real event-based attention and routes a decision to the matching session', async () => {
+    const other = {...session, id:'33333333-3333-4333-8333-333333333333', adapter:'octomind'};
+    availableSessions=[session,other];
+    attentionItems=[{id:'approval:44444444-4444-4444-8444-444444444444',sessionId:other.id,
+      adapter:'octomind',cwd:other.cwd,status:'awaiting_approval',type:'decision',key:'approval_pending',
+      updatedAt:other.updated_at,evidenceCursor:2,approvalId:'44444444-4444-4444-8444-444444444444'}];
+    const ui=await render();
+    const bell=ui.querySelector<HTMLButtonElement>('button[aria-label^="Session Sentinel：1 項待處理"]');
+    expect(bell).not.toBeNull();
+    act(()=>bell?.click());
+    expect(ui.textContent).toContain('Agent 正在等待你批准一項 ACP 工具操作');
+    const jump=ui.querySelector<HTMLButtonElement>('button[aria-label^="octomind: Agent 正在等待"]');
+    await act(async()=>jump?.click());
+    expect(ui.querySelector('[role="dialog"][aria-label="跨 Session 決策收件匣"]')).toBeNull();
+    expect(ui.textContent).toContain('octomind · 33333333');
+  });
+
+  it('dismissing a notification does not approve or deny the underlying ACP tool request', async () => {
+    attentionItems=[{id:'approval:44444444-4444-4444-8444-444444444444',sessionId:sessionId,
+      adapter:'mock',cwd:session.cwd,status:'awaiting_approval',type:'decision',key:'approval_pending',
+      updatedAt:session.updated_at,evidenceCursor:2,approvalId:'44444444-4444-4444-8444-444444444444'}];
+    const ui=await render();
+    act(()=>ui.querySelector<HTMLButtonElement>('button[aria-label^="Session Sentinel：1 項待處理"]')?.click());
+    const dismiss=ui.querySelector<HTMLButtonElement>('button[aria-label="忽略此提醒（不代表批准）"]');
+    expect(dismiss).not.toBeNull();
+    await act(async()=>dismiss?.click());
+    expect(requests.some(r=>r.path.includes('/attention/')&&r.path.endsWith('/dismiss')&&r.method==='POST')).toBe(true);
+    expect(requests.some(r=>r.path.includes('/approvals/')&&r.method==='POST')).toBe(false);
+    expect(ui.textContent).toContain('目前沒有待處理事件');
   });
 
   it('requires deliberate one-time approval and never auto-accepts tools', async () => {

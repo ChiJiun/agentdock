@@ -33,6 +33,18 @@ export interface RuntimeEvent {
   };
   createdAt: string;
 }
+export interface LiveAttentionItem {
+  id: string;
+  sessionId: string;
+  adapter: string;
+  cwd: string;
+  status: RuntimeSessionStatus;
+  evidenceCursor: number;
+  updatedAt: string;
+  type: 'decision' | 'review' | 'background' | 'completed';
+  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished';
+  approvalId?: string;
+}
 export interface RuntimeApproval {
   id: string;
   session_id: string;
@@ -71,6 +83,8 @@ export const getHealth = (signal?: AbortSignal) => runtimeApi<RuntimeHealth>('he
 export const getAdapters = () => runtimeApi<RuntimeAdapter[]>('adapters');
 export const getWorkspaces = () => runtimeApi<RuntimeWorkspace[]>('workspaces');
 export const getSessions = () => runtimeApi<RuntimeSession[]>('sessions');
+export const getAttention = () => runtimeApi<LiveAttentionItem[]>('attention');
+export const dismissAttention = (id: string) => runtimeApi<{ ok: boolean }>(`attention/${encodeURIComponent(id)}/dismiss`, { method: 'POST', data: {} });
 export const getEvents = (id: string, after = 0) => runtimeApi<RuntimeEvent[]>(`sessions/${encodeURIComponent(id)}/events?after=${after}`);
 export const getApprovals = (id: string) => runtimeApi<RuntimeApproval[]>(`sessions/${encodeURIComponent(id)}/approvals`);
 export const createRuntimeSession = (adapterId: string, cwd: string) =>

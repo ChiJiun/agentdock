@@ -1,11 +1,12 @@
 import { createServer } from 'node:http';
-import { existsSync, realpathSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AcpHost } from './acp-host.mjs';
 import { DEFAULT_MOCK, ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
+import { deriveAttention } from './attention.mjs';
 
 const MAX_BODY = 20_000;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
@@ -66,6 +67,16 @@ export function createRuntimeServer({
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
+      if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
+      const dismissMatch = /^\/api\/attention\/([^/]+)\/dismiss$/.exec(pathname);
+      if (method === 'POST' && dismissMatch) {
+        await readJson(request);
+        const id = decodeURIComponent(dismissMatch[1]);
+        if (id.length > 130 || !deriveAttention(store, { includeDismissed: true }).some(item => item.id === id))
+          throw new ClientError(404, 'attention item no longer exists');
+        store.dismissAttention(id);
+        return json(response, 200, { ok: true });
+      }
       if (method === 'GET' && pathname === '/api/git/status') {
         const cwd = ensureInside(url.searchParams.get('cwd') || '', allowedRoots);
         const output = execFileSync('git', ['-C', cwd, 'status', '--short', '--branch'], { timeout: 5000, encoding: 'utf8', maxBuffer: 1_000_000 });

@@ -1,18 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertTriangle, Check, CircleDot, FileDiff,
+  Activity, AlertTriangle, Bell, Check, CircleDot, FileDiff,
   FolderGit2, Loader2, LockKeyhole, Play, ShieldCheck, Square, Terminal,
   X, XCircle,
 } from 'lucide-react';
 import {
-  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, decideRuntimeApproval,
+  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, decideRuntimeApproval, dismissAttention, getAttention,
   getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces,
   gitDiff, gitStatus, sendRuntimePrompt,
   type RuntimeAdapter, type RuntimeApproval, type RuntimeEvent, type RuntimeSession,
-  type RuntimeWorkspace,
+  type RuntimeWorkspace, type LiveAttentionItem,
 } from '../live/api';
 import { compileLanguageOverlay, type LanguageSettings } from '../i18n/language';
 import { useLocale } from '../i18n/context';
+import { LiveAttentionInbox } from './LiveAttentionInbox';
 
 const REFRESH_MS = 1300;
 const RUNTIME_STATES: Record<string, { label: string; color: string }> = {
@@ -63,6 +64,11 @@ export function LiveWorkspace({ settings, onBack }: {
   const [activeId, setActiveId] = useState('');
   const [history, setHistory] = useState<RuntimeEvent[]>([]);
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
+  const [attention, setAttention] = useState<LiveAttentionItem[]>([]);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const attentionRef = useRef<HTMLButtonElement>(null);
+  const attentionCount = attention.filter(item=>item.type==='decision'||item.type==='review').length;
+  const closeAttention = useCallback(() => { setAttentionOpen(false); attentionRef.current?.focus(); }, []);
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -103,8 +109,8 @@ export function LiveWorkspace({ settings, onBack }: {
       if (running || cancelled) return;
       running = true;
       try {
-        const current = await getSessions();
-        if (!cancelled) setSessions(current);
+        const [current, alerts] = await Promise.all([getSessions(), getAttention()]);
+        if (!cancelled) { setSessions(current); setAttention(alerts); }
         if (!activeId) return;
         const [events, pending] = await Promise.all([getEvents(activeId, latest.current), getApprovals(activeId)]);
         if (!cancelled) {
@@ -122,6 +128,18 @@ export function LiveWorkspace({ settings, onBack }: {
     const interval = window.setInterval(() => { void sync(); }, REFRESH_MS);
     return () => { cancelled = true; window.clearInterval(interval); };
   }, [health, activeId]);
+
+  function openAttentionSession(item: LiveAttentionItem) {
+    selectSession(item.sessionId);
+    setInspectorTab(item.type === 'decision' ? 'approvals' : 'activity');
+    closeAttention();
+  }
+  async function dismissAttentionItem(item: LiveAttentionItem) {
+    try {
+      await dismissAttention(item.id);
+      setAttention(old=>old.filter(alert=>alert.id!==item.id));
+    } catch(e) { setError(String((e as Error).message)); }
+  }
 
   function selectSession(id: string) {
     setActiveId(id);
@@ -196,7 +214,7 @@ export function LiveWorkspace({ settings, onBack }: {
 
   return <div className="live-workspace">
     <aside className="live-sidebar">
-      <header><button type="button" onClick={onBack} className="live-back">← {ui("返回展示工作區", "Demo workspace")}</button><strong><Activity size={17}/> {ui("即時 ACP", "Live ACP")}</strong><span className="live-connection"><CircleDot size={12}/> {health === "online" ? ui("已連線","Online") : health === "offline" ? ui("未連線","Offline") : ui("連線中","Connecting")}</span></header>
+      <header><button type="button" onClick={onBack} className="live-back">← {ui("返回展示工作區", "Demo workspace")}</button><strong><Activity size={17}/> {ui("即時 ACP", "Live ACP")}</strong><span className="live-connection"><CircleDot size={12}/> {health === "online" ? ui("已連線","Online") : health === "offline" ? ui("未連線","Offline") : ui("連線中","Connecting")}</span>{health === "online" && <div className="live-attention-anchor"><button ref={attentionRef} className="live-attention-bell" aria-label={ui(`Session Sentinel：${attentionCount} 項待處理`,`Session Sentinel: ${attentionCount} require attention`)} aria-expanded={attentionOpen} onClick={()=>setAttentionOpen(v=>!v)}><Bell size={17}/>{ui("決策通知","Decision inbox")}{attentionCount>0 && <span className="live-attention-count">{attentionCount}</span>}</button>{attentionOpen && <LiveAttentionInbox items={attention} onSelect={openAttentionSession} onDismiss={item=>void dismissAttentionItem(item)} onClose={closeAttention}/>}</div>}</header>
       {health === 'online' && <>
         <div className="live-setup">
           <div className="live-side-heading">{ui("建立工作階段","START A SESSION")}</div>

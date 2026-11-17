@@ -47,6 +47,9 @@ export class SessionStore {
         status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
         selected_option TEXT
       );
+      CREATE TABLE IF NOT EXISTS attention_dismissals (
+        id TEXT PRIMARY KEY, dismissed_at TEXT NOT NULL
+      );
     `);
     // There are no automatically resumed agent connections at process restart.
     this.db.prepare(`UPDATE sessions SET status='interrupted',updated_at=? WHERE status IN ('starting','ready','running','awaiting_approval')`)
@@ -80,6 +83,16 @@ export class SessionStore {
   events(id, after = 0) {
     const rows = this.db.prepare('SELECT * FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 300').all(id, after);
     return rows.map(r => ({ seq: r.seq, sessionId: r.session_id, kind: r.kind, data: JSON.parse(r.data), createdAt: r.created_at }));
+  }
+  latestEvent(sessionId) {
+    const row = this.db.prepare('SELECT seq,kind,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);
+    return row ?? null;
+  }
+  wasDismissed(id) {
+    return !!this.db.prepare('SELECT id FROM attention_dismissals WHERE id=?').get(id);
+  }
+  dismissAttention(id) {
+    this.db.prepare('INSERT OR IGNORE INTO attention_dismissals(id,dismissed_at) VALUES(?,?)').run(id, new Date().toISOString());
   }
   createApproval(approval) {
     this.db.prepare('INSERT INTO approvals VALUES(?,?,?,?,?,?,?,NULL)').run(
