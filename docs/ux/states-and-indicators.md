@@ -42,7 +42,7 @@ Kinds describe **where the work runs and what happens if you close AgentDock**. 
 | Kind | Meaning | Glyph | Text label | Lifecycle shown to the user |
 | --- | --- | --- | --- | --- |
 | **Local task** | A session you drive directly; the agent process runs on this computer. | monitor | “Local task” | Stops when AgentDock quits (quit dialog lists them). |
-| **Background agent** | A delegate session spawned by a main session or by “run in background” (explorer, test writer, reviewer). Runs on this computer, has no foreground conversation, reports back to its parent. | stacked layers | “Background agent” + parent link (“Sub-task of …”) | Stops when AgentDock quits. Auto-archives after its result is viewed (see §5). |
+| **Background agent** | A delegate session spawned by a main session or by “run in background” (explorer, test writer, reviewer). Runs on this computer, has no foreground conversation, reports back to its parent. | stacked layers | “Background agent” + parent link (“Sub-task of …”) | Stops when AgentDock quits. Auto-archives only after its result has been **opened** and the user has moved on (see §5); marking it reviewed is not enough. |
 | **Remote task** | Runs on a remote worker (SSH, V1.0). The worker is the authority for its state. | two stacked server units | “Remote task · *host*” + connection state | Keeps running when AgentDock quits **only if the worker confirmed it is persistent**; otherwise shown as “will stop”. |
 
 Where they appear:
@@ -69,14 +69,27 @@ Classification is a pure function of session data plus “which session is on sc
 
 Scope: sessions of projects that are registered in AgentDock (removed projects excluded), all projects regardless of sidebar collapse or filter state, sub-tasks included (row subtitle names the parent).
 
-“Viewed” means: the session was opened while the window had focus and its latest output was rendered, or the user chose **Mark reviewed** (one row) / **Mark completed as reviewed** (bulk). It is persisted (SQLite), so errors stay in “to review” until seen, not “until the next success”.
+**Viewed and opened are two facts. Do not merge them.**
+
+| Term | Becomes true when | What it does |
+| --- | --- | --- |
+| **viewed** | the result was acknowledged: the session was **opened** (below), or the user chose **Mark completed as reviewed** (bulk; completed and cancelled results only) | Removes the session from “New results to review” (rule 4) and turns “Done · new” into “Done”. Persisted, so errors stay in “to review” until seen, not “until the next success”. |
+| **opened** | the session was on screen while the window had focus and its latest output was rendered, **after the session entered its current terminal state** | The only thing that satisfies the sub-task archive rule (§5, condition 2). |
+
+- opened ⇒ viewed. viewed ⇏ opened: a bulk-marked result is viewed but not opened.
+- Both are reset when the session leaves the terminal state (it runs again); the next result has to be opened again.
+- There is **no single-row “Mark reviewed” in the MVP**. Opening the row is the one-row path: it costs the same single action and actually shows the result. A per-row action that dismisses a result without showing it would be a second way to mark a failure as dealt with unseen. If it is added later it needs its own place (a row menu, not a button inside the row, so the row keeps one Tab stop), must follow the same “never archives” rule as the bulk action, and must be decided for failed and interrupted results explicitly.
+- Contract names (ADR-0003, PR #22, **not merged yet — to be aligned once it is**): `session.result_acknowledged` / `task.outcome_acknowledged` with `method: opened | marked_reviewed | bulk_marked_reviewed`. `opened` here is `method: opened`; “Mark completed as reviewed” is `bulk_marked_reviewed`; `marked_reviewed` has no UI in the MVP. This spec does not define the schema.
 
 **Bulk “Mark completed as reviewed”** (in the inbox, replaces the earlier “Mark all reviewed”):
 
 - applies only to `completed` and `cancelled` results; `failed` (including quota and auth) and `interrupted` results stay listed until opened, because they need a decision (retry, switch agent, start from history);
 - **never archives** anything — a sub-task is archived only after its result was actually opened (§5), so marked sub-tasks stay visible under their parent as “Done”;
 - is never the initial focus of the inbox (the first row is; see [accessibility.md](accessibility.md#inbox-and-usage-popovers-non-modal-dialog));
-- confirms with a toast “Marked as reviewed: N” with **Undo** (8 s), and announces politely. Undo restores the rows to “to review”. The toast is not the only way back: the same sessions remain reachable in the sidebar and through Ctrl+K.
+- confirms with a toast “Marked as reviewed: N” with **Undo** (8 s), and announces politely. Undo restores the rows to “to review”.
+  - Undo **only revokes that acknowledgement** (viewed → not viewed, unread count back). It does not touch opened, archived or the restored flag, and it **skips any result the user has opened since the bulk action** (it stays viewed — the user has seen it) and any session that is no longer in a terminal state. The announcement gives the number actually restored.
+  - The sessions remain reachable in the sidebar and through Ctrl+K, but that is not a way back to “to review”, and a keyboard user can rarely reach the toast in 8 s — see the known limit in [accessibility.md §6](accessibility.md#6-other-requirements).
+  - Contract: PR #22 has no event that revokes an acknowledgement yet (its “Divergences”, item 3); the bulk action must not ship in the app before one exists.
 
 ### Badge semantics (top-bar inbox button)
 
@@ -98,12 +111,15 @@ Three sections in fixed order, each with a heading, glyph and count: **Needs you
 ## 5. Main sessions, sub-tasks and archiving
 
 - **Main sessions never auto-archive.** They can receive new tasks at any time. Archive is a manual action with confirmation, **offered only in a terminal state** (`completed`, `failed`, `interrupted`, `cancelled`); a running, queued, paused or awaiting session must be stopped first. An archived main session is still searchable (Ctrl+K, ranked lower, tagged “archived”).
-- **Waiting always wins over archived.** If an archived session (main or sub-task) enters `awaiting-approval` or `awaiting-input` — for example a remote worker resumes it — AgentDock unarchives it, shows it in **Needs reply**, and announces it like any other approval. The inbox rule order (§4, rule 1 before rule 2) is the safety net.
+- **Waiting always wins over archived.** If an archived session (main or sub-task) enters `awaiting-approval` or `awaiting-input` — for example a remote worker resumes it — AgentDock unarchives it, shows it in **Needs reply**, and announces it like any other approval. The inbox rule order (§4, rule 1 before rule 2) is the safety net. This is a **system restore and does not set the “restored by user” flag** (condition 4 below): the user did not ask to keep the sub-task. After the user answers and the sub-task finishes again, it can auto-archive again once the *new* result has been opened (condition 2 is evaluated against the new terminal state). Contract names, to be aligned after PR #22 merges: `session.unarchived{by: system}` versus `{by: user}`.
 - **Sub-tasks (background agents) auto-archive** only when all hold:
   1. state is `completed` or `cancelled`;
-  2. the result has been **opened** (rendered on screen). “Mark reviewed” / “Mark completed as reviewed” clear the inbox entry but do **not** satisfy this condition — “collapse only after the result has been seen” means actually seen;
+  2. **after it entered that terminal state**, its latest output has been **opened** (rendered on screen while the window had focus; §4). Timing matters:
+     - an opening that happened *before* the state was entered does not count — watching a sub-task run and leaving before it finishes is not seeing its result;
+     - a result that arrives while the sub-task is on screen counts at that moment (if the window is not focused, when it regains focus with the sub-task still on screen);
+     - “Mark completed as reviewed” clears the inbox entry but does **not** satisfy this condition — “collapse only after the result has been seen” means actually seen;
   3. the user navigates away from it (a row never disappears while focused, hovered or on screen);
-  4. the user has not restored it before (Undo or Unarchive). An explicitly restored sub-task is never auto-archived again; it can still be archived manually.
+  4. the user has not restored it before with **Undo** or **Unarchive** (the “restored by user” flag). An explicitly restored sub-task is never auto-archived again; it can still be archived manually. The automatic unarchive of a waiting session (above) does not set this flag.
   A toast confirms with **Undo** (8 s) and announces politely. After Undo, focus moves to the restored row in the sidebar (or to the session heading if the sidebar is hidden), never to the page body.
 - **Undo is not the only way back.** Every archived session has an **Unarchive** button in its session header (reach it through “Show N archived sub-tasks” or Ctrl+K). A toast that disappears while focused moves focus to the session heading.
 - `failed` and `interrupted` sub-tasks **never auto-archive**; they stay under the parent until the user retries or archives them.
@@ -138,3 +154,35 @@ From the PRD: *indicate subscription quota as unknown when the provider does not
 - A meter appears only for provider-reported values, with `role="meter"` and the number as text. ≥ 80 % adds the text “high” and an outlined “≥80%” flag on the top-bar button (text, not only colour).
 - Per-session token counts appear in the usage popover and session details only when the adapter reports them; otherwise “Token counts not reported by adapter”.
 - No polling that costs model tokens. Values refresh on adapter events or explicit refresh.
+
+## 9. Policy enforcement indicator (agent bypass / full-access modes)
+
+From ADR-0002, APR-11 (“honest scope”): *agent-native bypass modes (Claude Code `bypassPermissions`, Codex full access) never send permission requests; the UI must say AgentDock does not enforce policy in those modes.* AgentDock’s approval rules act on two things only: permission requests that an agent sends, and operations AgentDock performs itself. An agent that runs its own tools without asking is outside both.
+
+This is a **session-level mode**, orthogonal to status (§2) and kind (§3). It is not an error and not an attention item: nothing is waiting for the user, so it never counts in the inbox badge.
+
+| Enforcement | When | Label | Cues |
+| --- | --- | --- | --- |
+| **Requests routed** (default) | The agent is in a mode in which it asks before acting, as set by AgentDock at launch or reported by the adapter. | *No chip.* Session details say “The agent asks before it acts; AgentDock rules decide each request.” | — |
+| **Not enforced** | The agent runs in its own bypass / full-access mode — set by the user through AgentDock, or reported by the adapter. | **Policy not enforced** | Shield-with-slash glyph + text + dashed outline; `status-danger` colour as the secondary cue |
+| **Unknown** | The adapter does not report its permission mode and AgentDock did not set it. | **Policy coverage unknown** | “?” prefix + text + dashed outline, neutral colour (same treatment as an unknown usage source, §8) |
+
+Rules:
+
+1. **Never claim more than is true.** No surface shows a “protected”, “enforced” or shield-with-check badge for a session. The line “Enforced by AgentDock, not by the agent prompt” stays on approval cards only, because a card *is* a request that reached AgentDock.
+2. **Source, not inference.** The mode comes from what AgentDock set when it launched or configured the session, or from what the adapter reports (which adapter mode ids count as bypass is declared per adapter; an unrecognised mode id is **Unknown**). AgentDock never infers the mode from behaviour — “no permission request for a while” proves nothing.
+3. **Where “Not enforced” shows** (all of them, for as long as the mode is active):
+   - **Session header** — chip “Policy not enforced”.
+   - **Persistent note under the header**, not dismissible while the mode is active: “AgentDock policy is not enforced in this session. *Agent* is running in its own *mode name* mode (*source*): it runs commands and edits files without asking AgentDock, so approval rules do not apply to what the agent does. AgentDock still asks before the operations it performs itself (push, pull request, merge, worktree removal).”
+   - **Sidebar row** — the glyph at the right edge, and “policy not enforced” in the accessible name.
+   - **Inbox, Home, project and switcher rows** — the words “policy not enforced” in the row subtitle / tag.
+   - **Timeline** — a notice at the point where the mode started (“Permission mode: full access — reported by the adapter”), and again when it ends. Tool events in between are shown as the agent reported them and never carry an “approved” or “allowed by rule” marker.
+   - **Settings → Agents & adapters** — per adapter, whether it reports its permission mode.
+4. **“Unknown” is quieter**: header chip and session details only (no sidebar glyph, no note), with the text “This adapter does not report its permission mode. AgentDock applies its rules to the requests it receives and cannot tell whether the agent asks for everything.”
+5. **Entering the mode.** AgentDock never selects a bypass mode by default or on its own. If the user turns it on through AgentDock, a confirmation dialog states the consequence in the words of the note above; the default button is Cancel. If the agent reports that it switched by itself, the note appears, the timeline records it, and a polite announcement says “Policy is no longer enforced in *title*”. Approvals remain the only assertive announcement.
+6. **Operations AgentDock performs itself** (push, PR, merge, worktree removal and the other host-policy operations) still require their approvals in every mode; the note says so, so that “not enforced” is not read as “nothing is checked”.
+7. **Sub-tasks** carry their own value. A collapsed parent shows the glyph if any live child is “Not enforced”.
+
+Data needed (requirement only; schema belongs to the contracts): a per-session enforcement value (`requests routed` / `not enforced` / `unknown`), the agent’s own mode name as reported, the source (set by AgentDock / reported by adapter), and events when it changes. PR #22 (ADR-0003) currently states the labelling requirement in its ACP-capability and replay documents but defines no field for it; to be aligned after PR #22 merges.
+
+Prototype: session `s8` (“Rename fixture files to kebab-case”, `?session=s8`) shows the chip, the note, the sidebar glyph and the timeline notice; the state gallery (`states.html`) shows “Not enforced” and “Unknown” side by side and the wording of the confirmation as a static card. The confirmation dialog’s behaviour, the mode-change announcement and the end-of-mode notice are not prototyped. Screenshot: [`14-policy-not-enforced-light.png`](screenshots/14-policy-not-enforced-light.png).

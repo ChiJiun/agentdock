@@ -41,6 +41,11 @@
     return `<span class="st${st.spin ? ' st-spin' : ''}${extra ? ' ' + extra : ''}" data-tone="${st.tone}" title="${esc(st.label)}">${icon(st.icon)}</span>`;
   };
   const kindIcon = s => { const k = kindOf(s); return `<span class="kind" data-kind="${s.kind}" title="${esc(k.label)}">${icon(k.icon)}</span>`; };
+  // Policy enforcement (states-and-indicators.md §9). Orthogonal to status and
+  // kind. AgentDock only knows this from the adapter or from its own launch
+  // settings; it is never inferred from behaviour.
+  const notEnforced = s => s.enforcement === 'not-enforced';
+  const enfIcon = s => notEnforced(s) ? `<span class="enf" title="Policy not enforced — the agent runs in its own ${esc(s.agentMode || 'bypass')} mode">${icon('enfOff')}</span>` : '';
   const ago = m => m <= 0 ? 'now' : m < 60 ? m + 'm' : m < 1440 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd';
   const agoLong = m => m <= 0 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago';
   const monogram = agent => `<span class="monogram" aria-hidden="true">${esc(agent.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase())}</span>`;
@@ -176,6 +181,14 @@
       T.tool('run', 'node scripts/collect-caps.mjs fixtures/', 'exit 1', 'Error: ENOENT fixtures/v2/initialize.json', 'error'),
       { t: 'notice', tone: 'danger', icon: 'stFailed', title: 'Failed — command exited with code 1', body: 'Failed sub-tasks are never archived automatically. Open the parent to decide whether to retry.', actions: ['Retry', 'Archive'] },
     ];
+    if (k === 'bypass') return [
+      { t: 'notice', tone: 'neutral', icon: 'enfOff', title: 'Permission mode: full access — reported by the adapter', body: 'From here on the agent runs its own tools without sending permission requests to AgentDock. The events below are shown as the agent reported them; none of them was checked against AgentDock approval rules.' },
+      T.user('Rename the fixture files to kebab-case and update every import.'),
+      T.tool('run', 'git mv fixtures/initV1.json fixtures/init-v1.json', 'exit 0', 'renamed fixtures/initV1.json -> fixtures/init-v1.json'),
+      T.tool('edit_file', 'crates/adapter/tests/handshake.rs', '+6 −6', 'include_str!("../../fixtures/init-v1.json")'),
+      T.tool('run', 'cargo test -p adapter handshake', '12 passed', 'test result: ok. 12 passed; 0 failed'),
+      T.agent('Renamed 9 of 14 fixtures so far. Continuing with the v2 draft fixtures.'),
+    ];
     if (k === 'new') return [T.user(s.objective || 'New task')];
     return [T.user('Archived example task.'), T.agent('Done. This session is archived and only reachable through search.')];
   }
@@ -227,7 +240,7 @@
       if (kidRun) parts.push(kidRun + ' running');
       if (parts.length) sub = `<span class="tree-sub">${parts.join(' · ')}</span>`;
     }
-    const srBits = [st.label, k.label, unread ? s.unread + ' new' : '', opts && opts.showProject ? 'project ' + p.name : '', hasKids ? liveKids.length + ' sub-tasks' : '', 'updated ' + agoLong(s.updated)].filter(Boolean).join(', ');
+    const srBits = [st.label, k.label, notEnforced(s) ? 'policy not enforced' : '', unread ? s.unread + ' new' : '', opts && opts.showProject ? 'project ' + p.name : '', hasKids ? liveKids.length + ' sub-tasks' : '', 'updated ' + agoLong(s.updated)].filter(Boolean).join(', ');
     return `<div class="tree-row" role="treeitem" id="row-${s.id}" data-id="${s.id}" data-level="${level}" aria-level="${level}" tabindex="-1"
       ${hasKids ? `aria-expanded="${expanded}"` : ''} ${current ? 'aria-current="page"' : ''} aria-selected="${current}" data-unread="${unread}" data-archived="${!!s.archived}"
       aria-label="${esc(s.title)}. ${esc(srBits)}">
@@ -235,7 +248,7 @@
       ${s.archived ? `<span class="st" data-tone="neutral" title="Archived">${icon('stArchived')}</span>` : stIcon(s)}
       <span class="tree-title">${esc(s.title)}${opts && opts.showProject ? ` <span class="tree-sub">· ${esc(p.name)}</span>` : ''}</span>
       ${sub}
-      <span class="tree-meta">${unread ? `<span class="new-pill">${s.unread} new</span>` : ''}${s.kind !== 'local' ? kindIcon(s) : ''}${kidNeeds && !expanded ? `<span class="st" data-tone="attention" title="A sub-task needs you">${icon('stApproval')}</span>` : ''}<span>${ago(s.updated)}</span></span>
+      <span class="tree-meta">${unread ? `<span class="new-pill">${s.unread} new</span>` : ''}${enfIcon(s)}${s.kind !== 'local' ? kindIcon(s) : ''}${kidNeeds && !expanded ? `<span class="st" data-tone="attention" title="A sub-task needs you">${icon('stApproval')}</span>` : ''}<span>${ago(s.updated)}</span></span>
     </div>`;
   }
   function childRows(s) {
@@ -354,6 +367,7 @@
               <span class="chip" data-tone="${st.tone}">${stIcon(s)}${esc(st.label)}</span>
               <span class="chip">${kindIcon(s)}${esc(k.label)}</span>
               <span class="chip">${monogram(s.agent)}${esc(s.agent)}${s.model ? ' · model ' + esc(s.model) : ''}</span>
+              ${notEnforced(s) ? `<span class="chip" data-enf="off">${icon('enfOff')}Policy not enforced</span>` : ''}
               ${s.archived ? `<span class="chip"><span class="st" data-tone="neutral">${icon('stArchived')}</span>Archived</span>` : ''}
             </div>
           </div>
@@ -363,6 +377,7 @@
             ${d ? `<button class="btn" type="button" data-toggle-review aria-expanded="${state.reviewOpen}" aria-controls="review" aria-keyshortcuts="Control+Shift+G">${icon('sidebarRight')} Changes <span class="diffstat-add">+${d.add}</span><span class="diffstat-del">−${d.del}</span></button>` : `<button class="btn" type="button" data-toggle-review aria-expanded="${state.reviewOpen}" aria-controls="review">${icon('sidebarRight')} Changes · none</button>`}
           </div>
         </header>
+        ${notEnforced(s) ? `<div class="enforce-note" id="enforce-note" role="note" aria-labelledby="enforce-title">${icon('enfOff')}<p><strong id="enforce-title">AgentDock policy is not enforced in this session.</strong> ${esc(s.agent)} is running in its own <span class="mono">${esc(s.agentMode || 'bypass')}</span> mode (${esc(s.modeSource || 'reported by the adapter')}): it runs commands and edits files without asking AgentDock, so approval rules do not apply to what the agent does. AgentDock still asks before the operations it performs itself (push, pull request, merge, worktree removal).</p></div>` : ''}
         <div class="attention-banner" id="attention-banner" hidden></div>
         <div class="timeline-wrap">
           <div class="timeline" id="timeline" role="log" aria-live="off" aria-label="Conversation with ${esc(s.agent)}" tabindex="0">
@@ -460,7 +475,7 @@
   function renderHome() {
     const m = inboxModel();
     $('#main').setAttribute('aria-label', 'Home');
-    const listOf = (arr, empty) => arr.length ? `<ul class="list">${arr.map(s => `<li><button class="list-btn" type="button" data-open="${s.id}">${stIcon(s)}<span class="grow"><span>${esc(s.title)}</span><br><span class="muted" style="font-size:var(--ad-text-xs)">${esc(statusOf(s).label)} · ${esc(projectOf(s).name)}${s.parentId ? ' · sub-task' : ''}</span></span>${kindIcon(s)}<span class="muted">${ago(s.updated)}</span></button></li>`).join('')}</ul>` : `<p class="list-empty list">${empty}</p>`;
+    const listOf = (arr, empty) => arr.length ? `<ul class="list">${arr.map(s => `<li><button class="list-btn" type="button" data-open="${s.id}">${stIcon(s)}<span class="grow"><span>${esc(s.title)}</span><br><span class="muted" style="font-size:var(--ad-text-xs)">${esc(statusOf(s).label)} · ${esc(projectOf(s).name)}${s.parentId ? ' · sub-task' : ''}${notEnforced(s) ? ' · policy not enforced' : ''}</span></span>${enfIcon(s)}${kindIcon(s)}<span class="muted">${ago(s.updated)}</span></button></li>`).join('')}</ul>` : `<p class="list-empty list">${empty}</p>`;
     const repo = state.homeRepo ? AD.projects.find(p => p.id === state.homeRepo) : null;
     $('#main').innerHTML = `<div class="page"><div class="page-inner">
       <div><h1 id="home-title" tabindex="-1">Home</h1><p class="muted">Pick a repository and describe the task. AgentDock creates a worktree per task.</p></div>
@@ -490,7 +505,7 @@
       <section aria-labelledby="h-wt"><h2 id="h-wt">Worktrees</h2><table class="tbl"><thead><tr><th>Worktree</th><th>Branch</th><th>Sessions</th><th>State</th></tr></thead><tbody>
         ${[...new Set(list.map(s => s.worktree))].map(w => { const ss = list.filter(s => s.worktree === w); return `<tr><td class="mono">${esc(w)}</td><td class="mono">${esc(ss[0].branch)}</td><td>${ss.length}</td><td>${ss.map(s => stIcon(s)).join(' ')} ${esc(statusOf(ss[0]).label)}</td></tr>`; }).join('')}
       </tbody></table></section>
-      <section aria-labelledby="h-ss"><h2 id="h-ss">Sessions</h2><ul class="list">${list.map(s => `<li><button class="list-btn" type="button" data-open="${s.id}">${stIcon(s)}<span class="grow">${esc(s.title)}${s.parentId ? ' <span class="muted">(sub-task)</span>' : ''}</span>${kindIcon(s)}<span class="muted">${ago(s.updated)}</span></button></li>`).join('')}</ul></section>
+      <section aria-labelledby="h-ss"><h2 id="h-ss">Sessions</h2><ul class="list">${list.map(s => `<li><button class="list-btn" type="button" data-open="${s.id}">${stIcon(s)}<span class="grow">${esc(s.title)}${s.parentId ? ' <span class="muted">(sub-task)</span>' : ''}${notEnforced(s) ? ' <span class="muted">· policy not enforced</span>' : ''}</span>${enfIcon(s)}${kindIcon(s)}<span class="muted">${ago(s.updated)}</span></button></li>`).join('')}</ul></section>
     </div></div>`;
   }
 
@@ -498,11 +513,12 @@
     const tabs = [['agents', 'Agents & adapters'], ['accounts', 'Accounts & usage'], ['env', 'Environments'], ['perm', 'Permissions'], ['appearance', 'Appearance'], ['keys', 'Keyboard']];
     $('#main').setAttribute('aria-label', 'Settings');
     let body = '';
-    if (state.settingsTab === 'agents') body = `<table class="tbl"><thead><tr><th>Adapter</th><th>Status</th><th>Session reattach</th><th>Cancel</th></tr></thead><tbody>
-      <tr><td>${monogram('Claude Code')} Claude Code (ACP)</td><td><span class="st" data-tone="success">${icon('stDone')}</span> Detected</td><td>Not advertised</td><td>Supported</td></tr>
-      <tr><td>${monogram('Codex')} Codex (ACP)</td><td><span class="st" data-tone="danger">${icon('stAuth')}</span> Sign-in needed</td><td>Advertised</td><td>Supported</td></tr>
-      <tr><td>${monogram('Mock agent')} Mock agent (CI)</td><td><span class="st" data-tone="success">${icon('stDone')}</span> Built in</td><td>Advertised</td><td>Supported</td></tr></tbody></table>
-      <p class="muted" style="margin-top:var(--ad-space-5)">Capabilities come from the adapter handshake. Features the adapter does not advertise are hidden or shown as unavailable, never simulated.</p>`;
+    if (state.settingsTab === 'agents') body = `<table class="tbl"><thead><tr><th>Adapter</th><th>Status</th><th>Session reattach</th><th>Cancel</th><th>Permission mode</th></tr></thead><tbody>
+      <tr><td>${monogram('Claude Code')} Claude Code (ACP)</td><td><span class="st" data-tone="success">${icon('stDone')}</span> Detected</td><td>Not advertised</td><td>Supported</td><td>Reported</td></tr>
+      <tr><td>${monogram('Codex')} Codex (ACP)</td><td><span class="st" data-tone="danger">${icon('stAuth')}</span> Sign-in needed</td><td>Advertised</td><td>Supported</td><td>Reported</td></tr>
+      <tr><td>${monogram('Mock agent')} Mock agent (CI)</td><td><span class="st" data-tone="success">${icon('stDone')}</span> Built in</td><td>Advertised</td><td>Supported</td><td>Not applicable</td></tr></tbody></table>
+      <p class="muted" style="margin-top:var(--ad-space-5)">Capabilities come from the adapter handshake. Features the adapter does not advertise are hidden or shown as unavailable, never simulated.</p>
+      <p class="muted" style="margin-top:var(--ad-space-4)">Permission mode: when an agent reports its own bypass or full-access mode, the session is labelled “Policy not enforced”. When an adapter does not report its mode, the session is labelled “Policy coverage unknown” — AgentDock never assumes it is being asked.</p>`;
     else body = `<p class="muted">Not prototyped. See docs/ux/information-architecture.md → Settings.</p>`;
     $('#main').innerHTML = `<div class="page"><div class="page-inner"><h1 id="settings-title" tabindex="-1">Settings</h1>
       <div class="settings-grid"><div class="settings-nav" role="navigation" aria-label="Settings sections">${tabs.map(([id, l]) => `<button type="button" data-settings="${id}" ${state.settingsTab === id ? 'aria-current="page"' : ''}>${esc(l)}</button>`).join('')}</div><div>${body}</div></div></div></div>`;
@@ -561,11 +577,29 @@
     $('#toasts').appendChild(t);
     setTimeout(() => { if (t.isConnected) remove(); }, 8000);
   }
+  const treeVisible = () => mqNarrow.matches ? state.drawer === 'sidebar' : $('#app').dataset.sidebar !== 'closed';
+  // Where focus goes when the element that should get it back cannot take it:
+  // inside the open modal drawer if there is one, else the page heading.
   function focusFallback() {
+    if (state.drawer === 'sidebar') return focusTree();
+    if (reviewIsOverlay()) return $('#review-title').focus();
     const h = $('#session-title') || $('#main h1');
     (h || $('#main')).focus();
   }
-  const treeVisible = () => mqNarrow.matches ? state.drawer === 'sidebar' : $('#app').dataset.sidebar !== 'closed';
+  // Can this element take focus right now? Not when it is gone, hidden, inside
+  // an inert region, or inside a sidebar drawer that is closed (or closing).
+  function canFocus(el) {
+    if (!el || el === document.body || !el.isConnected) return false;
+    if (el.closest('[inert], [hidden]')) return false;
+    if (el.closest('#sidebar') && !treeVisible()) return false;
+    return true;
+  }
+  // Focus restore never ends on <body>: if the remembered element cannot take
+  // focus (accessibility.md §2, "Focus return"), use the fallback target.
+  function restoreFocus(el) {
+    if (canFocus(el)) { el.focus(); if (document.activeElement === el) return; }
+    focusFallback();
+  }
   function focusRowOf(id) {
     const r = $('#row-' + id);
     if (!r || !treeVisible()) return false;
@@ -573,23 +607,36 @@
     r.tabIndex = 0; state.focusRow = r.id; r.focus();
     return true;
   }
-  function unarchive(s) {
+  // by 'user' (Undo, Unarchive): sets the "restored by user" flag, so the
+  // sub-task is never auto-archived again. by 'system' (an archived session
+  // starts waiting for the user; not reachable with the prototype data): the
+  // flag is NOT set, so the sub-task can auto-archive again once its new result
+  // has been opened (states-and-indicators.md §5).
+  function unarchive(s, by) {
     s.archived = false;
-    s.keepUnarchived = true; // an explicit restore is never undone by auto-archive
+    if (by !== 'system') s.restoredByUser = true;
     if (s.parentId) state.expanded.add(s.parentId);
   }
+  const onScreen = s => state.view === 'session' && state.currentId === s.id;
+  // "viewed" clears the inbox entry (opening, or Mark completed as reviewed).
+  // "opened" is narrower: the result was rendered on screen after the session
+  // entered its current terminal state. Only "opened" allows auto-archive.
+  function markOpened(s) { if (TERMINAL.has(s.state)) { s.viewed = true; s.opened = true; } s.unread = 0; }
+  function enterTerminal(s, st) { s.state = st; s.viewed = s.opened = onScreen(s); }
+  // A new run invalidates an earlier "opened": the next result must be opened again.
+  function enterRunning(s) { s.state = 'running'; s.opened = false; s.viewed = true; }
 
   function leaveSession(prev) {
     // Sub-task archive rule: completed/cancelled sub-tasks are archived only
     // after their result has been opened, and only when the user navigates
     // away (rows never disappear under the user's focus). "Mark reviewed"
     // alone never archives, and a sub-task the user restored stays restored.
-    if (!prev || !prev.parentId || prev.archived || prev.keepUnarchived) return;
-    if ((prev.state === 'completed' || prev.state === 'cancelled') && prev.viewed) {
+    if (!prev || !prev.parentId || prev.archived || prev.restoredByUser) return;
+    if ((prev.state === 'completed' || prev.state === 'cancelled') && prev.opened) {
       prev.archived = true;
       toast(`Archived sub-task “${prev.title}”`, {
         label: 'Undo',
-        run: () => { unarchive(prev); refresh(); if (!focusRowOf(prev.id)) focusFallback(); announce('Sub-task restored: ' + prev.title); },
+        run: () => { unarchive(prev, 'user'); refresh(); if (!focusRowOf(prev.id)) focusFallback(); announce('Sub-task restored: ' + prev.title); },
       });
     }
   }
@@ -605,12 +652,12 @@
     state.mru = [id].concat(state.mru.filter(x => x !== id)).slice(0, 50);
     if (s.parentId) state.expanded.add(s.parentId);
     if (s.archived && s.parentId) state.showArchived.add(s.parentId);
-    // Opening a session shows its latest output, so it counts as viewed.
-    if (TERMINAL.has(s.state)) s.viewed = true;
-    s.unread = 0;
+    // Opening a session renders its latest output: viewed, and "opened".
+    markOpened(s);
     state.focusRow = 'row-' + id;
-    if (state.drawer === 'sidebar') closeDrawer(false);
-    if (state.reviewOpen && !s.changes && !(opts && opts.keepReview)) { /* keep panel: shows empty state */ }
+    // Navigating closes every overlay: popovers and modal drawers. (A docked
+    // review panel, >= 1280 px, is not an overlay and stays open.)
+    dismissOverlays();
     refresh();
     announce(`${s.title}. ${statusOf(s).label}. ${kindOf(s).label}.`);
     const focusTarget = opts && opts.focus;
@@ -622,7 +669,7 @@
     if (prev) leaveSession(prev);
     state.view = view;
     if (view === 'project') state.projectId = extra;
-    if (state.drawer === 'sidebar') closeDrawer(false);
+    dismissOverlays();
     state.reviewOpen = false;
     refresh();
     const h = $('#main h1'); if (h) h.focus();
@@ -641,20 +688,39 @@
   const mqNarrow = window.matchMedia('(max-width: 959px)');
   const mqMedium = window.matchMedia('(max-width: 1279px)');
   let drawerReturn = null;
+  const reviewIsOverlay = () => state.reviewOpen && mqMedium.matches && !$('#review').hidden;
+  // Overlays are mutually exclusive (accessibility.md §2, "Overlays — one at a
+  // time"). Before another overlay opens, or the user navigates, this closes
+  // open popovers and modal drawers without moving focus, and returns the
+  // closed overlay's own return target so the next overlay can inherit it (the
+  // element focused inside the closed overlay is no longer a valid target).
+  function dismissOverlays() {
+    let carry = null;
+    if (closePopovers(false)) carry = popReturn;
+    if (state.drawer) { carry = drawerReturn; closeDrawer(false); }
+    if (reviewIsOverlay()) { carry = reviewReturn; closeReview(); }
+    return carry;
+  }
   function toggleSidebar() {
     if (mqNarrow.matches) {
       if (state.drawer === 'sidebar') closeDrawer(true);
       else openDrawer('sidebar');
     } else {
+      // The docked sidebar sits behind a review drawer (960-1279 px): close
+      // that drawer first instead of toggling something inert.
+      dismissOverlays();
       const app = $('#app');
       const closed = app.dataset.sidebar === 'closed';
+      const hadFocus = $('#sidebar').contains(document.activeElement);
       app.dataset.sidebar = closed ? 'open' : 'closed';
       $('#btn-sidebar').setAttribute('aria-expanded', String(closed));
       if (closed) focusTree();
+      else if (hadFocus || !canFocus(document.activeElement)) focusFallback(); // never leave focus in the hidden tree
     }
   }
   function openDrawer(which) {
-    drawerReturn = document.activeElement;
+    const carry = dismissOverlays();
+    drawerReturn = carry || document.activeElement;
     state.drawer = which;
     $('#app').dataset.drawer = which;
     if (which === 'sidebar') { $('#btn-sidebar').setAttribute('aria-expanded', 'true'); setTimeout(focusTree, 20); }
@@ -666,33 +732,47 @@
     $('#app').dataset.drawer = '';
     if (was === 'sidebar') $('#btn-sidebar').setAttribute('aria-expanded', 'false');
     syncScrim();
-    if (restore && drawerReturn && document.contains(drawerReturn)) drawerReturn.focus();
+    if (restore) restoreFocus(drawerReturn);
   }
   function syncScrim() {
-    const reviewOverlay = state.reviewOpen && mqMedium.matches && !$('#review').hidden;
-    $('#scrim').hidden = !(state.drawer === 'sidebar' || reviewOverlay);
+    const reviewOverlay = reviewIsOverlay();
+    const sidebarDrawer = state.drawer === 'sidebar';
+    $('#scrim').hidden = !(sidebarDrawer || reviewOverlay);
     // Overlay drawers are modal: content underneath is inert (not focusable, not read).
-    $('#topbar').inert = state.drawer === 'sidebar' || reviewOverlay;
-    $('.skip-link').inert = state.drawer === 'sidebar' || reviewOverlay;
-    $('#main').inert = state.drawer === 'sidebar' || reviewOverlay;
-    $('#sidebar').inert = reviewOverlay;
-    $('#review').inert = state.drawer === 'sidebar';
+    $('#topbar').inert = sidebarDrawer || reviewOverlay;
+    $('.skip-link').inert = sidebarDrawer || reviewOverlay;
+    $('#main').inert = sidebarDrawer || reviewOverlay;
+    // The two drawers are never open together (dismissOverlays). If that ever
+    // breaks, the sidebar drawer stays usable instead of everything going inert.
+    $('#sidebar').inert = reviewOverlay && !sidebarDrawer;
+    $('#review').inert = sidebarDrawer;
   }
   let reviewReturn = null;
+  function closeReview() { // no focus handling; callers decide where focus goes
+    state.reviewOpen = false;
+    renderReview();
+    $$('[data-toggle-review]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+  }
   function toggleReview(force) {
     if (state.view !== 'session') return;
     const open = force != null ? force : !state.reviewOpen;
     if (open === state.reviewOpen) { if (open) $('#review-title') && $('#review-title').focus(); return; }
-    state.reviewOpen = open;
-    if (open) reviewReturn = document.activeElement;
-    renderReview();
-    $$('[data-toggle-review]').forEach(b => b.setAttribute('aria-expanded', String(open)));
-    if (open) { $('#review-title').focus(); announce('Review panel opened'); }
-    else if (reviewReturn && reviewReturn !== document.body && document.contains(reviewReturn)) reviewReturn.focus();
-    else { const b = $('[data-toggle-review]'); if (b) b.focus(); }
+    if (open) {
+      const carry = dismissOverlays(); // popover or sidebar drawer
+      reviewReturn = carry || document.activeElement;
+      state.reviewOpen = true;
+      renderReview();
+      $$('[data-toggle-review]').forEach(b => b.setAttribute('aria-expanded', 'true'));
+      $('#review-title').focus(); announce('Review panel opened');
+    } else {
+      closeReview();
+      restoreFocus(canFocus(reviewReturn) ? reviewReturn : $('[data-toggle-review]'));
+    }
   }
   mqNarrow.addEventListener('change', () => { if (!mqNarrow.matches && state.drawer) closeDrawer(false); $('#btn-sidebar').setAttribute('aria-expanded', String(!mqNarrow.matches && $('#app').dataset.sidebar !== 'closed')); });
-  mqMedium.addEventListener('change', syncScrim);
+  // Crossing 1280 px turns a docked review panel into a modal drawer (or back):
+  // whatever had focus behind it is now inert, so move focus into the drawer.
+  mqMedium.addEventListener('change', () => { syncScrim(); if (reviewIsOverlay() && !$('#review').contains(document.activeElement) && $('#switcher-overlay').hidden && $('#help-overlay').hidden) $('#review-title').focus(); });
 
   /* ------------------------------------------------------------------ */
   /* Inbox popover                                                       */
@@ -701,7 +781,7 @@
   function renderInbox() {
     const m = inboxModel();
     const row = (s, sub) => `<button class="inbox-row" type="button" data-open="${s.id}">${stIcon(s)}<span class="grow"><span class="t">${esc(s.title)}</span><span class="s">${esc(sub)}</span></span><span class="time">${ago(s.updated)}</span></button>`;
-    const proj = s => projectOf(s).name + (s.parentId ? ' › ' + byId(s.parentId).title : '');
+    const proj = s => projectOf(s).name + (s.parentId ? ' › ' + byId(s.parentId).title : '') + (notEnforced(s) ? ' · policy not enforced' : '');
     const replySub = s => (s.state === 'awaiting-approval' ? 'Approval' : 'Question') + (s.id === state.currentId && state.view === 'session' ? ' · on screen' : '') + ' · ' + proj(s);
     const kinds = ['local', 'background', 'remote'];
     const bgGroups = kinds.map(k => ({ k, items: m.background.filter(s => s.kind === k) })).filter(g => g.items.length);
@@ -727,7 +807,7 @@
     }
   }
   function openPopover(id, btnId) {
-    closePopovers(false);
+    dismissOverlays(); // the top bar is inert under a modal drawer: replace the drawer
     popReturn = $('#' + btnId);
     if (id === 'inbox-pop') renderInbox(); else renderUsage();
     $('#' + id).hidden = false;
@@ -745,7 +825,7 @@
     for (const [id, btn] of [['inbox-pop', 'btn-inbox'], ['usage-pop', 'btn-usage']]) {
       if (!$('#' + id).hidden) { $('#' + id).hidden = true; $('#' + btn).setAttribute('aria-expanded', 'false'); closed = true; }
     }
-    if (closed && restore && popReturn) popReturn.focus();
+    if (closed && restore) restoreFocus(popReturn);
     return closed;
   }
   function renderUsage() {
@@ -804,7 +884,10 @@
   let swReturn = null, swItems = [], swActive = 0;
   const SW_LIMIT = 100;
   function openSwitcher() {
-    closePopovers(false);
+    // Replaces a popover (focus goes back to its trigger first, so Cancel has
+    // a valid return target). May open above a modal drawer: Cancel returns
+    // into the drawer, Pick closes the drawer (openSession).
+    closePopovers(true);
     swReturn = document.activeElement;
     $('#switcher-overlay').hidden = false;
     const inp = $('#switcher-input');
@@ -815,7 +898,7 @@
   }
   function closeSwitcher(restore) {
     $('#switcher-overlay').hidden = true;
-    if (restore && swReturn && document.contains(swReturn)) swReturn.focus();
+    if (restore) restoreFocus(swReturn);
   }
   function renderSwitcher() {
     const q = $('#switcher-input').value.trim();
@@ -847,7 +930,7 @@
     let idx = 0;
     list.innerHTML = swItems.length ? groups.map(([label, items]) => `<div role="group" aria-label="${esc(label)}"><div class="sw-group" aria-hidden="true">${esc(label)}</div>${items.map(({ s, pos }) => {
       const i = idx++; const st = statusOf(s);
-      return `<div class="sw-opt" role="option" id="sw-${i}" data-i="${i}" aria-selected="${i === swActive}">${stIcon(s)}<span class="grow">${highlight(s.title, pos)} <span class="proj">· ${esc(projectOf(s).name)}${s.parentId ? ' › sub-task' : ''}</span></span>${s.pinned ? `<span class="sw-tag">${icon('pin')}<span class="sr-only">pinned</span></span>` : ''}${s.archived ? '<span class="sw-tag">archived</span>' : ''}<span class="sr-only">, ${esc(st.label)}, ${esc(kindOf(s).label)}</span>${s.kind !== 'local' ? kindIcon(s) : ''}<span class="tree-meta">${ago(s.updated)}</span></div>`;
+      return `<div class="sw-opt" role="option" id="sw-${i}" data-i="${i}" aria-selected="${i === swActive}">${stIcon(s)}<span class="grow">${highlight(s.title, pos)} <span class="proj">· ${esc(projectOf(s).name)}${s.parentId ? ' › sub-task' : ''}</span></span>${s.pinned ? `<span class="sw-tag">${icon('pin')}<span class="sr-only">pinned</span></span>` : ''}${s.archived ? '<span class="sw-tag">archived</span>' : ''}${notEnforced(s) ? '<span class="sw-tag">policy not enforced</span>' : ''}<span class="sr-only">, ${esc(st.label)}, ${esc(kindOf(s).label)}</span>${s.kind !== 'local' ? kindIcon(s) : ''}<span class="tree-meta">${ago(s.updated)}</span></div>`;
     }).join('')}</div>`).join('') + (more ? `<div class="sw-more" role="note">${more} more not shown — refine the query</div>` : '')
       : `<div class="sw-more">No session matches “${esc(q)}”. Try fewer letters, or search inside transcripts (not prototyped).</div>`;
     syncSwitcherActive();
@@ -877,12 +960,13 @@
   ];
   let helpReturn = null;
   function openHelp() {
+    closePopovers(true);
     helpReturn = document.activeElement;
     $('#help-body').innerHTML = `<table>${SHORTCUTS.map(([g, rows]) => `<tr><th colspan="2">${esc(g)}</th></tr>` + rows.map(([a, k]) => `<tr><td>${esc(a)}</td><td><kbd>${esc(k)}</kbd></td></tr>`).join('')).join('')}</table><p class="muted" style="margin-top:var(--ad-space-5);font-size:var(--ad-text-xs)">There is deliberately no shortcut that approves an operation. Approvals need focus on the approval card's button.</p>`;
     $('#help-overlay').hidden = false;
     $('#help [data-close]').focus();
   }
-  function closeHelp() { $('#help-overlay').hidden = true; if (helpReturn) helpReturn.focus(); }
+  function closeHelp() { $('#help-overlay').hidden = true; restoreFocus(helpReturn); }
 
   /* ------------------------------------------------------------------ */
   /* Focus helpers                                                       */
@@ -895,7 +979,7 @@
   function regions() {
     // A modal drawer is the only region while it is open.
     if (state.drawer === 'sidebar') return [{ el: $('#sidebar'), focus: focusTree }];
-    if (state.reviewOpen && mqMedium.matches && !$('#review').hidden) return [{ el: $('#review'), focus: () => $('#review-title').focus() }];
+    if (reviewIsOverlay()) return [{ el: $('#review'), focus: () => $('#review-title').focus() }];
     const out = [{ el: $('#topbar'), focus: () => $('#btn-sidebar').focus() }];
     if (treeVisible()) out.push({ el: $('#sidebar'), focus: focusTree });
     if (state.view === 'session') {
@@ -934,7 +1018,7 @@
     if (t.id === 'btn-inbox') return $('#inbox-pop').hidden ? openPopover('inbox-pop', 'btn-inbox') : closePopovers(true);
     if (t.id === 'btn-usage') return $('#usage-pop').hidden ? openPopover('usage-pop', 'btn-usage') : closePopovers(true);
     if (d.close === 'help') return closeHelp();
-    if (d.open) { closePopovers(false); return openSession(d.open, { focus: 'title' }); }
+    if (d.open) return openSession(d.open, { focus: 'title' });
     if (d.markAll !== undefined) {
       // Marks completed/cancelled results as reviewed. It never archives:
       // archiving needs the result to have been opened (states §5).
@@ -943,10 +1027,12 @@
       refresh();
       focusPopover('inbox-pop');
       announce(`Marked as reviewed: ${done.length}. Failed and interrupted results stay in the list.`);
-      toast(`Marked as reviewed: ${done.length}`, { label: 'Undo', run: () => { done.forEach(({ s, unread }) => { s.viewed = false; s.unread = unread; }); refresh(); $('#btn-inbox').focus(); announce('Restored to the review list'); } });
+      // Undo only revokes this acknowledgement. A result the user has opened
+      // since (or a session that started running again) is left alone.
+      toast(`Marked as reviewed: ${done.length}`, { label: 'Undo', run: () => { let back = 0; done.forEach(({ s, unread }) => { if (s.opened || !TERMINAL.has(s.state)) return; s.viewed = false; s.unread = unread; back++; }); refresh(); restoreFocus($('#btn-inbox')); announce(back ? `Restored to the review list: ${back}` : 'Nothing to restore: these results have been opened since'); } });
       return;
     }
-    if (d.unarchive) { const s = byId(d.unarchive); unarchive(s); refresh(); $('#session-title').focus(); announce('Unarchived: ' + s.title); return; }
+    if (d.unarchive) { const s = byId(d.unarchive); unarchive(s, 'user'); refresh(); $('#session-title').focus(); announce('Unarchived: ' + s.title); return; }
     if (d.toggleReview !== undefined) return toggleReview();
     if (d.closeReview !== undefined) return toggleReview(false);
     if (d.openReview !== undefined) return toggleReview(true);
@@ -958,7 +1044,7 @@
     if (d.jumpPending !== undefined) { const c = $('#approval-card') || $('[aria-labelledby="q-title"]'); c.scrollIntoView({ block: 'center' }); c.tabIndex = -1; c.focus(); return; } // focus the card, never the Approve button
     if (d.approve) return resolveApproval(d.approve === 'yes');
     if (d.answer) return answerQuestion(d.answer);
-    if (d.stop !== undefined) { const s = byId(state.currentId); s.state = 'cancelled'; s.viewed = true; appendEvent(s, { t: 'notice', tone: 'neutral', icon: 'stCancelled', title: 'Cancelled by you', body: 'The agent received a cancel request. Files already changed in the worktree are kept for review.' }); refresh({ keepScroll: $('#timeline').scrollTop }); announce('Session cancelled'); return; }
+    if (d.stop !== undefined) { const s = byId(state.currentId); enterTerminal(s, 'cancelled'); appendEvent(s, { t: 'notice', tone: 'neutral', icon: 'stCancelled', title: 'Cancelled by you', body: 'The agent received a cancel request. Files already changed in the worktree are kept for review.' }); refresh({ keepScroll: $('#timeline').scrollTop }); announce('Session cancelled'); return; }
     if (d.noticeAction) { toast(`“${d.noticeAction}” is not prototyped.`); return; }
   });
   document.addEventListener('click', e => {
@@ -1049,7 +1135,7 @@
     else if (e.key === 'PageDown') { e.preventDefault(); swActive = Math.min(n - 1, swActive + 10); syncSwitcherActive(); }
     else if (e.key === 'PageUp') { e.preventDefault(); swActive = Math.max(0, swActive - 10); syncSwitcherActive(); }
     else if (e.key === 'Enter') { e.preventDefault(); pickSwitcher(swActive); }
-    else if (e.key === 'Escape') { e.preventDefault(); closeSwitcher(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSwitcher(true); } // Esc closes one layer, not the drawer underneath
     else if (e.key === 'Tab') { e.preventDefault(); } // modal: focus stays in the input
   });
   $('#switcher-overlay').addEventListener('mousedown', e => { if (e.target.id === 'switcher-overlay') { e.preventDefault(); closeSwitcher(true); } });
@@ -1085,7 +1171,7 @@
       appendEvent(s, T.user(text)); $('#timeline').scrollTop = $('#timeline').scrollHeight;
       const pending = transcriptOf(s).find(x => x.t === 'question' && !x.answered);
       if (pending) return answerQuestion(text);
-      if (s.state !== 'running') { s.state = 'running'; s.viewed = true; refresh(); $('#composer-input').focus(); }
+      if (s.state !== 'running') { enterRunning(s); refresh(); $('#composer-input').focus(); }
       setTimeout(() => appendEvent(s, T.agent('(Prototype) Message received. A real adapter would stream its response here.')), 500);
       updateGhost();
     } else if (e.target.id === 'review-feedback') {
@@ -1114,7 +1200,7 @@
       () => appendEvent(s, T.agent('Reading the relevant files and making the change.')),
       () => appendEvent(s, T.tool('edit_file', 'packages/ui/src/inbox/classify.ts', '+61', '…')),
       () => appendEvent(s, T.tool('run', 'pnpm vitest run inbox', '18 passed', '…')),
-      () => { s.state = 'completed'; s.changes = 'inbox'; appendEvent(s, { t: 'done', summary: 'Done. 4 files changed in the new worktree; tests pass, lint reports 1 issue.', changes: 'inbox' }); const keep = $('#timeline') ? $('#timeline').scrollTop : null; if (state.currentId === s.id) { refresh({ keepScroll: keep }); const tl = $('#timeline'); tl.scrollTop = tl.scrollHeight; } else refresh(); announce('Task finished: changes ready to review'); },
+      () => { enterTerminal(s, 'completed'); s.changes = 'inbox'; appendEvent(s, { t: 'done', summary: 'Done. 4 files changed in the new worktree; tests pass, lint reports 1 issue.', changes: 'inbox' }); const keep = $('#timeline') ? $('#timeline').scrollTop : null; if (state.currentId === s.id) { refresh({ keepScroll: keep }); const tl = $('#timeline'); tl.scrollTop = tl.scrollHeight; } else refresh(); announce('Task finished: changes ready to review'); },
     ];
     steps.forEach((f, i) => setTimeout(f, 900 * (i + 1)));
   }
@@ -1156,6 +1242,9 @@
     }
     if (helpOpen) return;
     if (ctrl && (k === '/' || k === '?')) { e.preventDefault(); return openHelp(); }
+    // Overlay exclusivity: the handlers below either replace an open popover or
+    // modal drawer (openPopover, openDrawer, toggleReview, openSession and
+    // openView call dismissOverlays) or stay inside it (F6).
     if (ctrl && e.shiftKey && (k === 'J' || k === 'j')) { e.preventDefault(); return $('#inbox-pop').hidden ? openPopover('inbox-pop', 'btn-inbox') : closePopovers(true); }
     if (ctrl && !e.shiftKey && (k === 'j' || k === 'J')) { e.preventDefault(); const m = inboxModel(); const next = m.reply.find(s => s.id !== state.currentId) || m.review[0]; if (next) openSession(next.id, { focus: 'title' }); else announce('Nothing needs you right now'); return; }
     if (ctrl && e.shiftKey && (k === 'G' || k === 'g')) { e.preventDefault(); return toggleReview(); }
@@ -1165,7 +1254,7 @@
       const pinned = sessions.filter(s => s.pinned && !s.parentId && !s.archived);
       const s = pinned[+e.code.slice(5) - 1]; if (s) { e.preventDefault(); openSession(s.id, { focus: 'composer' }); } return;
     }
-    if (k === 'F6') { e.preventDefault(); return cycleRegion(e.shiftKey); }
+    if (k === 'F6') { e.preventDefault(); closePopovers(true); return cycleRegion(e.shiftKey); }
   });
 
   /* ------------------------------------------------------------------ */
@@ -1187,7 +1276,7 @@
     if (s1.state === 'running' && seconds % 6 === 0 && state.tick < 40) { appendEvent(s1, streamLines[state.tick % streamLines.length]()); state.tick++; s1.updated = 0; renderTree(); }
     const s1b = byId('s1b');
     if (s1b.state === 'running' && seconds >= (s1b.finishAfter || 25)) {
-      s1b.state = 'completed'; s1b.viewed = state.view === 'session' && state.currentId === 's1b'; s1b.unread = s1b.viewed ? 0 : 1;
+      enterTerminal(s1b, 'completed'); s1b.unread = s1b.viewed ? 0 : 1;
       if (state.currentId === 's1b' && state.view === 'session') appendEvent(s1b, { t: 'done', summary: '18 tests written; all pass.', changes: null });
       else transcriptOf(s1b).push({ t: 'done', summary: '18 tests written; all pass.', changes: null });
       renderTree(); renderTopbar(); if (!$('#inbox-pop').hidden) renderInbox();
@@ -1211,7 +1300,7 @@
   if (params.get('review') === '1') state.reviewOpen = true;
   if (params.get('expand')) params.get('expand').split(',').forEach(id => state.expanded.add(id));
   if (mqNarrow.matches) $('#btn-sidebar').setAttribute('aria-expanded', 'false');
-  if (state.view === 'session') { const s = byId(state.currentId); if (TERMINAL.has(s.state)) s.viewed = true; s.unread = 0; }
+  if (state.view === 'session') markOpened(byId(state.currentId));
   refresh();
   const open = params.get('open');
   if (open === 'inbox') openPopover('inbox-pop', 'btn-inbox');

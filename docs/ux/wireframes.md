@@ -13,9 +13,9 @@ Status: Draft for issue #2. Low-fidelity layout and behaviour. Visual detail liv
 | 3 | Inbox (bell + badge + background ring) | Square “!n” badge = something blocks an agent; round “n” = results to review; ring = background work (not counted). |
 | 4 | New task | Opens Home with repository cards (Ctrl+N; Alt+N in the prototype). |
 | 5 | Pinned group | Pinned main sessions across projects, Alt+1…9. |
-| 6 | Sub-tasks + “Show N archived” | Background agents nested under their main session; viewed completed ones auto-archive. |
+| 6 | Sub-tasks + “Show N archived” | Background agents nested under their main session; completed ones auto-archive only after their result has been opened and the user has moved on. |
 | 7 | “N archived — search with Ctrl+K” | Archived main sessions leave the tree but stay searchable. |
-| 8 | Session header | Breadcrumb, title, status/kind/agent chips, Stop, **Changes +a −d**. |
+| 8 | Session header | Breadcrumb, title, status/kind/agent chips (plus “Policy not enforced” and “Archived” when they apply), **Unarchive** (archived sessions only), Stop, **Changes +a −d**. |
 | 9 | Sticky attention banner | Only while a pending approval/question card is scrolled away. A pointer only: it may truncate; the full command is shown only in the card. |
 | 10 | Tool event cards | Collapsed by default; one line of result; expandable output. |
 | 11 | Approval card | Operation, exact command (wraps), effect, scope, rule; Approve once / Deny; no shortcut. |
@@ -25,6 +25,8 @@ Status: Draft for issue #2. Low-fidelity layout and behaviour. Visual detail liv
 | 15 | Review tabs | Changes · Checks (n failed) · Findings (n blocking). |
 | 16 | Diff | Unified diff; “+/−” sign column; file header sticky. |
 | 17 | Comment to agent | Posts the review comment into the same session. |
+
+Not drawn: the persistent “AgentDock policy is not enforced in this session” note that sits between the session header (8) and the attention banner (9) while an agent runs in its own bypass / full-access mode — see [states §9](states-and-indicators.md#9-policy-enforcement-indicator-agent-bypass--full-access-modes) and the prototype (`?session=s8`).
 
 ### ASCII version (for quick diffs in review)
 
@@ -66,6 +68,7 @@ Glyph key: ◌ running · ◷ queued · ◆! needs approval · ▣? needs reply 
 - **A — Main only.** Top bar condenses: switcher trigger shrinks to its icon + placeholder; Usage keeps the flag; inbox badge always visible.
 - **B — Sidebar drawer** (≡ or Ctrl+B): slides from the left over a scrim; content behind is inert; Esc/scrim closes and restores focus; choosing a session closes the drawer and focuses the session heading.
 - **C — Review drawer** (Ctrl+Shift+G or “Changes”): 440 px overlay from the right with a scrim between 600 and 1279 px; full width below 600 px.
+- **B and C are never open together**, and neither is open together with the inbox or usage popover: opening one closes the other first ([accessibility.md → Overlays](accessibility.md#overlays--one-at-a-time)).
 
 ```text
 A: main only                     B: sidebar drawer                C: review drawer

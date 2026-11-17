@@ -203,6 +203,11 @@ kbd {
 .chip[data-tone="success"] { color: var(--ad-status-success); background: var(--ad-status-success-soft); border-color: transparent; }
 .chip[data-tone="danger"] { color: var(--ad-status-danger); background: var(--ad-status-danger-soft); border-color: transparent; }
 .chip .ico { width: 14px; height: 14px; }
+/* Policy enforcement (states-and-indicators.md §9): shield-with-slash glyph + text + dashed outline; colour is secondary. */
+.chip[data-enf="off"] { color: var(--ad-status-danger); background: var(--ad-status-danger-soft); border: 1px dashed currentColor; font-weight: var(--ad-weight-semibold); }
+.chip[data-enf="unknown"] { border: 1px dashed var(--ad-border-strong); }
+.enf { display: inline-flex; flex: none; color: var(--ad-status-danger); }
+.enf .ico { width: 14px; height: 14px; }
 .monogram {
   display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: var(--ad-radius-xs);
   font-size: 9px; font-weight: var(--ad-weight-semibold); background: var(--ad-bg-sunken); color: var(--ad-text-secondary);
@@ -212,6 +217,13 @@ kbd {
 .diffstat-add { color: var(--ad-diff-add-fg); font-variant-numeric: tabular-nums; }
 .diffstat-del { color: var(--ad-diff-del-fg); font-variant-numeric: tabular-nums; }
 
+.enforce-note {
+  display: flex; align-items: flex-start; gap: var(--ad-space-4); padding: var(--ad-space-4) var(--ad-space-7);
+  background: var(--ad-status-danger-soft); color: var(--ad-text-primary); border-bottom: 1px dashed var(--ad-status-danger);
+  font-size: var(--ad-text-xs); line-height: var(--ad-leading-ui);
+}
+.enforce-note > .ico { flex: none; margin-top: 1px; color: var(--ad-status-danger); }
+.enforce-note p { flex: 1; min-width: 0; }
 .attention-banner {
   display: flex; align-items: center; gap: var(--ad-space-4); padding: var(--ad-space-4) var(--ad-space-7);
   background: var(--ad-status-attention-soft); color: var(--ad-text-primary); border-bottom: 1px solid var(--ad-border-subtle);
@@ -460,5 +472,6 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--ad-text-xs)
 @media (forced-colors: active) {
   .tree-row[aria-current="page"], .sw-opt[aria-selected="true"], .file-row[aria-current="true"] { outline: 2px solid Highlight; }
   .inbox-badge, .new-pill, .chip, .src, .sev { border: 1px solid CanvasText; forced-color-adjust: none; background: Canvas; color: CanvasText; }
+  .chip[data-enf], .enforce-note { border-style: dashed; border-color: CanvasText; background: Canvas; color: CanvasText; }
   .meter > span { background: Highlight; }
 }

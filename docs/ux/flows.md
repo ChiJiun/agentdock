@@ -30,7 +30,7 @@ Prototype: Home → card “agentdock” → type → Enter → wait ~5 s → �
 2. User presses **Ctrl+J** (or opens the inbox and picks the row). The session opens with focus on its heading; the approval card is in view or the sticky banner offers “Show”.
 3. User Tabs to **Approve once** or **Deny** and confirms. Card collapses into a resolved line (“Denied by you — the command was not run”), status returns to Running, badge decrements.
 
-Rules: no shortcut approves; inbox rows cannot approve; after restart a pending approval is restored as pending, never auto-resolved; denial is enforced by the Rust policy layer.
+Rules: no shortcut approves; inbox rows cannot approve; after restart a pending approval is restored as pending, never auto-resolved; denial is enforced by the Rust policy layer. All of this covers requests that reach AgentDock; an agent in its own bypass or full-access mode does not ask (F8).
 
 ## F3 — Switching among the sessions I use most
 
@@ -43,11 +43,12 @@ Rules: no shortcut approves; inbox rows cannot approve; after restart a pending 
 
 1. Main session “Implement attention inbox popover” spawns three background agents (explore, write tests, independent review). They appear nested under it with the layers glyph.
 2. “Write unit tests…” finishes → status **Done · new**, badge +1, polite announcement “Background agent finished: …”. Collapsed parent shows “1 new”.
-3. User opens it (from inbox, switcher or tree) and reads the result → it is now *viewed*.
+3. User opens it (from inbox, switcher or tree) and reads the result → it is now *opened*, which also makes it viewed. (Having watched it earlier, while it was still running, does not count.)
 4. User navigates anywhere else → the sub-task is archived, toast “Archived sub-task … · Undo”. Parent shows “Show 3 archived sub-tasks”. Undo puts focus on the restored row; the archived sub-task’s own header also offers **Unarchive**. A restored sub-task is not auto-archived again.
 5. A **failed** sub-task (“Collect capability flags…”) stays visible until the user retries or archives it.
 6. The main session is never archived automatically, even when all sub-tasks are done.
-7. Bulk path: in the inbox, “Mark completed as reviewed (N)” clears completed/cancelled rows from “to review” (Undo in a toast) but archives nothing — those sub-tasks stay under the parent as “Done” until the user opens them and moves on. Failed and interrupted rows stay in the inbox.
+7. Bulk path: in the inbox, “Mark completed as reviewed (N)” clears completed/cancelled rows from “to review” (Undo in a toast) but archives nothing — those sub-tasks are viewed, not opened, and stay under the parent as “Done” until the user opens them and moves on. Failed and interrupted rows stay in the inbox. Undo skips any result that was opened in the meantime.
+8. If an archived sub-task starts waiting for the user (approval or question), it comes back by itself under “Needs reply”. That system restore does not mark it as restored by the user, so once it finishes again and its new result has been opened, it archives like any other sub-task.
 
 Prototype: open “Explore existing session model”, then any other session → archived with Undo. The tests sub-task finishes by itself ~25 s after load.
 
@@ -70,3 +71,13 @@ Prototype: open “Explore existing session model”, then any other session →
 1. Banner: “lab-vm is unreachable. Reconnecting in 8 s. Last event 2 min ago. Current state unknown until we reconnect.”
 2. Sidebar rows switch to the disconnected glyph with “last known: Running” in the accessible name.
 3. On reconnect: events since the cursor are replayed into the timeline; non-idempotent operations are never replayed by the client.
+
+## F8 — The agent runs in its own bypass / full-access mode
+
+1. The mode starts in one of two ways: the user chooses it for a session through AgentDock (a confirmation dialog states that approval rules will not apply to what the agent does; Cancel is the default), or the adapter reports that the agent switched by itself.
+2. The session header gains the chip **Policy not enforced** and a note under the header that stays for as long as the mode is active; the sidebar row gains the shield-with-slash glyph; inbox, Home and switcher rows say “policy not enforced”; the timeline records where the mode started.
+3. While the mode is active the agent’s commands and edits appear in the timeline as reported — no approval cards for them, and no “approved” markers either. Stop still works.
+4. If AgentDock itself is asked to push, open a PR, merge or remove a worktree, that operation still stops for approval (F2).
+5. When the adapter reports that the mode ended, the timeline records it and the chip, note and glyph go away. If an adapter does not report its mode at all, the session shows **Policy coverage unknown** instead of pretending either way.
+
+Prototype: `?session=s8` (chip, note, glyph, timeline notice). Steps 1, 4 and 5 are specification only. Rules: [states §9](states-and-indicators.md#9-policy-enforcement-indicator-agent-bypass--full-access-modes).
