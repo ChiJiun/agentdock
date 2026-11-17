@@ -54,7 +54,7 @@ For every agent **process** (initial launch and every reattach):
 | `mcp_http` / `mcp_sse` | `mcpCapabilities.http` / `.sse` |
 | `logout` | `agentCapabilities.auth.logout` is an object |
 
-For `track: v1_stable`, `validate_fixtures.py` re-derives every `features.*` value from `acp_agent_capabilities` with exactly this table and rejects a snapshot that disagrees or that still contains a `_meta` key. A snapshot can therefore not claim `resume_session` (and unlock `S20` with `launch_method: resume`) unless the raw capabilities advertise it.
+`validate_fixtures.py` accepts only `track: v1_stable` snapshots and rejects `track: v2_draft` outright (the v2 derivation below is a plan, not a checked rule). For `v1_stable` it re-derives every `features.*` value from `acp_agent_capabilities` with exactly this table and rejects a snapshot that disagrees or that still contains a `_meta` key. A snapshot can therefore not claim `resume_session` (and unlock `S20` with `launch_method: resume`) unless the raw capabilities advertise it.
 
 ## What the UI may claim
 
@@ -93,7 +93,7 @@ A reattach can still fail (the agent's own storage may be gone). That is `S03 st
 | `session/request_permission` | `approval.requested{source: acp_permission, operation_kind: tool_call, classified_kind}` → `active → awaiting_permission` → task `running → awaiting_approval`. `classified_kind` (`PolicyClass`) is computed by the Rust backend from the unwrapped command, path or URL, never from agent text; user-only classes cannot be approved by policy ([checkpoint-and-replay.md](checkpoint-and-replay.md)). |
 | permission answer | `approval.resolved` (with `acp_outcome`) persisted **before** the JSON-RPC response is sent |
 | `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `notice`, `compaction_*` | Not part of the v1 contract. May be stored later as new event types (additive). `notice` is live-only and never part of history. |
-| `fs/*`, `terminal/*` client methods | Executed by AgentDock under host policy (path checks, approvals), never silently. A request whose classification names an operation kind (`git_push`, `pr_write`, `pr_merge`, `force_push`, `branch_delete`, `worktree_remove`, `destructive_command`, `external_write`) runs only as an `Operation` with its own host-policy approval; other classes are recorded as `session.tool_call`. Enforcement is issue #8; the fixtures do not exercise client-method execution. |
+| `fs/*`, `terminal/*` client methods | Executed by AgentDock under host policy (path checks, approvals), never silently. A request whose class maps to an operation kind (`git_push`, `pr_merge`, `branch_delete`, `worktree_remove`, `destructive_command`, `external_write`; `pr_write` → `pr_create`/`pr_update`/`pr_comment`; `force_push` → `destructive_command`) runs only as an `Operation` with its own host-policy approval; other classes are recorded as `session.tool_call`. Enforcement is issue #8; the fixtures do not exercise client-method execution. |
 | JSON-RPC protocol error / malformed message | `active → failed (protocol_error)` or `starting → failed` |
 | process exit | `* → disconnected (process_exited)` |
 
@@ -106,8 +106,8 @@ A reattach can still fail (the agent's own storage may be gone). That is `S03 st
 ACP v2 was published as a **draft** (2026-07-20; schema `2.0.0-alpha.16` at the checked commit). The announcement asks implementers to gate v2 behind version negotiation **and** feature flags, and to keep supporting v1 side by side. AgentDock follows that:
 
 1. **Default is v1.** Every adapter starts with `protocolVersion: 1`. If the agent answers anything other than 1, AgentDock disconnects and reports "unsupported protocol version" (no guessing).
-2. **Opt-in per adapter** (`acp_v2_draft` setting, off by default, not available in release builds until v2 is stable). With it on, AgentDock proposes `2`; if the agent answers `1`, the v1 path is used. `CapabilitySnapshot.track` records which one was used.
-3. **The AgentDock contract is protocol-neutral.** Task/session states, `LaunchMethod`, `features.*`, `provenance` and approvals do not mention v1-only wire shapes. The v2 adapter maps into the same events:
+2. **Opt-in per adapter** (`acp_v2_draft` setting, off by default, not available in release builds until v2 is stable). With it on, AgentDock proposes `2`; if the agent answers `1`, the v1 path is used. `CapabilitySnapshot.track` records which one was used. Until the v2 mapping below is designed and checked, a `v2_draft` snapshot is not a valid fixture: the validator rejects it, and nothing in this PR claims that a v2 snapshot's `features` are trustworthy.
+3. **The AgentDock contract is protocol-neutral.** Task/session states, `LaunchMethod`, `features.*`, `provenance` and approvals do not mention v1-only wire shapes. The v2 adapter is planned to map into the same events (none of this is checked by the validator):
    - v2 has no `session/load`; `agentCapabilities.session` (`{}`) makes `session/new`, `list`, `resume`, `close` baseline. Mapping: `features.load_session = false`, `resume_session = list_sessions = close_session = true` when `session` is advertised.
    - v2 `session/resume` with `replayFrom` replays history and ends with a `replay_complete` update. Updates before it are written with `provenance: acp_replay`; a resume without `replay_complete` is a truncated replay and must be flagged.
    - v2 `session/prompt` returns a `messageId`, not the end of the turn; completion comes from `state_update` (`idle` / `running` / `requires_action`). Mapping: `running` → `active`, `idle` → `idle (turn_ended)`, `requires_action` → attention `needs_reply`.

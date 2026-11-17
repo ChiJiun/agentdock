@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable task and session state graphs for ADR-0003. Every legal transition is listed; anything else is illegal. 'durability' says what must be durable before what: persist_then_report = commit the event before any subscriber, UI or agent sees it; persist_then_act = commit the event before performing the side effect it authorizes (spawning, replying to the agent, executing an operation). 'conditions' are enforced by docs/contracts/validate_fixtures.py.",
+  "$comment": "Machine-readable task and session state graphs for ADR-0003. Every legal transition is listed; anything else is illegal. 'durability' says what must be durable before what: persist_then_report = commit the event before any subscriber, UI or agent sees it; persist_then_act = commit the event before performing the side effect it authorizes (spawning, replying to the agent, executing an operation). 'conditions' are implemented by docs/contracts/validate_fixtures.py as a regression check over the committed fixtures; the enforcement is the Rust backend (ADR-0003 section 9).",
   "version": 1,
   "task": {
     "initial": "queued",

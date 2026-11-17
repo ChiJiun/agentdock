@@ -936,7 +936,9 @@ def f12():
             "running task whose idle agent crashed; a turn cancelled by the output limit; a review session with a "
             "non-blocking ACP approval that fails while asking, followed by a refusal; a session closed while starting; "
             "a main session archived after a rate-limit stop the user had viewed (never while paused) and unarchived by "
-            "the system when it asks for permission; a running task whose agent is ready but has no turn yet; and a "
+            "the system when it asks for permission; a running task whose agent is ready but has no turn yet; a disconnected sub-task "
+            "archived by hand while the user cancelled the main agent's turn; a running task whose agent is "
+            "suspended; and a "
             "task that went through crash recovery and was then deleted (its history, including the recovery events, is "
             "tombstoned; fixtures/predelete/ keeps the stream as it was before deletion).")
     g = fx.task("G: crashed, cancelled, then deleted")
@@ -1036,11 +1038,26 @@ def f12():
     i = fx.task("I: agent ready, first prompt not sent yet")
     pi = fx.drive_to(i, "running")
 
+    # UX section 5: an interrupted sub-task stays under its parent until the user archives it by hand. The user
+    # then cancels the main agent's turn: the task is still running, so it stays listed as background work.
+    j = fx.task("J: disconnected sub-task archived by hand; the user cancelled the turn")
+    pj = fx.drive_to(j, "running")
+    cj = fx.session(j, role="explore", adapter_id="codex", parent=pj)
+    fx.ready(cj)
+    fx.sst(cj, "disconnected", "process_exited")
+    fx.emit("session.archived", USER, {"by": "user"}, task=j, session=cj)
+    turn = fx.prompt(pj, "Sketch the migration.")
+    fx.end_turn(pj, turn, stop="cancelled")
+
+    k = fx.task("K: running, the agent is suspended and the interruption is not recorded yet")
+    pk = fx.drive_to(k, "running")
+    fx.sst(pk, "suspended", "task_interrupted", ORCH)
+
     fx.delete_task(g)
     fx.write({a: "interrupted", b: "interrupted", c: "running", d: "running", e: "review", f: "cancelled",
-              h: "awaiting_approval", i: "running"},
+              h: "awaiting_approval", i: "running", j: "running", k: "running"},
              {pa: "failed", pb: "failed", pc: "failed", pd: "idle", pe: "idle", r: "failed", r2: "idle", sf: "closed",
-              ph: "awaiting_permission", pi: "idle"},
+              ph: "awaiting_permission", pi: "idle", pj: "idle", cj: "disconnected", pk: "suspended"},
              [att("needs_review", "interruption_needs_decision", a),
               att("needs_review", "interruption_needs_decision", b),
               att("needs_reply", "session_unavailable", c),
@@ -1050,7 +1067,9 @@ def f12():
               att("needs_review", "child_result_unviewed", e, r),
               att("needs_review", "task_outcome_unviewed", f),
               att("needs_reply", "approval_pending", h, ph, ah),
-              att("background", "workflow_step", i)])
+              att("background", "workflow_step", i),
+              att("background", "workflow_step", j),
+              att("background", "workflow_step", k)])
 
 
 def samples():

@@ -15,11 +15,12 @@ What it checks:
      recovery approving, early auto-resume, ...) must each be rejected with the expected message.
   8. The "Enforcement boundary" section is the same text in README.md and ADR-0003, names exactly the mutations
      of the self-test, and both files state the current number of mutations.
+  9. The transition tables in state-machines.md equal transitions.json.
 
 Passing is a regression result over the committed fixtures. It does not show that an invariant holds for other
 streams; see the Enforcement boundary section.
 
-Usage:  python -B docs/contracts/validate_fixtures.py   (exit code 0 = all good; -B avoids writing __pycache__)
+Usage:  python -B -I docs/contracts/validate_fixtures.py   (exit code 0 = all good; -B avoids writing __pycache__)
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ ADR_PATH = ROOT.parent / "decisions" / "0003-task-session-event-contracts.md"
 
 # Any property name (including inside opaque objects such as acp_agent_capabilities) that suggests a
 # known subscription balance. 'on_quota_reset' (a user policy flag) is the only quota-named key allowed.
-FORBIDDEN_NAME = re.compile(r"(remaining|_left|left_|balance|allowance|percent|pct|quota(?!_reset$))", re.I)
+FORBIDDEN_NAME = re.compile(r"(remaining|_left|left_|balance|allowance|percent|pct|quota(?!_reset\Z))", re.I)
 
 
 def canonical_sha256(obj) -> str:
@@ -256,6 +257,8 @@ BULK_TASK_STATES = {"completed", "cancelled"}
 BULK_SESSION_OUTCOMES = {"succeeded", "cancelled"}
 AUTO_ARCHIVE_OUTCOMES = {"succeeded", "cancelled"}
 REVIEW_SESSION_OUTCOMES = {"succeeded", "failed", "cancelled"}
+# UX section 5: a finished, failed or interrupted sub-task may be archived by the user.
+MANUAL_ARCHIVE_CHILD_STATES = {"closed", "failed", "suspended", "disconnected"}
 # The only events the recovery actor may write (checkpoint-and-replay.md, crash recovery). Each predicate sees the
 # payload; a tombstoned event (payload {}) is checked by type only.
 RECOVERY_WRITES = {
@@ -271,8 +274,6 @@ RECOVERY_WRITES = {
 }
 # Who may report the result of a started operation or a finished check (never the agent, policy or the user).
 RESULT_ACTORS = {"orchestrator", "integration"}
-# History an agent may re-send during session/load (events.md, provenance).
-ACP_REPLAY_TYPES = {"session.message_delta", "session.tool_call", "session.plan_updated"}
 
 
 def operation_identity(target):
@@ -303,7 +304,9 @@ def derive_features(raw):
 
 def feature_errors(snapshot):
     if snapshot["track"] != "v1_stable":
-        return []
+        # The v2 draft has no agreed derivation of `features` yet, so nothing about such a snapshot could be checked.
+        return [f"track {snapshot['track']} is not accepted: only v1_stable capability snapshots are covered by this "
+                f"contract revision"]
     raw = snapshot["acp_agent_capabilities"]
     errs = [f"features.{k} does not match acp_agent_capabilities (derived {v})"
             for k, v in derive_features(raw).items() if snapshot["features"].get(k) != v]
@@ -383,8 +386,6 @@ class Replay:
             self.live_counts[tid] = self.live_counts.get(tid, 0) + 1
         if ev["provenance"] == "acp_replay":
             s = self.sessions.get(ev.get("session_id"))
-            if ev["type"] not in ACP_REPLAY_TYPES:
-                self.err(ev, f"acp_replay is only valid for {sorted(ACP_REPLAY_TYPES)}")
             if not s or s["state"] != "starting" or s["launch_method"] != "load":
                 self.err(ev, "acp_replay events are only valid while a session/load is in progress")
             elif (s["snapshot"] is None or s["snapshot_seq"] < s["launch_seq"]
@@ -634,8 +635,7 @@ class Replay:
         t = self.tasks[ev["task_id"]]
         if p["phase"] != t["state"]:
             self.err(ev, f"checkpoint phase {p['phase']} is not the task state {t['state']}")
-        if "worktree" in p:
-            self.checkpoints[ev["task_id"]] = p["worktree"]
+        self.checkpoints[ev["task_id"]] = p.get("worktree")  # the latest checkpoint, with or without a worktree
 
     # -- session ----------------------------------------------------------------------------
     def session_created(self, ev, p):
@@ -658,7 +658,7 @@ class Replay:
             "launch_method": p["launch_method"], "external_id": p.get("external_session_id"),
             "snapshot": None, "snapshot_seq": 0, "launch_seq": ev["seq"], "last_stop": None,
             "outcome": None, "closed_seq": 0, "ack_seq": 0, "opened_seq": 0, "archived": None, "restored": False,
-            "limited_turn": None,
+            "limited_turn": None, "waiting_approval": None,
         }
 
     def session_caps(self, ev, p):
@@ -698,6 +698,9 @@ class Replay:
             a = self.approvals.get(p["approval_id"])
             if not a or a["state"] != "pending" or a["source"] != "acp_permission":
                 self.err(ev, "ACP permission must be recorded as a pending approval first")
+            s["waiting_approval"] = p["approval_id"]
+        if p["trigger"] == "permission_resolved" and p.get("approval_id") != s["waiting_approval"]:
+            self.err(ev, "permission_resolved must name the approval the session is waiting on")
         if p["trigger"] == "reattach_attempt":
             s["launch_method"], s["launch_seq"] = p["launch_method"], ev["seq"]
         if to == "idle" and frm == "starting" and p.get("external_session_id"):
@@ -771,8 +774,9 @@ class Replay:
         else:
             if ev["actor"]["kind"] != "user":
                 self.err(ev, "archived by 'user' must have a user actor")
-            if s["parent"] is not None and s["state"] not in ("closed", "failed"):
-                self.err(ev, f"manual archive is offered only in a terminal state (session is {s['state']})")
+            if s["parent"] is not None and s["state"] not in MANUAL_ARCHIVE_CHILD_STATES:
+                self.err(ev, f"manual archive of a child session is offered only when it is closed, failed, suspended "
+                             f"or disconnected (session is {s['state']})")
             if s["parent"] is None:
                 t = self.tasks[s["task_id"]]
                 paused = t["state"] == "interrupted" and (t["interruption"] or {}).get("reason") == "user_paused"
@@ -942,8 +946,9 @@ class Replay:
                 if other["state"] == "failed":
                     self.err(ev, "superseding a failed attempt with unknown effect requires reconciliation first")
                     continue
-            elif other_id in superseded:
-                continue  # an earlier link of the same supersede chain
+            elif other_id in superseded and other["state"] not in ("recorded", "started", "succeeded",
+                                                                     "reconciled_applied"):
+                continue  # an earlier link of the same supersede chain that is still known not to have taken effect
             self.err(ev, f"same idempotency_key as {other_id} ({other['state']}); non-repeatable work must not be redone")
         self.operations[oid] = {"task_id": tid, "kind": p["kind"], "key": p["idempotency_key"],
                                 "rep": p["repeatability"], "approval": p["approval_id"], "sup": sup,
@@ -964,11 +969,12 @@ class Replay:
         if op["kind"] == "git_push":
             wt = self.checkpoints.get(tid)
             if wt is None or wt["head_sha"] != op["target"]["expected_sha"] or wt["dirty"]:
-                self.err(ev, "git_push expected_sha must equal the head_sha of the task's latest clean checkpoint")
+                self.err(ev, "git_push expected_sha must equal the head_sha of the task's latest clean checkpoint "
+                             "(the latest task.checkpoint_recorded must carry a worktree)")
         if op["kind"] == "pr_merge":
             pushes = [o for o in self.operations.values()
                       if o["task_id"] == tid and o["kind"] == "git_push" and o["state"] in DONE_OP]
-            head = max(pushes, key=lambda o: o["seq"])["target"]["expected_sha"] if pushes else None
+            head = max(pushes, key=lambda o: o["done_seq"])["target"]["expected_sha"] if pushes else None
             if head != op["target"]["expected_sha"]:
                 self.err(ev, f"pr_merge expected_sha must equal the PR head AgentDock last pushed ({head})")
         st = self.tasks[op["task_id"]]["state"]
@@ -1005,6 +1011,8 @@ class Replay:
                 self.err(ev, f"a started {op['kind']} cannot be killed (ADR-0002 PRL-5); cancel/interrupt waits for "
                              f"its result")
         op["state"] = new_state
+        if new_state == "succeeded":
+            op["done_seq"] = ev["seq"]
         if new_state == "failed":
             op["effect"] = p["effect"]
 
@@ -1034,6 +1042,8 @@ class Replay:
         if op["strategy"] == "none" and p["finding"] != "undeterminable":
             self.err(ev, "reconcile_strategy 'none' has no probe; the only possible finding is undeterminable")
         op["state"] = "reconciled_" + p["finding"]
+        if p["finding"] == "applied":
+            op["done_seq"] = ev["seq"]
 
     # -- checks -------------------------------------------------------------------------------
     def check_started(self, ev, p):
@@ -1140,6 +1150,15 @@ class Replay:
     # -- dispatcher -----------------------------------------------------------------------------
     def apply(self, ev):
         self.envelope(ev)
+        # Checked before anything is skipped: no event at all, tombstoned or not, may sit between the event that
+        # made an archived session wait and its system unarchive.
+        if self.must_unarchive and not (ev["type"] == "session.unarchived" and "tombstone" not in ev
+                                        and ev["payload"].get("by") == "system"
+                                        and ev.get("session_id") in self.must_unarchive):
+            for sid in sorted(self.must_unarchive):
+                self.err(ev, f"archived session {sid} is waiting for the user; session.unarchived{{by: system}} "
+                             f"must be written in the same transaction")
+            self.must_unarchive = set()
         if "tombstone" in ev or (ev.get("task_id") in self.deleted and ev["type"] != "task.deleted"):
             return
         # Unknown task/session ids were already reported by envelope(); do not replay against missing state.
@@ -1148,12 +1167,6 @@ class Replay:
         if "session_id" in ev and ev["type"] != "session.created" and ev["session_id"] not in self.sessions:
             return
         p, t = ev["payload"], ev["type"]
-        if self.must_unarchive and not (t == "session.unarchived" and p.get("by") == "system"
-                                        and ev.get("session_id") in self.must_unarchive):
-            for sid in sorted(self.must_unarchive):
-                self.err(ev, f"archived session {sid} is waiting for the user; session.unarchived{{by: system}} "
-                             f"must be written in the same transaction")
-            self.must_unarchive = set()
         handler = {
             "task.created": self.task_created, "task.state_changed": self.task_state_changed,
             "task.outcome_acknowledged": self.task_ack, "task.policy_updated": self.task_policy_updated,
@@ -1219,9 +1232,10 @@ class Replay:
             elif st == "running":
                 if not any(s["role"] in REPLY_ROLES and s["state"] in LIVE_SESSION for s in sessions):
                     items.add(("needs_reply", "session_unavailable", tid, None, None))
-                elif any(s["role"] in REPLY_ROLES and s["state"] in ("starting", "idle") and s["last_stop"] is None
-                         for s in sessions):
-                    # The agent is starting or has no turn yet: the orchestrator sends the first prompt (UX: running).
+                elif any(s["role"] in REPLY_ROLES and (s["state"] in ("starting", "suspended") or (
+                        s["state"] == "idle" and s["last_stop"] in (None, "cancelled"))) for s in sessions):
+                    # A live agent that is neither working nor asking: starting, suspended, no turn yet, or its last
+                    # turn was cancelled by the user. The task is still `running` (UX rule 5: running in background).
                     items.add(("background", "workflow_step", tid, None, None))
             elif st == "interrupted":
                 intr = t["interruption"] or {}
@@ -1355,6 +1369,7 @@ def main():
         errors.append(f"transitions never exercised by any fixture: {', '.join(missing)}")
 
     errors += check_enforcement_docs()
+    errors += check_state_machine_doc(transitions)
     mutations_run = 0
     if not errors:
         mutation_errors, mutations_run = self_test(loaded, transitions, v, defs)
@@ -1367,7 +1382,7 @@ def main():
         return 1
     print(f"OK: {len(fixtures)} fixtures, {total_events} events, {len(covered)}/{len(all_ids)} transitions covered, "
           f"schema keyword subset respected, models.sample.json valid, {mutations_run} negative mutations rejected, "
-          f"Enforcement boundary table consistent")
+          f"Enforcement boundary table consistent, state-machines.md mirrors transitions.json")
     return 0
 
 
@@ -1392,6 +1407,10 @@ def check_predelete(name, events, pre, transitions, v, defs):
     deleted task must be ended with nothing open."""
     errors, replay = run_stream("predelete/" + name, pre, transitions, v, defs)
     n = len(pre)
+    deletions = sum(e.get("type") == "task.deleted" for e in events)
+    if deletions != 1:
+        errors.append(f"{name}: {deletions} task.deleted events; a stream with a pre-deletion copy deletes exactly one "
+                      f"task (the copy can only show the state before the first deletion)")
     if n >= len(events) or events[n]["type"] != "task.deleted":
         return errors + [f"predelete/{name}: must end right before a task.deleted of {name}"]
     deleted = events[n]
@@ -2195,6 +2214,97 @@ def _m_r4_archive_running_main_session(ev):
     return _renumber(ev)
 
 
+# -- review round 4 ------------------------------------------------------------------------------------
+def _m_r5_v2_draft_snapshot(ev):  # X1a: under v2_draft nothing ties `features` to the raw capabilities
+    for e in ev:
+        if e["type"] == "session.capabilities_detected":
+            snap = e["payload"]["snapshot"]
+            snap["track"] = "v2_draft"
+            snap["acp_agent_capabilities"].pop("loadSession", None)
+    return ev
+
+
+def _m_r5_push_after_checkpoint_without_worktree(ev):  # X2a
+    i = _find(ev, "operation.started", lambda e: any(
+        r["type"] == "operation.recorded" and r["payload"]["operation_id"] == e["payload"]["operation_id"]
+        and r["payload"]["kind"] == "git_push" for r in ev))
+    ev.insert(i, _new_event(ev, i - 1, "task.checkpoint_recorded", _ORCH,
+                            {"checkpoint_id": "cpt_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "phase": "pr",
+                             "through_seq": ev[i - 1]["seq"], "open_operation_ids": [], "pending_approval_ids": []}, 1))
+    return _renumber(ev)
+
+
+def _m_r5_second_deletion_with_one_sidecar(ev):  # X13: a second task, deleted while running
+    tid, ts = "tsk_ZZZZZZZZZZZZZZZZZZZZZZZZ09", ev[-1]["recorded_at"]
+    steps = [("task.created", _USER), ("task.state_changed", _ORCH), ("task.state_changed", _ORCH)]
+    for n, (etype, actor) in enumerate(steps, 1):
+        e = _new_event(ev, len(ev) - 1, etype, actor, {}, n)
+        e.update(task_id=tid, tombstone={"reason": "task_deleted", "at": ts})
+        ev.append(e)
+    d = _new_event(ev, len(ev) - 1, "task.deleted", _USER, {"final_state": "completed", "events_tombstoned": 3}, 4)
+    d["task_id"] = tid
+    ev.append(d)
+    return _renumber(ev)
+
+
+def _m_r5_tombstone_between_wait_and_unarchive(ev):  # Y1b
+    u = _find(ev, "session.unarchived", lambda e: e["payload"]["by"] == "system")
+    last = max(i for i, e in enumerate(ev) if "tombstone" in e)
+    clone = json.loads(json.dumps(ev[last]))
+    clone["id"] = "evt_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    clone["occurred_at"] = clone["recorded_at"] = ev[u - 1]["recorded_at"]
+    ev.insert(u, clone)
+    ev[_find(ev, "task.deleted")]["payload"]["events_tombstoned"] += 1
+    return _renumber(ev)
+
+
+def _m_r5_session_resumes_on_other_approval(ev):  # adversarial H1: S14 names an approval it is not waiting on
+    i = _find(ev, "session.state_changed", lambda e: e["payload"]["trigger"] == "permission_resolved")
+    ev[i]["payload"]["approval_id"] = "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    return ev
+
+
+def _m_r5_merge_bound_to_earlier_success(ev):  # adversarial H2: push B succeeds before push A; merge names B
+    r = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "git_push")
+    oid, aid = ev[r]["payload"]["operation_id"], ev[r]["payload"]["approval_id"]
+    start, done = _op_event(ev, oid, "operation.started"), _op_event(ev, oid, "operation.succeeded")
+    cp = max(k for k in range(start) if ev[k]["type"] == "task.checkpoint_recorded")
+    at, new_op, new_apr, sha_b = ev[start]["recorded_at"], "op_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01", "b" * 40
+    extra = []
+    for n, k in enumerate([r] + [k for k in range(r + 1, start) if ev[k]["payload"].get("approval_id") == aid]
+                          + [cp, start, done], 1):
+        c = _clone(ev[k], n, at)
+        q = c["payload"]
+        for field, old, new in (("operation_id", oid, new_op), ("approval_id", aid, new_apr)):
+            if q.get(field) == old:
+                q[field] = new
+        if c["type"] == "operation.recorded":
+            q["target"]["expected_sha"] = sha_b
+            q["idempotency_key"] = idempotency_key("git_push", q["target"])
+            key = q["idempotency_key"]
+        elif c["type"] == "approval.requested":
+            q["operation_fingerprint"] = key
+        elif c["type"] == "task.checkpoint_recorded":
+            q["checkpoint_id"] = "cpt_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+            q["worktree"]["head_sha"] = sha_b
+        extra.append(c)
+    m = _find(ev, "operation.recorded", lambda e: e["payload"]["kind"] == "pr_merge")
+    ev[m]["payload"]["target"]["expected_sha"] = sha_b
+    ev[m]["payload"]["idempotency_key"] = idempotency_key("pr_merge", ev[m]["payload"]["target"])
+    ev[_next(ev, "approval.requested", m)]["payload"]["operation_fingerprint"] = ev[m]["payload"]["idempotency_key"]
+    return _renumber(ev[:start + 1] + extra + ev[start + 1:])
+
+
+def _m_r5_archive_idle_child(ev):  # a child that is still live (idle) cannot be archived by hand
+    i = _find(ev, "session.state_changed", lambda e: e["payload"]["to"] == "idle" and any(
+        c["type"] == "session.created" and c["session_id"] == e["session_id"]
+        and c["payload"].get("parent_session_id") for c in ev))
+    a = _new_event(ev, i, "session.archived", _USER, {"by": "user"}, 1)
+    a["session_id"] = ev[i]["session_id"]
+    ev.insert(i + 1, a)
+    return _renumber(ev)
+
+
 MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_gap, "cursor not gap-free"),
     ("01-happy-path-pr.jsonl", _m_illegal_transition, "illegal task transition"),
@@ -2285,6 +2395,14 @@ MUTATIONS = [
     ("06-crash-unknown-push.jsonl", _m_r4_recovery_leaves_task_in_flight, "still pr after recovery"),
     ("06-crash-unknown-push.jsonl", _m_r4_recovery_list_omits_session, "sessions_disconnected lists [], recovery changed"),
     ("01-happy-path-pr.jsonl", _m_r4_archive_running_main_session, "(task is running)"),
+    # review round 4
+    ("07-crash-pending-approval-load.jsonl", _m_r5_v2_draft_snapshot, "track v2_draft is not accepted"),
+    ("01-happy-path-pr.jsonl", _m_r5_push_after_checkpoint_without_worktree, "the latest task.checkpoint_recorded must carry a worktree"),
+    ("deleting/12-session-edge-cases.jsonl", _m_r5_second_deletion_with_one_sidecar, "2 task.deleted events; a stream with a pre-deletion copy deletes exactly one task"),
+    ("12-session-edge-cases.jsonl", _m_r5_tombstone_between_wait_and_unarchive, "must be written in the same transaction"),
+    ("01-happy-path-pr.jsonl", _m_r5_session_resumes_on_other_approval, "permission_resolved must name the approval the session is waiting on"),
+    ("09-pr-ci-edges.jsonl", _m_r5_merge_bound_to_earlier_success, "pr_merge expected_sha must equal the PR head AgentDock last pushed"),
+    ("08-review-loop-pause-children.jsonl", _m_r5_archive_idle_child, "manual archive of a child session is offered only when it is closed, failed, suspended or disconnected (session is idle)"),
 ]
 
 
@@ -2314,13 +2432,39 @@ def check_enforcement_docs():
     return errors
 
 
+def check_state_machine_doc(transitions):
+    """state-machines.md mirrors transitions.json: one table row per transition, identical in every column."""
+    def cells(text):
+        return [] if text.strip() == "—" else [x.strip().strip("`") for x in text.split(",")]
+    rows = {}
+    for line in (ROOT / "state-machines.md").read_text(encoding="utf-8").replace("\r\n", "\n").split("\n"):
+        m = re.match(r"\| ([TS]\d\d) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|$", line)
+        if m:
+            rows[m.group(1)] = (m.group(2).strip("`"), m.group(3).strip("`"), cells(m.group(4)), cells(m.group(5)),
+                                m.group(6), cells(m.group(7)))
+    errors, ids = [], set()
+    for kind in ("task", "session"):
+        for t in transitions[kind]["transitions"]:
+            ids.add(t["id"])
+            want = (t["from"] or "(new)", t["to"], t["actors"], t["triggers"], t["durability"], t.get("conditions", []))
+            if rows.get(t["id"]) != want:
+                errors.append(f"state-machines.md row {t['id']} is {rows.get(t['id'])}, transitions.json says {want}")
+    errors += [f"state-machines.md row {i} is not in transitions.json" for i in sorted(set(rows) - ids)]
+    return errors
+
+
 def self_test(loaded, transitions, v, defs):
     errors = []
     for fixture, mutate, expected in MUTATIONS:
-        events = mutate(json.loads(json.dumps(loaded[fixture])))
-        if fixture.startswith("predelete/"):
+        source = fixture[len("deleting/"):] if fixture.startswith("deleting/") else fixture
+        events = mutate(json.loads(json.dumps(loaded[source])))
+        if fixture.startswith("predelete/"):  # mutate the pre-deletion copy
             main_name = fixture[len("predelete/"):]
             run_errors = check_predelete(main_name, loaded[main_name], events, transitions, v, defs)
+        elif fixture.startswith("deleting/"):  # mutate the final stream, keep the pre-deletion copy
+            main_name = fixture[len("deleting/"):]
+            run_errors, _ = run_stream(main_name, events, transitions, v, defs)
+            run_errors += check_predelete(main_name, events, loaded["predelete/" + main_name], transitions, v, defs)
         else:
             run_errors, _ = run_stream(fixture, events, transitions, v, defs)
         if not any(expected in e for e in run_errors):

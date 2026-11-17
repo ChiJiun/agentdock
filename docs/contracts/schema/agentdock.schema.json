@@ -233,7 +233,7 @@
         "protocol": { "const": "acp" },
         "protocol_version": { "description": "Negotiated ACP protocolVersion (uint16).", "type": "integer", "minimum": 0, "maximum": 65535 },
         "track": {
-          "description": "v1_stable is the default. v2_draft only behind an explicit opt-in feature flag.",
+          "description": "v1_stable is the default. v2_draft only behind an explicit opt-in feature flag; validate_fixtures.py rejects v2_draft snapshots until the v2 feature derivation is designed.",
           "type": "string",
           "enum": ["v1_stable", "v2_draft"]
         },
@@ -263,18 +263,18 @@
           ],
           "properties": {
             "load_session": { "description": "v1 agentCapabilities.loadSession == true", "type": "boolean" },
-            "resume_session": { "description": "v1 agentCapabilities.sessionCapabilities.resume present and not null", "type": "boolean" },
-            "close_session": { "description": "v1 sessionCapabilities.close present", "type": "boolean" },
-            "list_sessions": { "description": "v1 sessionCapabilities.list present", "type": "boolean" },
-            "delete_session": { "description": "v1 sessionCapabilities.delete present", "type": "boolean" },
-            "additional_directories": { "description": "v1 sessionCapabilities.additionalDirectories present", "type": "boolean" },
-            "system_prompt": { "description": "v1 sessionCapabilities.systemPrompt present", "type": "boolean" },
+            "resume_session": { "description": "v1 agentCapabilities.sessionCapabilities.resume is an object", "type": "boolean" },
+            "close_session": { "description": "v1 sessionCapabilities.close is an object", "type": "boolean" },
+            "list_sessions": { "description": "v1 sessionCapabilities.list is an object", "type": "boolean" },
+            "delete_session": { "description": "v1 sessionCapabilities.delete is an object", "type": "boolean" },
+            "additional_directories": { "description": "v1 sessionCapabilities.additionalDirectories is an object", "type": "boolean" },
+            "system_prompt": { "description": "v1 sessionCapabilities.systemPrompt is an object", "type": "boolean" },
             "prompt_image": { "description": "v1 promptCapabilities.image", "type": "boolean" },
             "prompt_audio": { "description": "v1 promptCapabilities.audio", "type": "boolean" },
             "prompt_embedded_context": { "description": "v1 promptCapabilities.embeddedContext", "type": "boolean" },
             "mcp_http": { "description": "v1 mcpCapabilities.http", "type": "boolean" },
             "mcp_sse": { "description": "v1 mcpCapabilities.sse", "type": "boolean" },
-            "logout": { "description": "v1 agentCapabilities.auth.logout present", "type": "boolean" }
+            "logout": { "description": "v1 agentCapabilities.auth.logout is an object", "type": "boolean" }
           }
         },
         "client_advertised": {
@@ -314,7 +314,7 @@
       "enum": ["once", "session", "task"]
     },
     "PolicyClass": {
-      "description": "Backend policy classification of an ACP permission request (the tool call it would authorize), computed in Rust from the unwrapped command / path / URL (ADR-0002 APR-1..APR-10), never taken from agent text. Classes pr_merge, force_push, branch_delete, worktree_remove, destructive_command and unclassified (command could not be recovered, APR-7) may only be approved by the user. A class that names an OperationKind (git_push, pr_write, external_write, pr_merge, branch_delete, worktree_remove, destructive_command, force_push) is executed by AgentDock only as an Operation with its own host_policy approval when AgentDock itself runs it (terminal/*, fs/write_text_file).",
+      "description": "Backend policy classification of an ACP permission request (the tool call it would authorize), computed in Rust from the unwrapped command / path / URL (ADR-0002 APR-1..APR-10), never taken from agent text. Classes pr_merge, force_push, branch_delete, worktree_remove, destructive_command and unclassified (command could not be recovered, APR-7) may only be approved by the user. A class that maps to an OperationKind (git_push, external_write, pr_merge, branch_delete, worktree_remove, destructive_command; pr_write runs as pr_create, pr_update or pr_comment; force_push runs as destructive_command) is executed by AgentDock only as an Operation with its own host_policy approval when AgentDock itself runs it (terminal/*, fs/write_text_file).",
       "type": "string",
       "enum": ["read_only", "workspace_edit", "command", "config_write", "git_push", "pr_write", "external_write", "pr_merge", "force_push", "branch_delete", "worktree_remove", "destructive_command", "unclassified"]
     },
@@ -1169,7 +1169,7 @@
       },
       "allOf": [
         { "if": { "properties": { "type": { "enum": ["system.recovery_started", "system.recovery_completed"] } } },
-          "then": { "not": { "anyOf": [ { "required": ["task_id"] }, { "required": ["session_id"] } ] } },
+          "then": { "not": { "anyOf": [ { "required": ["project_id"] }, { "required": ["task_id"] }, { "required": ["session_id"] } ] } },
           "else": { "required": ["project_id", "task_id"] } },
         { "if": { "properties": { "type": { "enum": ["session.created", "session.capabilities_detected", "session.state_changed", "session.prompt_submitted", "session.message_delta", "session.tool_call", "session.plan_updated", "session.summary_recorded", "session.output_limited", "session.result_acknowledged", "session.archived", "session.unarchived", "usage.reported"] } } },
           "then": { "required": ["session_id"] } },
