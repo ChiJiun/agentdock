@@ -2,7 +2,7 @@
 
 **A Rust-powered, agent-agnostic coding workbench inspired by the usability patterns of Claude Code Desktop.**
 
-> Status: early implementation. A React/Vite UI prototype is under development; **no production ACP runtime or Rust/Tauri desktop binary is integrated yet**.
+> Status: early implementation. The React/Vite app now contains **both a simulated UI preview and a real local ACP development runtime** using the official SDK. **The production Rust/Tauri desktop binary, full SDLC automation and remote worker are not implemented yet**.
 
 AgentDock aims to give a developer one desktop environment for multiple coding agents, isolated Git worktrees, controlled tool approvals, verifiable review/CI workflows, and eventually resilient remote execution. It is an independent product—not an official Anthropic or Claude application.
 
@@ -30,19 +30,18 @@ AgentDock aims to give a developer one desktop environment for multiple coding a
 - Git CLI / worktrees and GitHub CLI or GitHub API for SDLC integration
 - SSH + optional persistent Rust worker for remote execution
 
-## Run the UI preview (development branch)
-
-The frontend provides an **interactive, in-memory demo** of projects, sessions, a simulated message timeline, change review, and the **Session Sentinel** notification/decision inbox. Nothing in the preview invokes an AI model, executes Git, or submits an approval.
+## Run the workbench (development branch)
 
 ```sh
 npm ci
-npm run typecheck
-npm test
-npm run dev
-npm run build
+npm run dev:full
 ```
 
-The preview is intended for validating layout and interactions, **not** for real coding-agent execution. The Rust/Tauri desktop shell is tracked in Issue #4, ACP integration in Issue #6, and event-driven Session Sentinel in Issue #15.
+Open **http://127.0.0.1:5173/**. The original preview demonstrates the UI using sample data. Click **Live ACP / 即時 ACP** to run a genuine ACP v1 session through the official TypeScript SDK. The built-in mock runs as a real child process and returns deterministic test replies **without using a model or editing files**. With an explicitly configured, locally authenticated third-party ACP agent, the same transport can run real coding tasks. **Do not use untrusted repositories or adapters before OS sandboxing is implemented.**
+
+For standalone UI work: `npm run dev`. For tests: `npm run typecheck && npm run test:all && npm run build`.
+
+Full setup, adapter allowlist, storage, restart behavior and security limitations: **[Live ACP runtime implementation](docs/implementation/live-acp-runtime.md)**. The production Rust/Tauri desktop shell is tracked in Issue #4, ACP host in Issue #6, SQLite session history in Issue #7, and event-driven Session Sentinel in Issue #15.
 
 ## Project documents
 
@@ -50,6 +49,8 @@ The preview is intended for validating layout and interactions, **not** for real
 - [Architecture and data contracts](docs/architecture.md)
 - [Upstream source inventory, migration matrix and licenses](docs/sources.md)
 - [Roadmap and release gates](docs/roadmap.md)
+- [Live ACP development runtime and verification](docs/implementation/live-acp-runtime.md)
+- [Language UI and safe Skill output policy](docs/implementation/language-ui.md)
 - [Architecture decision 0001](docs/decisions/0001-independent-workbench.md)
 - [Agent contributor rules](AGENTS.md)
 

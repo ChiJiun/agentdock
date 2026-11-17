@@ -6,21 +6,27 @@
   "description": "AgentDock UI foundation – no agent runtime connected yet",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "runtime:dev": "node apps/runtime/server.mjs",
+    "dev:full": "concurrently -k \"npm run runtime:dev\" \"npm run dev\"",
+    "test:runtime": "node --test apps/runtime/runtime.test.mjs",
+    "test:all": "npm run test && npm run test:runtime",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "2.7.0",
+    "lucide-react": "^0.468.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "lucide-react": "^0.468.0"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
+    "concurrently": "9.2.1",
     "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vite": "^7.1.0",

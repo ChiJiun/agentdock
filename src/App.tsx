@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpRight, Bell, Bot, Check, CheckCheck, Globe2,
+  ArrowUpRight, Bell, Bot, Check, CheckCheck, Globe2, Terminal,
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, Clock3, Command, Cpu, FileCode2,
   FileDiff, FolderGit2, GitBranch, HardDrive, Layers3, Menu,
   MoreHorizontal, PanelRightClose, Plus, Search, Settings2, ShieldCheck, Sparkles,
@@ -11,6 +11,7 @@ import { ProgressRail } from './components/ProgressRail';
 import { MonitorInbox } from './components/MonitorInbox';
 import { SessionSwitcher } from './components/SessionSwitcher';
 import { LanguageSettingsPanel } from './components/LanguageSettingsPanel';
+import { LiveWorkspace } from './components/LiveWorkspace';
 import { LanguageProvider, useT } from './i18n/context';
 import { t, type MessageKey } from './i18n/messages';
 import { loadLanguageSettings, saveLanguageSettings, resolveLocale, resolveUiLocale, languageSnapshot, type LanguageSettings } from './i18n/language';
@@ -178,6 +179,7 @@ export default function App() {
   const uiLocale = resolveUiLocale(settings);
   const tr = (key: MessageKey, vars?: Record<string, string | number>) => t(uiLocale, key, vars);
   const [languageOpen, setLanguageOpen] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
   const langButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => saveLanguageSettings(settings), [settings]);
   const [monitorOpen, setMonitorOpen] = useState(false);
@@ -251,12 +253,14 @@ export default function App() {
     setNotice(tr('demo.stored'));
   }
 
+  if (liveMode) return <LanguageProvider locale={uiLocale}><LiveWorkspace settings={settings} onBack={() => setLiveMode(false)}/></LanguageProvider>;
+
   return <LanguageProvider locale={uiLocale}><div className="app-shell">
     <SessionSidebar projects={projects} sessions={filteredSessions} activeProjectId={activeProjectId} activeSessionId={active?.id ?? ''} onProject={chooseProject} onSession={setActiveSessionId} onNew={createSession} collapsed={sidebarCollapsed} onCollapse={() => setSidebarCollapsed(v => !v)}/>
     <main className="main">
       <header className="topbar">
         <div className="breadcrumbs"><FolderGit2 size={15}/><span>{project.name}</span><ChevronRight size={13}/><strong>{active?.title ?? tr('session.noSelected')}</strong></div>
-        <div className="topbar-actions"><span className="mode-pill"><span/> {tr('header.demo')}</span><button className="icon-button" aria-label={tr('header.switchSessions')} title={tr('header.switchSessions')} onClick={() => { setMonitorOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button><div className="language-anchor"><button ref={langButtonRef} className="language-toggle" onClick={() => { setMonitorOpen(false); setSwitcherOpen(false); setLanguageOpen(v => !v); }} aria-label={tr('header.language')} title={tr('header.language')} aria-expanded={languageOpen}><Globe2 size={14}/><span>{uiLocale === 'zh-TW' ? '繁中' : 'EN'}</span></button>{languageOpen && <LanguageSettingsPanel settings={settings} onChange={setSettings} projectId={project.id} sessionId={active?.id} onClose={closeLanguage}/>}</div><div className="monitor-anchor"><button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={tr('header.notifications', { count: blockingCount })} title={tr('header.monitorTitle')} aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>{monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={id => setDismissed(old => new Set([...old, id]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}</div><button className="icon-button" onClick={() => setShowInspector(v => !v)} title={tr('header.details')} aria-label={tr('header.details')}><FileDiff size={17}/></button></div>
+        <div className="topbar-actions"><button className="live-nav-button" onClick={() => { setLiveMode(true); setSwitcherOpen(false); setMonitorOpen(false); }} title="Connect to the local ACP development runtime"><Terminal size={15}/> Live ACP</button><span className="mode-pill"><span/> {tr('header.demo')}</span><button className="icon-button" aria-label={tr('header.switchSessions')} title={tr('header.switchSessions')} onClick={() => { setMonitorOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button><div className="language-anchor"><button ref={langButtonRef} className="language-toggle" onClick={() => { setMonitorOpen(false); setSwitcherOpen(false); setLanguageOpen(v => !v); }} aria-label={tr('header.language')} title={tr('header.language')} aria-expanded={languageOpen}><Globe2 size={14}/><span>{uiLocale === 'zh-TW' ? '繁中' : 'EN'}</span></button>{languageOpen && <LanguageSettingsPanel settings={settings} onChange={setSettings} projectId={project.id} sessionId={active?.id} onClose={closeLanguage}/>}</div><div className="monitor-anchor"><button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={tr('header.notifications', { count: blockingCount })} title={tr('header.monitorTitle')} aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>{monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={id => setDismissed(old => new Set([...old, id]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}</div><button className="icon-button" onClick={() => setShowInspector(v => !v)} title={tr('header.details')} aria-label={tr('header.details')}><FileDiff size={17}/></button></div>
       </header>
       <div className="preview-banner"><CircleAlert size={15}/><span>{tr('preview.banner')}</span><a href="https://github.com/ChiJiun/agentdock/issues/6" target="_blank" rel="noreferrer">{tr('preview.acp')} <ArrowUpRight size={12}/></a></div>
       {active ? <>
