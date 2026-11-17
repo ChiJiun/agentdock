@@ -9,6 +9,7 @@ import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
 import { WorktreeManager } from './worktrees.mjs';
 import { GitHubReader } from './github-reader.mjs';
+import { TaskWorkflow } from './task-workflow.mjs';
 
 const MAX_BODY = 20_000;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
@@ -62,6 +63,7 @@ export function createRuntimeServer({
   allowedRoots.push(...worktrees.permittedWorkspacePaths());
   const host = new AcpHost({ store, roots: allowedRoots, adapters });
   const github = new GitHubReader({ roots: allowedRoots });
+  const tasks = new TaskWorkflow({ store, roots: allowedRoots });
   const server = createServer(async (request, response) => {
     try {
       const method = request.method;
@@ -90,6 +92,32 @@ export function createRuntimeServer({
       }
       if (method === 'GET' && pathname === '/api/github/checks') {
         return json(response, 200, github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
+      }
+      if (method === 'GET' && pathname === '/api/tasks') return json(response, 200, tasks.list());
+      if (method === 'POST' && pathname === '/api/tasks') {
+        const payload = await readJson(request);
+        return json(response, 201, tasks.create({
+          workspace: payload.workspace, objective: payload.objective,
+          issueNumber: payload.issueNumber ?? null, issueUrl: payload.issueUrl ?? null,
+        }));
+      }
+      const taskMatch = /^\/api\/tasks\/([a-f0-9-]{36})(?:\/(evidence|history|advance))?$/.exec(pathname);
+      if (taskMatch) {
+        const [, id, route] = taskMatch;
+        if (!tasks.get(id)) throw new ClientError(404, 'task not found');
+        if (method === 'GET' && !route) return json(response, 200, tasks.get(id));
+        if (method === 'GET' && route === 'evidence') return json(response, 200, tasks.evidence(id));
+        if (method === 'GET' && route === 'history') return json(response, 200, tasks.history(id));
+        if (method === 'POST' && route === 'evidence') {
+          const payload = await readJson(request);
+          return json(response, 201, tasks.addEvidence(id, payload));
+        }
+        if (method === 'POST' && route === 'advance') {
+          const payload = await readJson(request);
+          // Actor is set by this local operator endpoint; agent cannot claim
+          // an approval by supplying actor='human' in the request body.
+          return json(response, 200, tasks.advance(id, payload, 'human'));
+        }
       }
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
       if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
@@ -163,7 +191,7 @@ export function createRuntimeServer({
     }
   });
   return {
-    server, store, host, worktrees, github, allowedRoots,
+    server, store, host, worktrees, github, tasks, allowedRoots,
     async listen(port = PORT) {
       return await new Promise((resolveListen, rejectListen) => {
         server.once('error', rejectListen);
