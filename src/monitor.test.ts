@@ -21,13 +21,14 @@ describe('session monitor (simulated data)', () => {
     expect(decisionCount(items)).toBe(0);
   });
 
-  it('bounds the summary length and never generates new facts', () => {
+  it('generates bounded templates rather than replaying long raw tool text', () => {
     const session = { ...demoSessions[0], entries: [{
       id: 'long', author: 'system' as const, kind: 'notice' as const,
       text: 'read '.repeat(200), time: 'Now',
     }] };
     const summary = deriveMonitorItems([session], demoProjects)[0].summary;
     expect(summary.length).toBeLessThanOrEqual(125);
-    expect(summary.endsWith('…')).toBe(true);
+    expect(summary).toBe('A demo approval is waiting in this session. No action has been executed.');
+    expect(summary).not.toContain('read read');
   });
 });

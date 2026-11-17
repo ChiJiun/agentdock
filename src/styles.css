@@ -1267,3 +1267,102 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
     transition:none!important
   }
 }
+
+/* AgentDock language policy controls (original UI, not copied from third parties). */
+.language-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.language-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid #455b48;
+  color: #d5e9cd;
+  background: #29382e;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+.language-toggle:hover, .language-toggle[aria-expanded='true'] {
+  background: #384b39;
+}
+.language-panel {
+  position: absolute;
+  right: -80px;
+  top: 43px;
+  z-index: 48;
+  width: 340px;
+  max-width: calc(100vw - 82px);
+  overflow: hidden;
+  border: 1px solid #506052;
+  border-radius: 12px;
+  background: #222a28;
+  box-shadow: 0 22px 65px #0009;
+}
+.language-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 13px 10px 17px;
+  border-bottom: 1px solid #3c4840;
+}
+.language-panel-header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #e4ebdf;
+}
+.language-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+.language-fields label {
+  color: #cfddcf;
+  font-size: 11px;
+  font-weight: 650;
+}
+.language-fields select {
+  width: 100%;
+  border: 1px solid #526457;
+  border-radius: 7px;
+  background: #303c34;
+  color: #e7f0e2;
+  font-size: 12px;
+  padding: 9px 10px;
+}
+.language-fields label:not(:first-child) {
+  margin-top: 8px;
+}
+.language-fields small {
+  font-size: 10px;
+  color: #91a998;
+  line-height: 1.5;
+}
+.language-panel-footer {
+  padding: 14px 16px;
+  background: #2a332c;
+  border-top: 1px solid #3a4c3e;
+  line-height: 1.5;
+  color: #a6bfad;
+  font-size: 10px;
+}
+.language-panel-footer div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #e8c79a;
+}
+.language-panel-footer p { margin: 0; }
+@media (max-width: 620px) {
+  .language-panel { right: -68px; }
+  .language-toggle { padding: 6px; }
+}
