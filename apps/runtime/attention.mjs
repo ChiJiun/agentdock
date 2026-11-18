@@ -18,8 +18,9 @@
 const order = { reply: 0, review: 1, background: 2 };
 const LIVE_APPROVAL_STATES = new Set(['awaiting_approval', 'running']);
 // A view taken while the session was idle or terminal covers a later
-// restart-interruption at the same cursor (nothing ran in between). A view
-// taken while it was running does not: the interruption lost work.
+// restart-interruption when the session had been idle (`host_restarted` with
+// previousStatus 'ready') and nothing else happened after the view. A view
+// taken while it was running or waiting does not: the interruption lost work.
 const SETTLED_VIEW_STATES = new Set(['ready', 'failed', 'interrupted', 'closed']);
 
 function reviewKey(session, turn) {
@@ -34,8 +35,12 @@ function reviewKey(session, turn) {
   return null;
 }
 
-export function isViewed(view, cursor) {
-  return !!view && view.cursor >= cursor && SETTLED_VIEW_STATES.has(view.status);
+export function isViewed(view, event) {
+  if (!view || !SETTLED_VIEW_STATES.has(view.status)) return false;
+  const cursor = event?.seq ?? 0;
+  if (view.cursor >= cursor) return true;
+  return event?.kind === 'host_restarted' && event.previousStatus === 'ready'
+    && view.cursor >= event.priorSeq;
 }
 
 export function deriveAttention(store, { includeViewed = false } = {}) {
@@ -65,7 +70,7 @@ export function deriveAttention(store, { includeViewed = false } = {}) {
     if (approvals.length) continue;
     const key = reviewKey(session, store.latestTurn(session.id));
     if (key) {
-      if (includeViewed || !isViewed(store.attentionView(session.id), cursor)) {
+      if (includeViewed || !isViewed(store.attentionView(session.id), event)) {
         items.push({ ...common, id: `attention:${session.id}:review:${cursor}`, type: 'review', key });
       }
     } else if (['starting', 'running', 'awaiting_approval'].includes(session.status)) {

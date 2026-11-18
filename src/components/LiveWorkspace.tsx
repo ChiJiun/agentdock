@@ -16,15 +16,22 @@ import { useLocale } from '../i18n/context';
 import { LiveAttentionInbox } from './LiveAttentionInbox';
 
 const REFRESH_MS = 1300;
-const RUNTIME_STATES: Record<string, { label: string; color: string }> = {
-  ready: { label: 'Ready', color: '#a5cf9c' },
-  running: { label: 'Running', color: '#a0c7ef' },
-  starting: { label: 'Connecting', color: '#c0b2e5' },
-  awaiting_approval: { label: 'Decision needed', color: '#edc68f' },
-  interrupted: { label: 'Interrupted', color: '#dfb98c' },
-  failed: { label: 'Failed', color: '#e3a7a4' },
-  closed: { label: 'Closed', color: '#9ba8a0' },
+const RUNTIME_STATES: Record<string, { zh: string; en: string; color: string }> = {
+  ready: { zh: '就緒', en: 'Ready', color: '#a5cf9c' },
+  running: { zh: '執行中', en: 'Running', color: '#a0c7ef' },
+  starting: { zh: '連線中', en: 'Connecting', color: '#c0b2e5' },
+  awaiting_approval: { zh: '等待你的決定', en: 'Decision needed', color: '#edc68f' },
+  interrupted: { zh: '已中斷', en: 'Interrupted', color: '#dfb98c' },
+  failed: { zh: '失敗', en: 'Failed', color: '#e3a7a4' },
+  closed: { zh: '已關閉', en: 'Closed', color: '#9ba8a0' },
 };
+
+/** The request exactly as the host stored it: already redacted, shortened here for display. */
+function approvalInput(input: unknown): string {
+  if (input === null || input === undefined) return '';
+  const text = typeof input === 'string' ? input : JSON.stringify(input, null, 2);
+  return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
+}
 
 function historyText(event: RuntimeEvent, zh: boolean): string {
   switch (event.kind) {
@@ -39,7 +46,11 @@ function historyText(event: RuntimeEvent, zh: boolean): string {
       return `${zh ? 'Agent 事件' : 'Agent event'}: ${update?.sessionUpdate || 'unknown'}`;
     }
     case 'approval_requested': return `${zh ? '需要工具權限' : 'Permission required'}: ${event.data.title || 'tool'}`;
-    case 'approval_resolved': return `${zh ? '權限決策' : 'Permission'}: ${event.data.decision || 'resolved'}`;
+    case 'approval_resolved': return `${zh ? '權限決策' : 'Permission'}: ${event.data.decision || 'resolved'}${event.data.reason ? ` (${event.data.reason})` : ''}`;
+    case 'approval_rejected': return zh ? '待處理的權限請求過多，已自動拒絕。' : 'Too many pending permission requests; refused automatically.';
+    case 'cancel_requested': return zh ? '已要求取消這個回合' : 'Cancellation requested for this turn';
+    case 'closed': return zh ? '工作階段已關閉' : 'Session closed';
+    case 'host_restarted': return zh ? 'Runtime 已重新啟動；先前的 Agent 連線沒有接回，這個工作階段只能查看歷史。' : 'The runtime restarted. The previous agent connection was not reattached; this session is history only.';
     case 'turn_finished': return `${zh ? '回合結束' : 'Turn completed'}: ${event.data.stopReason || 'unknown'}`;
     case 'connected': return zh ? '已建立 ACP v1 連線' : 'ACP v1 connection established';
     case 'process_exit': return zh ? 'Agent 程序已停止；仍可查看歷史事件。' : 'Agent process stopped. Historical events are still available.';
@@ -150,7 +161,7 @@ export function LiveWorkspace({ settings, onBack }: {
           }
         }
       } catch {
-        if (!cancelled) setError('Lost connection to the local ACP runtime.');
+        if (!cancelled) setError(zh ? '與本機 ACP Runtime 的連線中斷。' : 'Lost connection to the local ACP runtime.');
       } finally { running = false; }
     };
     void sync();
@@ -270,11 +281,11 @@ export function LiveWorkspace({ settings, onBack }: {
       {health === 'offline' && <div className="live-empty"><AlertTriangle size={29}/><h2>{ui("本機 ACP Runtime 尚未連接","Local ACP runtime not connected")}</h2><p>{ui("請在專案目錄執行","Start it with")} <code>npm run dev:full</code>{ui("，再重新開啟此頁面。"," in the project folder, then reopen this view.")}</p><p>{ui("不會自動啟動公開伺服器或外部付費模型。","No public server or external model is started automatically.")}</p><button onClick={onBack}>{ui("返回展示介面","Return to demo")}</button></div>}
       {health === 'online' && !active && <div className="live-empty"><Terminal size={30}/><h2>{ui("啟動真正的 ACP 工作階段","Start a real ACP session")}</h2><p>{ui("選擇已核准的工作目錄與已安裝的 Adapter。內建 Mock 使用官方 ACP 協定，不消耗模型額度。","Choose an approved workspace and an installed adapter. The built-in mock uses the official ACP protocol without a paid model.")}</p></div>}
       {health === 'online' && active && <>
-        <div className="live-main-header"><div><h2><Terminal size={20}/> {active.adapter} · {active.id.slice(0,8)}</h2><span className="live-agent-badge" style={{ color: badge?.color }}>{badge?.label}</span><span className="live-cwd">{active.cwd}</span></div><div className="live-actions"><button title={ui("重新讀取 Git 狀態與差異","Refresh Git status and diff")} onClick={()=>void inspectGit()}><FileDiff size={16}/> Git</button><button onClick={()=>void cancel()} disabled={active.status !== 'running' && active.status !== 'awaiting_approval'}><Square size={14}/> {ui("取消","Cancel")}</button><button onClick={()=>void closeSession()} disabled={active.status==='closed'||active.status==='interrupted'}><X size={15}/> {ui("關閉工作階段","Close")}</button></div></div>
+        <div className="live-main-header"><div><h2><Terminal size={20}/> {active.adapter} · {active.id.slice(0,8)}</h2><span className="live-agent-badge" style={{ color: badge?.color }}>{badge && (zh ? badge.zh : badge.en)}</span><span className="live-cwd">{active.cwd}</span></div><div className="live-actions"><button title={ui("重新讀取 Git 狀態與差異","Refresh Git status and diff")} onClick={()=>void inspectGit()}><FileDiff size={16}/> Git</button><button onClick={()=>void cancel()} disabled={active.status !== 'running' && active.status !== 'awaiting_approval'}><Square size={14}/> {ui("取消","Cancel")}</button><button onClick={()=>void closeSession()} disabled={active.status==='closed'||active.status==='interrupted'}><X size={15}/> {ui("關閉工作階段","Close")}</button></div></div>
         <div className="live-notice"><ShieldCheck size={15}/> {ui("真實 ACP 工作階段 · 語言偏好","Real ACP session · Language")}: {effective.locale} ({ui("盡力遵循","best effort")}). {ui("此 Host 只能控制 ACP 傳回的審批請求，不能攔截外部 Harness 內部的隱藏工具。","This host only approves ACP permission requests, not hidden tool execution inside an external harness.")}</div>
         <div className="live-tabs"><button className={inspectorTab==='activity'?'active':''} onClick={()=>setInspectorTab('activity')}>{ui("工作階段事件","Session events")}</button><button className={inspectorTab==='approvals'?'active':''} onClick={()=>setInspectorTab('approvals')}>{ui("待批准事項","Approvals")} {approvals.length ? `(${approvals.length})` : ''}</button><button className={inspectorTab==='git'?'active':''} onClick={()=>{setInspectorTab('git');void inspectGit();}}>{ui("Git 證據","Git evidence")}</button></div>
         {inspectorTab==='activity' && <div className="live-history" aria-label="Real ACP events">{timeline.map(e=><div key={e.seq} className={`live-event live-event-${e.kind}`}><small>#{e.seq} · {e.kind} · {new Date(e.createdAt).toLocaleTimeString()}</small><p>{e.label}</p></div>)}{timeline.length===0 && <p className="live-no-events">{ui("已連線，等待你傳送第一段 Prompt。","Connected. Waiting for your first prompt.")}</p>}</div>}
-        {inspectorTab==='approvals' && <div className="live-history">{approvals.length===0 && <p className="live-no-events">{ui("目前沒有待處理的 ACP 權限請求。","No pending ACP permission requests.")}</p>}{approvals.map(p=><section key={p.id} className="live-approval"><h3><LockKeyhole size={18}/> {ui("需要權限批准","Approval requested")}</h3><p>{p.title}</p><small>{ui("到期時間","Expires")}: {new Date(p.expires_at).toLocaleString()}</small><div><button onClick={()=>void approve(p,'deny')}><XCircle size={15}/> {ui("拒絕","Deny")}</button><button className="live-allow" onClick={()=>void approve(p,'allow_once')} disabled={!p.choices.some(o=>o.kind==='allow_once')}><Check size={15}/> {ui("僅允許一次","Allow once")}</button></div></section>)}</div>}
+        {inspectorTab==='approvals' && <div className="live-history">{approvals.length===0 && <p className="live-no-events">{ui("目前沒有待處理的 ACP 權限請求。","No pending ACP permission requests.")}</p>}{approvals.map(p=><section key={p.id} className="live-approval"><h3><LockKeyhole size={18}/> {ui("需要權限批准","Approval requested")}</h3><p>{p.title}</p>{p.detail?.kind && <small className="live-approval-kind">{ui("操作類別","Operation")}: {p.detail.kind}</small>}{p.detail?.locations?.length ? <small className="live-approval-kind">{ui("路徑","Paths")}: {p.detail.locations.join(', ')}</small> : null}{approvalInput(p.detail?.input) && <pre className="live-approval-input" aria-label={ui("Agent 要求的內容","Requested input")}>{approvalInput(p.detail?.input)}</pre>}<small>{ui("到期時間","Expires")}: {new Date(p.expires_at).toLocaleString()}</small><div><button onClick={()=>void approve(p,'deny')}><XCircle size={15}/> {ui("拒絕","Deny")}</button><button className="live-allow" onClick={()=>void approve(p,'allow_once')} disabled={!p.choices.some(o=>o.kind==='allow_once')}><Check size={15}/> {ui("僅允許一次","Allow once")}</button></div></section>)}</div>}
         {inspectorTab==='git' && <div className="live-history"><div className="live-code-title"><FolderGit2 size={15}/> {ui("Git 狀態（唯讀）","Git status (read-only)")}</div><pre>{gitEvidence.status ?? ui("尚未讀取 Git 狀態。","No Git status loaded.")}</pre><div className="live-code-title"><FileDiff size={15}/> {ui("工作目錄差異（唯讀）","Working tree diff (read-only)")}</div><pre>{gitEvidence.diff ?? ui("尚未讀取 Git 差異。","No Git diff loaded.")}</pre></div>}
         <div className="live-composer"><textarea aria-label={ui("傳給真實 ACP Agent 的 Prompt","Prompt to real ACP agent")} placeholder={ui("輸入要交給 ACP Agent 的任務…","Prompt the selected ACP agent…")} rows={3} value={prompt} onChange={e=>setPrompt(e.target.value)} disabled={active.status!=='ready'}/><div className="live-compose-footer"><small>{active.supports_load ? ui('Agent 宣告支援載入 Session','Agent advertises session load') : ui('重啟後僅能讀取歷史；不能宣稱 Agent 已重新接上','Historical session only after restart; no claimed reattach')}</small><button onClick={()=>void submit()} disabled={!prompt.trim() || submitting || active.status!=='ready'}>{ui("傳送 Prompt","Send prompt")}</button></div></div>
       </>}

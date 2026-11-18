@@ -153,7 +153,7 @@ describe('event-driven Session Sentinel (no model calls)', () => {
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
 
-  test('restart interruption: idle-and-viewed stays quiet, running-when-viewed is surfaced', () => {
+  test('restart interruption: idle-and-viewed stays quiet; running-when-viewed or changed-after-view is surfaced', () => {
     mkdirSync(resolve('.local'), { recursive: true });
     const temp = mkdtempSync(resolve('.local', 'attention-test-'));
     try {
@@ -163,15 +163,22 @@ describe('event-driven Session Sentinel (no model calls)', () => {
       first.status('idle', 'ready');
       first.event('idle', 'turn_finished', { stopReason: 'end_turn' });
       first.markViewed('idle', 1);
+      first.create({ id: 'late', adapter: 'mock', cwd });
+      first.status('late', 'ready');
+      const turn = first.event('late', 'turn_finished', { stopReason: 'end_turn' }).seq;
+      first.markViewed('late', turn);
+      first.event('late', 'cancel_requested', { by: 'user' }); // something new after the view
       first.create({ id: 'busy', adapter: 'mock', cwd });
       first.status('busy', 'running');
       const seq = first.event('busy', 'user_message', { text: 'x' }).seq;
       first.markViewed('busy', seq);
       first.close();
-      // Ungraceful stop: the constructor marks both interrupted without an event.
+      // Ungraceful stop: the next host marks live sessions interrupted and
+      // records `host_restarted` with the previous status.
       const next = new SessionStore(path);
       const items = deriveAttention(next);
-      assert.deepEqual(items.map(i => [i.sessionId, i.key]), [['busy', 'agent_interrupted']]);
+      assert.deepEqual(items.map(i => [i.sessionId, i.key]).sort(),
+        [['busy', 'agent_interrupted'], ['late', 'agent_interrupted']]);
       next.close();
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });

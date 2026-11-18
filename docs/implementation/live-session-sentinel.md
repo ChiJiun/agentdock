@@ -25,10 +25,10 @@ The **Live ACP / 即時 ACP** sidebar includes a Session Sentinel bell. It follo
 
 "Viewed" is persisted per session in SQLite (`attention_views`: cursor and the session status at that moment). It never moves backwards and never changes session state.
 
-The runtime marks sessions that were live at an ungraceful stop as `interrupted` without writing an event (Live ACP runtime behavior). To avoid re-alerting everything after a restart while still surfacing lost work:
+At an ungraceful stop, the next host marks every session that was live as `interrupted` and writes a `host_restarted` event with the `previousStatus` (Live ACP runtime). That event advances the cursor, so the Sentinel decides whether the interruption is new to the user:
 
-- viewed while **idle or terminal** (`ready`, `failed`, `interrupted`, `closed`) at the same cursor → the later interruption stays quiet (nothing ran in between);
-- viewed while **running or waiting** → the interruption is listed under New results to review.
+- the session was idle (`previousStatus: ready`), it was viewed while idle or terminal, and nothing else happened after that view → the interruption stays quiet;
+- it was running or waiting (`previousStatus: running`, `awaiting_approval`, `starting`), or anything happened after the view → the interruption is listed under New results to review (work may have been lost).
 
 ### Main sessions and sub-tasks
 

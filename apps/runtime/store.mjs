@@ -2,6 +2,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+// A full 12,000-character prompt must survive in history unshortened.
+const MAX_STRING = 16_000;
+const MAX_PAYLOAD = 48_000;
+const LIVE = "('starting','ready','running','awaiting_approval')";
+
 function protect(value) {
   // Always persist valid JSON. Large tool replies must not break event replay.
   // Redaction is defense-in-depth; do not supply credentials as prompt content.
@@ -11,15 +16,17 @@ function protect(value) {
     .replace(/gh[opusr]_[A-Za-z0-9_]{16,}/g, '[REDACTED-GH-TOKEN]');
   function scrub(input, depth = 0) {
     if (depth > 8) return '[nested content truncated]';
-    if (typeof input === 'string') return redactText(input.slice(0, 8000));
+    // Truncation is always visible in the stored text, never silent.
+    if (typeof input === 'string') return redactText(input.length > MAX_STRING
+      ? `${input.slice(0, MAX_STRING)}…[truncated ${input.length - MAX_STRING} chars]` : input);
     if (input === null || typeof input !== 'object') return input;
     if (Array.isArray(input)) return input.slice(0, 100).map(item => scrub(item, depth + 1));
     return Object.fromEntries(Object.entries(input).slice(0, 100).map(([key, item]) =>
       [key, sensitiveKey.test(key) ? '[REDACTED]' : scrub(item, depth + 1)]));
   }
   const output = JSON.stringify(scrub(value ?? {}));
-  return output.length <= 24_000
-    ? output : JSON.stringify({ truncated: true, excerpt: output.slice(0, 12_000) });
+  return output.length <= MAX_PAYLOAD
+    ? output : JSON.stringify({ truncated: true, excerpt: output.slice(0, MAX_PAYLOAD / 2) });
 }
 
 /** A durable, append-only history with explicit restart interruption semantics. */
@@ -45,7 +52,7 @@ export class SessionStore {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
         title TEXT NOT NULL, choices TEXT NOT NULL,
         status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
-        selected_option TEXT
+        selected_option TEXT, detail TEXT
       );
       CREATE TABLE IF NOT EXISTS attention_views (
         session_id TEXT PRIMARY KEY, cursor INTEGER NOT NULL,
@@ -53,9 +60,49 @@ export class SessionStore {
         FOREIGN KEY(session_id) REFERENCES sessions(id)
       );
     `);
-    // There are no automatically resumed agent connections at process restart.
-    this.db.prepare(`UPDATE sessions SET status='interrupted',updated_at=? WHERE status IN ('starting','ready','running','awaiting_approval')`)
-      .run(new Date().toISOString());
+    // Databases written by an earlier revision of this branch lack the column.
+    if (!this.db.prepare('PRAGMA table_info(approvals)').all().some(c => c.name === 'detail'))
+      this.db.exec('ALTER TABLE approvals ADD COLUMN detail TEXT');
+    this.depth = 0;
+    this.recovered = this.recover();
+  }
+  /**
+   * Run several writes as one transaction so a state change and its event
+   * are stored together or not at all. Nested calls join the outer transaction.
+   */
+  atomic(fn) {
+    if (this.depth > 0) return fn();
+    this.db.exec('BEGIN IMMEDIATE');
+    this.depth = 1;
+    try {
+      const value = fn();
+      this.db.exec('COMMIT');
+      return value;
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); } catch { /* transaction already ended */ }
+      throw error;
+    } finally { this.depth = 0; }
+  }
+  /**
+   * Nothing is reattached at process restart: every session that was live when
+   * the previous host stopped becomes `interrupted`, with an event saying so,
+   * and its unanswered approvals are cancelled so they can never be replayed.
+   * The caller must own the database (see the host lock in server.mjs).
+   */
+  recover() {
+    return this.atomic(() => {
+      const now = new Date().toISOString();
+      const lost = this.db.prepare(`SELECT id,status FROM sessions WHERE status IN ${LIVE}`).all();
+      for (const session of lost) {
+        this.db.prepare(`UPDATE sessions SET status='interrupted',updated_at=? WHERE id=?`).run(now, session.id);
+        this.event(session.id, 'host_restarted', { previousStatus: session.status });
+      }
+      for (const approval of this.db.prepare(`SELECT id,session_id FROM approvals WHERE status='pending'`).all()) {
+        this.db.prepare(`UPDATE approvals SET status='cancelled' WHERE id=?`).run(approval.id);
+        this.event(approval.session_id, 'approval_resolved', { approvalId: approval.id, decision: 'cancelled', reason: 'host_restarted' });
+      }
+      return lost.length;
+    });
   }
   create(session) {
     const now = new Date().toISOString();
@@ -89,15 +136,19 @@ export class SessionStore {
   latestEvent(sessionId) {
     const row = this.db.prepare('SELECT seq,kind,data,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);
     if (!row) return null;
-    // Only the stop reason is read back, never prompt/tool/agent text.
+    // Only the stop reason and the restart's previous status are read back,
+    // never prompt/tool/agent text.
     let stopReason = null;
-    if (row.kind === 'turn_finished') {
-      try {
-        const value = JSON.parse(row.data)?.stopReason;
-        stopReason = typeof value === 'string' ? value.slice(0, 40) : null;
-      } catch { stopReason = null; }
-    }
-    return { seq: row.seq, kind: row.kind, stopReason, createdAt: row.created_at };
+    let previousStatus = null;
+    try {
+      const data = JSON.parse(row.data);
+      if (row.kind === 'turn_finished' && typeof data?.stopReason === 'string') stopReason = data.stopReason.slice(0, 40);
+      if (row.kind === 'host_restarted' && typeof data?.previousStatus === 'string') previousStatus = data.previousStatus.slice(0, 40);
+    } catch { /* unreadable payload: no extra fields */ }
+    // The session's own event before this one, so "nothing happened in
+    // between" can be decided without comparing global sequence numbers.
+    const prior = this.db.prepare('SELECT seq FROM events WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT 1').get(sessionId, row.seq);
+    return { seq: row.seq, kind: row.kind, stopReason, previousStatus, priorSeq: prior?.seq ?? 0, createdAt: row.created_at };
   }
   /** Newest finished turn and newest prompt: a turn only counts if it ended after the prompt. */
   latestTurn(sessionId) {
@@ -127,23 +178,29 @@ export class SessionStore {
       .run(sessionId, cursor, session.status, new Date().toISOString());
   }
   createApproval(approval) {
-    this.db.prepare('INSERT INTO approvals VALUES(?,?,?,?,?,?,?,NULL)').run(
+    this.db.prepare('INSERT INTO approvals(id,session_id,title,choices,status,created_at,expires_at,detail) VALUES(?,?,?,?,?,?,?,?)').run(
       approval.id, approval.sessionId, approval.title, protect(approval.choices),
-      'pending', approval.createdAt, approval.expiresAt,
+      'pending', approval.createdAt, approval.expiresAt, protect(approval.detail ?? {}),
     );
   }
   getApproval(id) {
     const r = this.db.prepare('SELECT * FROM approvals WHERE id=?').get(id);
-    return r ? { ...r, choices: JSON.parse(r.choices) } : null;
+    return r ? { ...r, choices: JSON.parse(r.choices), detail: JSON.parse(r.detail ?? '{}') } : null;
   }
   pendingApprovals(sessionId) {
-    return this.db.prepare("SELECT id,session_id,title,choices,status,created_at,expires_at FROM approvals WHERE session_id=? AND status='pending' AND expires_at>? ORDER BY created_at LIMIT 40")
+    return this.db.prepare("SELECT id,session_id,title,choices,detail,status,created_at,expires_at FROM approvals WHERE session_id=? AND status='pending' AND expires_at>? ORDER BY created_at LIMIT 40")
       .all(sessionId, new Date().toISOString())
-      .map(r => ({ ...r, choices: JSON.parse(r.choices) }));
+      .map(r => ({ ...r, choices: JSON.parse(r.choices), detail: JSON.parse(r.detail ?? '{}') }));
   }
+  /**
+   * Move a pending approval to its final state exactly once.
+   * A human decision is only accepted before the deadline; `expired` and
+   * `cancelled` close the record whenever it is still pending.
+   */
   resolveApproval(id, selectedOption, status) {
-    const result = this.db.prepare(`UPDATE approvals SET status=?, selected_option=? WHERE id=? AND status='pending' AND expires_at>?`)
-      .run(status, selectedOption, id, new Date().toISOString());
+    const decided = status === 'approved' || status === 'denied';
+    const result = this.db.prepare(`UPDATE approvals SET status=?, selected_option=? WHERE id=? AND status='pending' AND (?=0 OR expires_at>?)`)
+      .run(status, selectedOption, id, Number(decided), new Date().toISOString());
     return result.changes === 1;
   }
   close() { this.db.close(); }
