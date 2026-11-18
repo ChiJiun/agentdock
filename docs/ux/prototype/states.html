@@ -168,6 +168,31 @@
       </div></div>
     </div>
   </section>
+
+  <section class="state" aria-labelledby="st-enf">
+    <h2 id="st-enf"><span class="enf" data-icon="enfOff"></span> Policy not enforced (agent bypass / full-access mode)</h2>
+    <p>A session mode, not a status: the agent runs its own tools without asking, so AgentDock’s approval rules have nothing to act on. It is labelled wherever the session is shown, never counted in the inbox badge, and no session ever gets a “protected” badge.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Session header · not enforced</div><div class="surface-body">
+        <div class="row-inline"><span class="chip"><span class="st" data-tone="running" data-icon="stRunning"></span>Running</span><span class="chip">Codex</span><span class="chip" data-enf="off"><span data-icon="enfOff"></span>Policy not enforced</span></div>
+        <div class="enforce-note" role="note" aria-labelledby="st-enf-title" style="border:1px dashed var(--ad-status-danger);border-radius:var(--ad-radius-md)"><span class="enf" data-icon="enfOff"></span><p><strong id="st-enf-title">AgentDock policy is not enforced in this session.</strong> Codex is running in its own <span class="mono">full access</span> mode (reported by the adapter): it runs commands and edits files without asking AgentDock, so approval rules do not apply to what the agent does. AgentDock still asks before the operations it performs itself (push, pull request, merge, worktree removal).</p></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Session header · adapter does not report its mode</div><div class="surface-body">
+        <div class="row-inline"><span class="chip"><span class="st" data-tone="running" data-icon="stRunning"></span>Running</span><span class="chip">Other agent</span><span class="chip" data-enf="unknown">? Policy coverage unknown</span></div>
+        <p class="muted">This adapter does not report its permission mode. AgentDock applies its rules to the requests it receives and cannot tell whether the agent asks for everything.</p>
+      </div></div>
+      <div class="surface"><div class="surface-label">Sidebar row + inbox row</div><div class="surface-body">
+        <div class="side-mock"><div class="tree-row" data-level="2"><span class="tree-caret"></span><span class="st" data-tone="running" data-icon="stRunning"></span><span class="tree-title">Rename fixture files to kebab-case</span><span class="tree-meta"><span class="enf" title="Policy not enforced — the agent runs in its own full access mode" data-icon="enfOff"></span>6m</span></div></div>
+        <p class="muted" style="font-size:var(--ad-text-xs)">Accessible name: “Rename fixture files to kebab-case. Running, Local task, policy not enforced, updated 6 min ago”. Inbox, Home, project and switcher rows add the words “policy not enforced”.</p>
+      </div></div>
+      <div class="surface"><div class="surface-label">Turning it on through AgentDock · confirmation</div><div class="surface-body">
+        <div class="card" data-tone="neutral"><div class="card-head"><span class="enf" data-icon="enfOff"></span><span class="card-title">Let Codex run without asking AgentDock?</span></div>
+        <div class="card-body"><p>In full access mode the agent runs commands and edits files without sending permission requests. AgentDock’s approval rules will not apply to what the agent does in this session. AgentDock will still ask before it pushes, opens a pull request, merges or removes a worktree.</p>
+        <div class="card-actions"><button class="btn btn-primary" type="button">Cancel</button><button class="btn" type="button">Turn on full access</button></div></div></div>
+        <p class="muted" style="font-size:var(--ad-text-xs)">Cancel is the default button. AgentDock never turns this on by itself.</p>
+      </div></div>
+    </div>
+  </section>
 </main>
 <script src="icons.js"></script>
 <script>

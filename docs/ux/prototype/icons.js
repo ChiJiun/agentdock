@@ -59,6 +59,8 @@
     stAuth: '<circle cx="5.5" cy="8" r="2.75"/><path d="M8.25 8h5.25M11.5 8v2M13.5 8v1.5"/>',
     stQuota: '<path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M2.5 13.5h11"/><path d="m6.5 7.5 3 3M9.5 7.5l-3 3"/>',
     stLoading: '<path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5"/>',
+    // policy enforcement (shape-coded: shield with a slash; see states-and-indicators.md section 9)
+    enfOff: '<path d="M8 1.75 13 3.6v4.1c0 3-2 5.1-5 6.55-3-1.45-5-3.55-5-6.55V3.6z"/><path d="m2.25 2.25 11.5 11.5"/>',
     stArchived: '<rect x="2" y="3" width="12" height="3" rx=".5"/><path d="M3 6v7h10V6M6.5 9h3"/>',
   };
 
