@@ -37,13 +37,30 @@ describe('event-driven Session Sentinel (no model calls)', () => {
     assert.deepEqual(attentionCounts(items), { reply: 0, review: 1, background: 0 });
   }));
 
-  test('a turn the user cancelled produces no item; an idle session with no turn produces none', () => withStore(store => {
+  test('a cancelled turn is a result to review (UX section 2); an idle session with no turn produces none', () => withStore(store => {
     store.create({ id: 'c', adapter: 'mock', cwd });
     store.status('c', 'ready');
     store.event('c', 'connected');
     assert.equal(deriveAttention(store).length, 0);
+    store.event('c', 'user_message', { text: 'x' });
     store.event('c', 'turn_finished', { stopReason: 'cancelled' });
+    const items = deriveAttention(store);
+    assert.deepEqual(items.map(i => [i.type, i.key]), [['review', 'turn_cancelled']]);
+    store.markViewed('c', items[0].evidenceCursor);
     assert.equal(deriveAttention(store).length, 0);
+  }));
+
+  test('a finished turn stays listed when a later bookkeeping event (cancel_requested) is written', () => withStore(store => {
+    store.create({ id: 'late', adapter: 'mock', cwd });
+    store.status('late', 'ready');
+    store.event('late', 'user_message', { text: 'x' });
+    store.event('late', 'turn_finished', { stopReason: 'end_turn' });
+    store.event('late', 'cancel_requested', { by: 'user' });
+    assert.deepEqual(deriveAttention(store).map(i => i.key), ['turn_finished']);
+    // A new prompt without a finished turn is no result.
+    store.status('late', 'running');
+    store.event('late', 'user_message', { text: 'again' });
+    assert.deepEqual(deriveAttention(store).map(i => i.type), ['background']);
   }));
 
   test('pending permission needs a reply and cannot be hidden by "mark reviewed"', async () => {

@@ -99,6 +99,18 @@ export class SessionStore {
     }
     return { seq: row.seq, kind: row.kind, stopReason, createdAt: row.created_at };
   }
+  /** Newest finished turn and newest prompt: a turn only counts if it ended after the prompt. */
+  latestTurn(sessionId) {
+    const turn = this.db.prepare("SELECT seq,data FROM events WHERE session_id=? AND kind='turn_finished' ORDER BY seq DESC LIMIT 1").get(sessionId);
+    if (!turn) return null;
+    const prompt = this.db.prepare("SELECT seq FROM events WHERE session_id=? AND kind='user_message' ORDER BY seq DESC LIMIT 1").get(sessionId);
+    let stopReason = null;
+    try {
+      const value = JSON.parse(turn.data)?.stopReason;
+      stopReason = typeof value === 'string' ? value.slice(0, 40) : null;
+    } catch { stopReason = null; }
+    return { seq: turn.seq, stopReason, afterPrompt: !prompt || turn.seq > prompt.seq };
+  }
   attentionView(sessionId) {
     return this.db.prepare('SELECT cursor,status,viewed_at FROM attention_views WHERE session_id=?').get(sessionId) ?? null;
   }

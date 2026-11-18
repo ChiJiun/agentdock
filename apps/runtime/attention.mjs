@@ -22,11 +22,15 @@ const LIVE_APPROVAL_STATES = new Set(['awaiting_approval', 'running']);
 // taken while it was running does not: the interruption lost work.
 const SETTLED_VIEW_STATES = new Set(['ready', 'failed', 'interrupted', 'closed']);
 
-function reviewKey(session, event) {
+function reviewKey(session, turn) {
   if (session.status === 'failed') return 'agent_failed';
   if (session.status === 'interrupted') return 'agent_interrupted';
-  if (session.status === 'ready' && event?.kind === 'turn_finished'
-      && event.stopReason !== 'cancelled') return 'turn_finished';
+  // UX section 2: cancelled is a result to review until viewed, like completed.
+  // The newest turn is used (not the newest event), so a trailing bookkeeping
+  // event such as cancel_requested cannot make a finished turn disappear.
+  if (session.status === 'ready' && turn?.afterPrompt) {
+    return turn.stopReason === 'cancelled' ? 'turn_cancelled' : 'turn_finished';
+  }
   return null;
 }
 
@@ -59,7 +63,7 @@ export function deriveAttention(store, { includeViewed = false } = {}) {
       });
     }
     if (approvals.length) continue;
-    const key = reviewKey(session, event);
+    const key = reviewKey(session, store.latestTurn(session.id));
     if (key) {
       if (includeViewed || !isViewed(store.attentionView(session.id), cursor)) {
         items.push({ ...common, id: `attention:${session.id}:review:${cursor}`, type: 'review', key });

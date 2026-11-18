@@ -18,23 +18,26 @@ const summaries = {
     agent_interrupted: ['Agent 程序中斷；歷史紀錄仍可查看，但沒有自動重新接上模型。', '查看工作階段，決定要不要建立新 Session。'],
     agent_running: ['Agent 正在處理 Prompt，目前不需要額外決策。', '需要時開啟工作階段查看進度。'],
     turn_finished: ['Agent 已完成上一個回合；尚未代表程式碼通過驗證。', '查看實際回覆、Git 差異與測試證據。'],
+    turn_cancelled: ['上一個回合已被取消，Agent 沒有完成它。', '查看已產生的部分輸出，決定要不要重新送出。'],
   },
   'en-US': {
     approval_pending: ['The Agent is paused, waiting for you to decide on an ACP tool permission.', 'Open the session to see the full request, then approve or deny.'],
     agent_failed: ['The Agent failed; the session still contains error evidence.', 'Inspect the error and Git diff before deciding whether to retry.'],
-    agent_interrupted: ['The Agent process was interrupted. History is saved, but model context was not reattached.', 'Inspect the session before starting a new one.'],
+    agent_interrupted: ['The Agent process was interrupted; history is saved but not reattached.', 'Inspect the session before starting a new one.'],
     agent_running: ['The Agent is processing a prompt; no action is required now.', 'Open the session to check progress when needed.'],
-    turn_finished: ['The Agent finished its last turn. This does not certify the code.', 'Review output, Git changes and test evidence.'],
+    turn_finished: ['The Agent finished its last turn; the code is not certified.', 'Review output, Git changes and test evidence.'],
+    turn_cancelled: ['The last turn was cancelled; the Agent did not finish it.', 'Check the partial output and decide whether to resend.'],
   },
 };
 const statusText = {
-  'zh-TW': { approval_pending:'需要批准', agent_failed:'失敗', agent_interrupted:'已中斷', agent_running:'執行中', turn_finished:'完成 · 新' },
-  'en-US': { approval_pending:'Needs approval', agent_failed:'Failed', agent_interrupted:'Interrupted', agent_running:'Running', turn_finished:'Done · new' },
+  'zh-TW': { approval_pending:'需要批准', agent_failed:'失敗', agent_interrupted:'已中斷', agent_running:'執行中', turn_finished:'完成 · 新', turn_cancelled:'已取消' },
+  'en-US': { approval_pending:'Needs approval', agent_failed:'Failed', agent_interrupted:'Interrupted', agent_running:'Running', turn_finished:'Done · new', turn_cancelled:'Cancelled' },
 };
 
 function Glyph({ item }: { item: LiveAttentionItem }) {
   if (item.type === 'reply') return <ShieldAlert size={16}/>;
   if (item.key === 'turn_finished') return <CheckCircle2 size={16}/>;
+  if (item.key === 'turn_cancelled') return <Clock3 size={16}/>;
   if (item.type === 'review') return <AlertTriangle size={16}/>;
   return <Clock3 size={16}/>;
 }

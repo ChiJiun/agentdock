@@ -43,7 +43,7 @@ export interface LiveAttentionItem {
   updatedAt: string;
   /** The three inbox sections of docs/ux/states-and-indicators.md section 4. */
   type: 'reply' | 'review' | 'background';
-  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished';
+  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished' | 'turn_cancelled';
   approvalId?: string;
 }
 export interface RuntimeApproval {
