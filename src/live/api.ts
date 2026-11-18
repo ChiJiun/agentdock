@@ -47,7 +47,8 @@ export interface LiveAttentionItem {
   status: RuntimeSessionStatus;
   evidenceCursor: number;
   updatedAt: string;
-  type: 'decision' | 'review' | 'background' | 'completed';
+  /** The three inbox sections of docs/ux/states-and-indicators.md section 4. */
+  type: 'reply' | 'review' | 'background';
   key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished';
   approvalId?: string;
 }
@@ -92,7 +93,10 @@ export const getWorktrees = () => runtimeApi<RuntimeWorktree[]>('worktrees');
 export const createWorktree = (repoPath: string) => runtimeApi<RuntimeWorktree>('worktrees', { method: 'POST', data: { repoPath } });
 export const getSessions = () => runtimeApi<RuntimeSession[]>('sessions');
 export const getAttention = () => runtimeApi<LiveAttentionItem[]>('attention');
-export const dismissAttention = (id: string) => runtimeApi<{ ok: boolean }>(`attention/${encodeURIComponent(id)}/dismiss`, { method: 'POST', data: {} });
+/** Marks one result row reviewed. The runtime refuses it for approvals (409). */
+export const markAttentionReviewed = (id: string) => runtimeApi<{ ok: boolean }>(`attention/${encodeURIComponent(id)}/reviewed`, { method: 'POST', data: {} });
+/** Records that the session was on screen, up to the newest rendered event. */
+export const markSessionViewed = (id: string, cursor: number) => runtimeApi<{ ok: boolean }>(`sessions/${encodeURIComponent(id)}/viewed`, { method: 'POST', data: { cursor } });
 export const getEvents = (id: string, after = 0) => runtimeApi<RuntimeEvent[]>(`sessions/${encodeURIComponent(id)}/events?after=${after}`);
 export const getApprovals = (id: string) => runtimeApi<RuntimeApproval[]>(`sessions/${encodeURIComponent(id)}/approvals`);
 export const createRuntimeSession = (adapterId: string, cwd: string) =>
