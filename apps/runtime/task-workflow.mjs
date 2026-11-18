@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { ensureInside } from './adapters.mjs';
 
 /**
@@ -142,11 +142,24 @@ export class TaskWorkflow {
         BEGIN SELECT RAISE(ABORT, 'task_transitions is append-only'); END;
       CREATE TRIGGER IF NOT EXISTS task_transitions_no_delete BEFORE DELETE ON task_transitions
         BEGIN SELECT RAISE(ABORT, 'task_transitions is append-only'); END;
+      -- INSERT OR REPLACE deletes the old row without firing DELETE triggers
+      -- (recursive_triggers is off by default), so refuse a reused key up front.
+      CREATE TRIGGER IF NOT EXISTS task_evidence_no_replace BEFORE INSERT ON task_evidence
+        WHEN EXISTS (SELECT 1 FROM task_evidence WHERE id = NEW.id)
+        BEGIN SELECT RAISE(ABORT, 'task_evidence is append-only'); END;
+      CREATE TRIGGER IF NOT EXISTS task_transitions_no_replace BEFORE INSERT ON task_transitions
+        WHEN NEW.seq IS NOT NULL AND EXISTS (SELECT 1 FROM task_transitions WHERE seq = NEW.seq)
+        BEGIN SELECT RAISE(ABORT, 'task_transitions is append-only'); END;
     `);
   }
   #addColumn(table, column, type) {
     const present = this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
-    if (!present) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    if (present) return;
+    try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); }
+    catch (error) {
+      // Another runtime process on the same file may have added it in between.
+      if (!/duplicate column/i.test(error.message)) throw error;
+    }
   }
   /**
    * Every read that decides a write happens inside the same write transaction,
@@ -154,7 +167,12 @@ export class TaskWorkflow {
    * between a gate check and the state change.
    */
   #transaction(work) {
-    this.db.exec('BEGIN IMMEDIATE');
+    try { this.db.exec('BEGIN IMMEDIATE'); }
+    catch (error) {
+      // Another connection holds the write lock past busy_timeout: retryable, not a server bug.
+      if (/database is locked|SQLITE_BUSY/i.test(error.message)) throw new TaskError(503, 'database busy, retry');
+      throw error;
+    }
     try {
       const result = work();
       this.db.exec('COMMIT');
@@ -176,6 +194,9 @@ export class TaskWorkflow {
     catch (error) {
       throw invalid(/^workspace /.test(error.message) ? error.message : 'workspace path does not exist');
     }
+    // Canonical on-disk spelling (drive letter and folder case on Windows), so the
+    // same folder always compares equal when a request is replayed.
+    cwd = realpathSync.native(cwd);
     if (!statSync(cwd).isDirectory()) throw invalid('workspace path is not a directory');
     return cwd;
   }
@@ -258,6 +279,9 @@ export class TaskWorkflow {
         return existing;
       }
       if (TERMINAL.has(task.state)) throw conflict('task is terminal');
+      if (kind === 'pull_request' && task.issue_url
+        && reference.split('/').slice(3, 5).join('/').toLowerCase() !== task.issue_url.split('/').slice(3, 5).join('/').toLowerCase())
+        throw invalid('invalid evidence reference: pull request is not in the repository of the task issue');
       const { seq } = this.db.prepare('SELECT MAX(seq) AS seq FROM task_transitions WHERE task_id=?').get(id);
       this.db.prepare('INSERT INTO task_evidence(id,task_id,kind,result,summary,reference,created_at,commit_sha,transition_seq) VALUES(?,?,?,?,?,?,?,?,?)')
         .run(evidenceId, id, kind, result, note, reference, new Date().toISOString(), commitSha, seq);

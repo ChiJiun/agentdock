@@ -67,7 +67,9 @@ For every link the **latest** record of that kind decides: it must be `passed`. 
 ## Durability, restart and retry
 
 - Each mutation is one `BEGIN IMMEDIATE` transaction: the `coding_tasks` projection and its `task_transitions` row commit together or not at all. Gate reads happen inside that transaction.
-- `task_transitions` and `task_evidence` reject `UPDATE` and `DELETE` through SQLite triggers. Each transition row stores the task `revision` it produced, so the projection (`state`, `revision`) can be rebuilt from the log.
+- `task_transitions` and `task_evidence` reject `UPDATE`, `DELETE` and `INSERT OR REPLACE` of an existing key through SQLite triggers. This protects against accidental writes through the same connection; anyone with direct write access to the database file can still edit `coding_tasks` (which has no trigger) or drop the triggers. Each transition row written by this version stores the task `revision` it produced, so the projection (`state`, `revision`) can be rebuilt from the log; rows written by the first preview schema have `revision` NULL.
+- `evidence.pull_request` must name a pull request in the same repository as the task's `issue_url` (compared case-insensitively) when the task has one.
+- A busy database file returns `503` after `busy_timeout` (3 s); the wait is synchronous and blocks the runtime's event loop meanwhile.
 - A task has no in-flight process of its own. A runtime restart changes no task state; ACP sessions are marked `interrupted` by the session store as before, and moving a task to `interrupted` is an explicit operator transition.
 - `POST /advance` is compare-and-set on `expectedRevision`. A retried or double-submitted request gets `409 stale task revision`; the client re-reads the task instead of applying the transition twice.
 - `POST /api/tasks` and `POST /evidence` accept an optional caller-chosen UUID `id`. Repeating the request with the same `id` and the same content returns the existing row; the same `id` with different content is `409`. Without an `id`, a retry creates a second row.
@@ -93,7 +95,9 @@ Rows use the stored column names (`issue_number`, `task_id`, `commit_sha`, `crea
 | 403 | Cross-origin request, or a human gate without `humanConfirmed: true` |
 | 404 | Unknown task |
 | 409 | Stale revision, illegal transition, terminal task, unmet evidence gate, or an `id` reused with different content |
+| 413 | Body larger than 20,000 characters |
 | 415 | Body is not `application/json` |
+| 503 | Another connection holds the SQLite write lock past `busy_timeout`; nothing was applied, retry |
 
 Example, after `npm run dev:full`:
 
@@ -122,7 +126,15 @@ ADR-0003 (`docs/contracts/` on the `design/contracts` branch, PR #22) is still a
 | Event log | Separate `task_transitions` / `task_evidence` tables with a `revision` compare-and-set | Unified event envelope (`task.created`, `task.state_changed`) with triggers and durability classes (`persist_then_report`, `persist_then_act`) |
 | Transition metadata | `reason` free text | Transition IDs, triggers and named conditions from `transitions.json` |
 
-Both agree that `failed` is not terminal, that only `cancelled` and the completed state are terminal, that the projection is updated in the same transaction as the log append, that the agent never changes task state, and that a resumed task never skips verification or review.
+More differences:
+
+- ADR-0003 has `interrupted → failed` (T45); this preview does not. Here `planning`, the `awaiting_*` states, `ready_for_pr` and `awaiting_merge` cannot move to `interrupted` or `failed`, whereas ADR-0003's `awaiting_approval` can.
+- ADR-0003 bounds retries (`repair_limit_reached`, T25/T31/T42); this preview has no limit on how often an operator loops back to `implementing`.
+- This preview allows `ready_for_pr → implementing` and `awaiting_merge → implementing`; ADR-0003's `pr` cannot return directly to `running`.
+- ADR-0003 operations carry an `idempotency_key`; `advance` here relies on the `expectedRevision` compare-and-set instead, so a client that gets `409 stale task revision` cannot tell "my request was already applied" from "someone else got there first" without reading `history`.
+- **Approval timing:** `pr_open` requires the PR to already exist (its URL and head commit are recorded `pull_request` evidence). The human confirmation is therefore a confirmation *after* the PR was opened, not a permission *before* push or PR creation as Issue #10 asks. A real pre-push / pre-PR gate belongs to the later slice that performs those writes, and the state order will need to change then.
+
+Both agree that `failed` is not terminal, that only `cancelled` and the completed state are terminal, and that the projection is updated in the same transaction as the log append. ADR-0003 says the agent never changes task state; this preview has no agent-facing transition path, but it does **not enforce** that (any local process can call the API, see the trust boundary above). Both agree that a resumed task never skips verification or review.
 
 ## Test
 

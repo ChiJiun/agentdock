@@ -307,6 +307,14 @@ test('transition and evidence ledgers are append-only at the database level; fai
     assert.throws(() => db.exec('DELETE FROM task_evidence'), /append-only/);
     assert.throws(() => db.exec("UPDATE task_transitions SET state='awaiting_merge'"), /append-only/);
     assert.throws(() => db.exec('DELETE FROM task_transitions'), /append-only/);
+    // INSERT OR REPLACE would delete a row without firing the DELETE trigger.
+    const failed = f.tasks.evidence(task.id).at(-1);
+    assert.throws(() => db.prepare('INSERT OR REPLACE INTO task_evidence(id,task_id,kind,result,summary,created_at,commit_sha,transition_seq) VALUES(?,?,?,?,?,?,?,?)')
+      .run(failed.id, task.id, 'local_tests', 'passed', 'forged', failed.created_at, SHA_A, failed.transition_seq), /append-only/);
+    const first = f.tasks.history(task.id)[0];
+    assert.throws(() => db.prepare('INSERT OR REPLACE INTO task_transitions(seq,task_id,previous_state,state,actor,reason,created_at,revision) VALUES(?,?,?,?,?,?,?,?)')
+      .run(first.seq, task.id, null, 'complete', 'human', 'forged', first.created_at, 0), /append-only/);
+    assert.equal(f.tasks.evidence(task.id).at(-1).result, 'failed');
     rejects(() => move(f, task, 'reviewing'), 409, /passing local_tests evidence required/);
 
     // If the history row cannot be written, the state change is rolled back with it.
@@ -316,9 +324,76 @@ test('transition and evidence ledgers are append-only at the database level; fai
     db.exec('DROP TRIGGER break_history');
     assert.deepEqual(f.tasks.get(task.id), task);
     assert.equal(f.tasks.list().length, 1);
-    assert.equal(db.isTransaction, false);
+    // No transaction may be left open: BEGIN would throw if one were.
+    db.exec('BEGIN IMMEDIATE'); db.exec('ROLLBACK');
     assert.equal(move(f, task, 'implementing').revision, task.revision + 1);
   } finally { f.close(); }
+});
+
+test('interrupted and failed tasks can only resume into an earlier phase and must redo the evidence chain', () => {
+  const f = fixture();
+  try {
+    for (const stop of ['interrupted', 'failed']) {
+      let task = reach(f, 'ci');
+      evidence(f, task, 'ci_checks');
+      task = move(f, task, stop);
+      rejects(() => move(f, task, 'ci'), 409, /illegal task transition/);
+      rejects(() => move(f, task, 'awaiting_merge'), 409, /illegal task transition/);
+      task = move(f, task, stop === 'interrupted' ? 'implementing' : 'planning');
+      if (task.state === 'planning') {
+        task = move(f, task, 'awaiting_plan_approval');
+        rejects(() => move(f, task, 'preparing', { humanConfirmed: true }), 409, /passing plan evidence required/);
+        evidence(f, task, 'plan');
+        task = move(f, task, 'preparing', { humanConfirmed: true });
+        task = move(f, task, 'implementing');
+      }
+      task = move(f, task, 'verifying');
+      rejects(() => move(f, task, 'reviewing'), 409, /passing local_tests evidence required/);
+    }
+  } finally { f.close(); }
+});
+
+test('sending a task back from awaiting_pr_approval keeps the chain, but a new review round replaces it', () => {
+  const f = fixture();
+  try {
+    let task = reach(f, 'awaiting_pr_approval');
+    task = move(f, task, 'ready_for_pr');
+    task = move(f, task, 'awaiting_pr_approval');
+    evidence(f, task, 'pull_request');
+    task = move(f, task, 'pr_open', { humanConfirmed: true });
+    assert.equal(task.state, 'pr_open');
+    let again = reach(f, 'ready_for_pr');
+    again = move(f, again, 'implementing');
+    again = move(f, again, 'verifying');
+    rejects(() => move(f, again, 'reviewing'), 409, /passing local_tests evidence required/);
+  } finally { f.close(); }
+});
+
+test('a pull request evidence URL must belong to the repository of the task issue', () => {
+  const f = fixture();
+  try {
+    let task = f.tasks.create({ workspace: f.folder, objective: 'Issue task', issueNumber: 5, issueUrl: 'https://github.com/ChiJiun/agentdock/issues/5' });
+    rejects(() => f.tasks.addEvidence(task.id, { kind: 'pull_request', result: 'passed', summary: 'x', commitSha: SHA_A, reference: 'https://github.com/someone-else/other/pull/1' }), 400, /not in the repository of the task issue/);
+    f.tasks.addEvidence(task.id, { kind: 'pull_request', result: 'passed', summary: 'x', commitSha: SHA_A, reference: 'https://github.com/chijiun/AgentDock/pull/9' });
+    // A task without an issue has nothing to compare against.
+    task = f.tasks.create({ workspace: f.folder, objective: 'No issue' });
+    f.tasks.addEvidence(task.id, { kind: 'pull_request', result: 'passed', summary: 'x', commitSha: SHA_A, reference: 'https://github.com/someone-else/other/pull/1' });
+  } finally { f.close(); }
+});
+
+test('a write lock held by another connection gives a retryable 503 and leaves no half-applied change', () => {
+  const f = fixture();
+  const other = new DatabaseSync(f.dbPath);
+  try {
+    const task = reach(f, 'planning');
+    f.store.db.exec('PRAGMA busy_timeout = 50');
+    other.exec('BEGIN IMMEDIATE');
+    rejects(() => move(f, task, 'awaiting_plan_approval'), 503, /database busy, retry/);
+    rejects(() => f.tasks.create({ workspace: f.folder, objective: 'busy' }), 503, /database busy, retry/);
+    other.exec('ROLLBACK');
+    assert.deepEqual(f.tasks.get(task.id), task);
+    assert.equal(move(f, task, 'awaiting_plan_approval').state, 'awaiting_plan_approval');
+  } finally { other.close(); f.close(); }
 });
 
 test('a database written by the first preview schema is upgraded and its old evidence is not trusted', () => {
@@ -354,7 +429,8 @@ test('a database written by the first preview schema is upgraded and its old evi
 
 test('local HTTP API reports gate, conflict and validation failures with precise statuses', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'agentdock-task-api-'));
-  const runtime = createRuntimeServer({ roots: [folder], dbPath: join(folder, 'db.sqlite'), worktreeRoot: join(folder, 'worktrees') });
+  const wtBase = mkdtempSync(join(tmpdir(), 'agentdock-task-wt-'));
+  const runtime = createRuntimeServer({ roots: [folder], dbPath: join(folder, 'db.sqlite'), worktreeRoot: join(wtBase, 'worktrees') });
   const address = await runtime.listen(0);
   const base = `http://127.0.0.1:${address.port}`;
   const post = async (url, payload) => {
@@ -379,7 +455,7 @@ test('local HTTP API reports gate, conflict and validation failures with precise
     const illegal = await post(`${path}/advance`, { to: 'pr_open', expectedRevision: 1, reason: 'skip', humanConfirmed: true });
     assert.deepEqual(illegal, { status: 409, json: { error: 'illegal task transition' } });
     assert.equal((await post(`${path}/advance`, { to: 'awaiting_plan_approval', expectedRevision: 1, reason: 'plan drafted' })).status, 200);
-    // The body cannot choose the actor, and an unconfirmed human gate is refused.
+    // An unconfirmed human gate is refused even if the body names an actor.
     const forged = await post(`${path}/advance`, { to: 'preparing', expectedRevision: 2, reason: 'go', actor: 'human' });
     assert.deepEqual(forged, { status: 403, json: { error: 'human confirmation required' } });
     const gated = await post(`${path}/advance`, { to: 'preparing', expectedRevision: 2, reason: 'go', humanConfirmed: true });
@@ -388,7 +464,22 @@ test('local HTTP API reports gate, conflict and validation failures with precise
     const added = await post(`${path}/evidence`, { kind: 'plan', result: 'passed', summary: 'plan ready' });
     assert.equal(added.status, 201);
     assert.equal(added.json.task_id, task.id);
-    assert.equal((await post(`${path}/advance`, { to: 'preparing', expectedRevision: 2, reason: 'go', humanConfirmed: true })).json.state, 'preparing');
+    // A body-supplied actor is ignored: the endpoint records 'human' (not 'system').
+    assert.equal((await post(`${path}/advance`, { to: 'preparing', expectedRevision: 2, reason: 'go', humanConfirmed: true, actor: 'system' })).json.state, 'preparing');
+    assert.equal((await get(`${path}/history`)).json.at(-1).actor, 'human');
+    // Replaying a create or an evidence record with the same id is idempotent over HTTP.
+    const id = '55555555-5555-4555-8555-555555555555';
+    const once = await post('/api/tasks', { id, workspace: folder, objective: 'HTTP retry' });
+    const twice = await post('/api/tasks', { id, workspace: folder, objective: 'HTTP retry' });
+    assert.equal(once.status, 201);
+    assert.deepEqual(twice.json, once.json);
+    assert.equal((await post('/api/tasks', { id, workspace: folder, objective: 'Different' })).status, 409);
+    const evId = '66666666-6666-4666-8666-666666666666';
+    const note = { id: evId, kind: 'plan', result: 'passed', summary: 'again' };
+    const e1 = await post(`/api/tasks/${id}/evidence`, note);
+    const e2 = await post(`/api/tasks/${id}/evidence`, note);
+    assert.deepEqual(e2.json, e1.json);
+    assert.equal((await get(`/api/tasks/${id}/evidence`)).json.length, 1);
 
     for (const invalid of [null, [], 'text']) {
       assert.equal((await post('/api/tasks', invalid)).status, 400);
@@ -409,7 +500,7 @@ test('local HTTP API reports gate, conflict and validation failures with precise
     assert.equal(listed.json.length, 1);
     assert.deepEqual(listed.json[0], added.json);
     assert.equal((await get(`${path}/evidence?after=${listed.json[0].seq}`)).json.length, 0);
-    assert.equal((await get('/api/tasks')).json.length, 1);
+    assert.equal((await get('/api/tasks')).json.length, 2);
 
     const forbidden = await fetch(base + '/api/tasks', { headers: { Origin: 'https://malicious.example' } });
     assert.equal(forbidden.status, 403);
@@ -425,5 +516,6 @@ test('local HTTP API reports gate, conflict and validation failures with precise
   } finally {
     await runtime.close();
     rmSync(folder, { recursive: true, force: true });
+    rmSync(wtBase, { recursive: true, force: true });
   }
 });
