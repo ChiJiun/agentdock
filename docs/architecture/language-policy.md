@@ -39,7 +39,7 @@ Issue #18 要求把四種語言維度分開：
 | `outputs.issue`、`outputs.pullRequest` | GitHub 產物 | `inherit` |
 | `outputs.commitMessage` | Commit 命名 | `en-US`（團隊可另訂） |
 | `outputs.documentation` | README、報告、ChangeLog | `inherit` |
-| `outputs.codeComments` | 程式碼註解 | `preserve-original` 或 `zh-TW` |
+| `outputs.codeComments` | 程式碼註解 | `preserve-original`（規格只定義在此鍵；原型目前對其他階段也接受這個值，是待收斂的差異）或 `zh-TW` |
 | `outputs.sessionSummary`、`outputs.notification` | Session Sentinel 摘要與通知 | `inherit` |
 | `outputs.skillExplanation` | Skills 執行結果說明與摘要 | `inherit` |
 
@@ -53,6 +53,8 @@ Locale 以 BCP 47 表示；MVP 只支援 `zh-TW`、`en-US`。不得把未支援�
 2. 若是產物類階段（`issue`、`pullRequest`、`commitMessage`、`documentation`）：該層的 `artifactLocale`（`inherit` 視為未設定）。
 3. 該層的 `workflowLocale`。
 4. 都沒有就往下一層找。
+
+取捨：因為是逐層由近到遠解析，**較近一層的 `workflowLocale` 會蓋過較遠一層對單一階段的明確設定**。例如 Global 設了 `outputs.commitMessage = en-US`，而 Project 設了 `workflowLocale = zh-TW`，則 Commit Message 的有效語言是 `zh-TW`。若要在較近一層保留某個階段的語言，要在該層明確設定該階段的 `outputs.<stage>`。
 
 例外：`codeComments` 只接受明確的 `outputs.codeComments`，不繼承 `artifactLocale` 或 `workflowLocale`；沒有設定時是 `preserve-original`（依 Repo 既有慣例）。`uiLocale` 只看 Global。
 

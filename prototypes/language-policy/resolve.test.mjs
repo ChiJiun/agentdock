@@ -59,6 +59,15 @@ test('artifactLocale applies to prose artifacts only, below explicit outputs and
   assert.equal(effectiveLanguage({ global: scopes.global, session: { workflowLocale: 'zh-TW' } }, 'documentation'), 'zh-TW');
 });
 
+test('nearer-layer workflowLocale overrides an explicit per-stage setting of a farther layer (documented trade-off)', () => {
+  const scopes = { global: zh, project: { workflowLocale: 'zh-TW' } };
+  assert.equal(effectiveLanguage({ global: zh }, 'commitMessage'), 'en-US');
+  assert.equal(effectiveLanguage(scopes, 'commitMessage'), 'zh-TW');
+  // Pinning the stage in the nearer layer keeps it.
+  const pinned = { global: zh, project: { workflowLocale: 'zh-TW', outputs: { commitMessage: 'en-US' } } };
+  assert.equal(effectiveLanguage(pinned, 'commitMessage'), 'en-US');
+});
+
 test('unsupported locale tags are rejected, never substituted', () => {
   assert.throws(() => effectiveLanguage({ global: { workflowLocale: 'zh-CN' } }, 'plan'), /Unsupported locale/);
   assert.throws(() => effectiveLanguage({ global: { workflowLocale: 'zh' } }, 'plan'), /Unsupported locale/);

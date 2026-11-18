@@ -72,7 +72,7 @@ GitHub's Copilot SDK reached GA in June 2026, including a Rust SDK. In October 2
 - Do not assume external ACP session APIs and Copilot SDK sessions are interchangeable. Create an `AgentAdapter` abstraction that models shared capabilities and preserves different backend ownership.
 
 Sources:
-- [GitHub Copilot SDK repository](https://github.com/github/copilot-sdk) (migrating to Microsoft)
+- [Copilot SDK repository](https://github.com/microsoft/copilot-sdk) (formerly `github/copilot-sdk`)
 - [Rust SDK README / Fusion API](https://github.com/github/copilot-sdk/blob/main/rust/README.md)
 - [SDK Fusion session semantics](https://github.com/github/copilot-sdk/blob/main/docs/features/session-persistence.md#copilot-fusion-names)
 - [SDK GA announcement](https://github.blog/changelog/2026-06-02-copilot-sdk-is-now-generally-available/)

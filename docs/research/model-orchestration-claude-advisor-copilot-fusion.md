@@ -17,7 +17,7 @@ These are strategies that AgentDock can configure and benchmark **when it owns t
 
 ## Official references and what they establish
 
-| Reference | Verified finding | AgentDock consequence |
+| Reference | Reported finding (2026-11-17 reading of the vendor page; vendor statements, not AgentDock measurements) | AgentDock consequence |
 | --- | --- | --- |
 | [GitHub Copilot Fusion announcement (2026-10-28)](https://github.blog/changelog/2026-10-28-route-and-orchestrate-models-with-github-copilot-fusion/) | Fusion combines model routing with Single, Cascade, Critique and selectable effort levels | Surface strategy/effort as a policy choice, not a fixed model |
 | [GitHub Copilot Fusion docs](https://docs.github.com/en/copilot/concepts/models/copilot-fusion) | Chooses workflow per prompt; considers model capability, health, availability, and cache boundaries. Auxiliary reviewers get bounded context | Avoid switching main models mid-session purely for small savings; use side consultations and context-minimized critics |
@@ -156,7 +156,7 @@ Run the same fixed tasks and repository commits using controlled budgets with:
 
 Report **verified task resolution**, tests passed, files changed, code quality/risk findings, task-level cost (all legs), wall time, latency, retries, cache hit/write usage, tool approval events, interventions, and model/version/pricing assumptions. Account for rejected drafts and failed attempts. Use paired task sets, a development/holdout split to avoid tuning thresholds to the final benchmark, and enough repetitions for variance.
 
-Official GitHub results (Fusion Max score 60 vs Claude Code Opus 5.5 Max 62, around half average API cost in their evaluated index; earlier HydraFusion reports 36–67% lower estimated costs on specified test sets) are **external benchmark observations**, not promises of AgentDock performance. Copilot Fusion's temporary billing discount through 2026-11-30 is a GitHub product promotion, not a reusable routing algorithm.
+GitHub's own reported results (in the Artificial Analysis Coding Agent Index, Copilot Fusion Max scored 60, which GitHub describes as within two points of Claude Code with Opus 5.5 Max, at about half the average API cost per task; earlier HydraFusion reports 36–67% lower estimated costs on specified test sets) are **external benchmark observations**, not promises of AgentDock performance. Copilot Fusion's temporary billing discount through 2026-11-30 is a GitHub product promotion, not a reusable routing algorithm.
 
 ## Implementation mapping / dependencies
 

@@ -16,7 +16,7 @@ Status: proposal; not a promise of completion dates.
 ## Initial work order
 
 1. License/provenance / precise upstream migration decision.
-2. Define UX states + design tokens and screen map, including zh-TW/en-US labels and the [Language Policy](architecture/language-policy.md) for task/skill/prompt outputs.
+2. Define UX states + design tokens and screen map, including zh-TW/en-US labels and the [Language Policy](architecture/language-policy.md) for task/skill/prompt outputs. Note: the merged [UX spec](ux/README.md) decision 10 currently plans English UI copy first with zh-TW later; the owner has not yet reconciled that with this item (see Language Policy section 11).
 3. Rust & Tauri scaffold with typed front/back boundary.
 4. ACP mock first and supported real adapter compatibility matrix.
 5. Storage and approval gates before unrestricted real-agent tools.
