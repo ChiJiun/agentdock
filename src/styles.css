@@ -1475,3 +1475,4 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
 .live-github-section>a:hover,.live-github-pull>a:hover,.live-github-check>a:hover{text-decoration:underline}
 .live-github-pull,.live-github-check{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #354339;padding:7px 0}
 .live-github-pull>a{max-width:75%}.live-github-check>span{color:#bbcabe;font-size:11px}
+.live-github-sha,.live-github-note{font-size:11px;color:#a4b4a9;margin:0 0 8px}.live-github-sha code{color:#d6e7ce}

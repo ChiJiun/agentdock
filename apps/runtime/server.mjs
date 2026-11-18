@@ -7,8 +7,8 @@ import { AcpHost } from './acp-host.mjs';
 import { DEFAULT_MOCK, ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
-import { WorktreeManager } from './worktrees.mjs';
-import { GitHubReader } from './github-reader.mjs';
+import { WorktreeError, WorktreeManager, defaultWorktreeRoot } from './worktrees.mjs';
+import { GitHubEvidenceError, GitHubReader } from './github-reader.mjs';
 import { TaskError, TaskWorkflow } from './task-workflow.mjs';
 
 const MAX_BODY = 20_000;
@@ -54,13 +54,16 @@ export function createRuntimeServer({
   roots = [process.cwd()],
   dbPath = resolve('.local', 'agentdock.db'),
   adapters = loadAdapters(process.env.AGENTDOCK_ADAPTER_CONFIG),
-  worktreeRoot = resolve('.local', 'worktrees'),
+  worktreeRoot = defaultWorktreeRoot(),
 } = {}) {
   const sourceRoots = roots.map(root => realpathSync(root));
   const allowedRoots = [...sourceRoots];
   const store = new SessionStore(dbPath);
   const worktrees = new WorktreeManager({store,sourceRoots,worktreeRoot});
-  allowedRoots.push(...worktrees.permittedWorkspacePaths());
+  // Shared by reference with AcpHost. Rebuilt in place before each use so a worktree folder
+  // later replaced by a symlink/junction (or moved) stops being an approved root.
+  const refreshRoots = () => allowedRoots.splice(sourceRoots.length, Infinity, ...worktrees.permittedWorkspacePaths());
+  refreshRoots();
   const host = new AcpHost({ store, roots: allowedRoots, adapters });
   const github = new GitHubReader({ roots: allowedRoots });
   const tasks = new TaskWorkflow({ store, roots: allowedRoots });
@@ -74,24 +77,25 @@ export function createRuntimeServer({
       }
       if (method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true, mode: 'local-development', protocol: 'ACP v1', storage: 'sqlite' });
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
+      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/')) refreshRoots();
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
       if (method === 'GET' && pathname === '/api/worktrees') return json(response, 200, worktrees.list());
       if (method === 'POST' && pathname === '/api/worktrees') {
         const payload = await readJson(request);
         // This endpoint creates only a new branch and worktree after explicit user action.
         // Never deletes/cleans, force-pushes or modifies the base branch.
-        const item = await worktrees.create({repoPath: payload.repoPath});
-        allowedRoots.push(item.path);
+        const item = await worktrees.create({ repoPath: payload?.repoPath });
+        refreshRoots();
         return json(response, 201, item);
       }
       if (method === 'GET' && pathname === '/api/github/issues') {
-        return json(response, 200, github.issues(url.searchParams.get('cwd') || ''));
+        return json(response, 200, await github.issues(url.searchParams.get('cwd') || ''));
       }
       if (method === 'GET' && pathname === '/api/github/pulls') {
-        return json(response, 200, github.pulls(url.searchParams.get('cwd') || ''));
+        return json(response, 200, await github.pulls(url.searchParams.get('cwd') || ''));
       }
       if (method === 'GET' && pathname === '/api/github/checks') {
-        return json(response, 200, github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
+        return json(response, 200, await github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
       }
       if (method === 'GET' && pathname === '/api/tasks') return json(response, 200, tasks.list());
       if (method === 'POST' && pathname === '/api/tasks') {
@@ -182,7 +186,7 @@ export function createRuntimeServer({
       }
       throw new ClientError(404, 'endpoint not found');
     } catch (error) {
-      const status = error instanceof ClientError || error instanceof TaskError ? error.status
+      const status = error instanceof ClientError || error instanceof WorktreeError || error instanceof GitHubEvidenceError || error instanceof TaskError ? error.status
         : /workspace|adapter|approval|not connected|already processing|invalid/i.test(error.message) ? 400 : 500;
       const message = status === 500 ? 'internal runtime error' : String(error.message).slice(0, 200);
       json(response, status, { error: message });
