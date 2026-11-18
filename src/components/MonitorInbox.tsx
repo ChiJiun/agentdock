@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AlertCircle, ArrowUpRight, BellRing, Bot, CheckCircle2, Clock3, X } from 'lucide-react';
-import type { AttentionLevel, MonitorItem } from '../monitor';
+import { canDismiss, isHidden, type AttentionLevel, type MonitorItem } from '../monitor';
 import { useT } from '../i18n/context';
 
 const sections: AttentionLevel[] = ['decision', 'review', 'background', 'complete', 'idle'];
@@ -8,7 +8,7 @@ const sections: AttentionLevel[] = ['decision', 'review', 'background', 'complet
 export function MonitorInbox({ items, dismissed, onDismiss, onSelect, onClose }: {
   items: MonitorItem[];
   dismissed: Set<string>;
-  onDismiss: (id: string) => void;
+  onDismiss: (item: MonitorItem) => void;
   onSelect: (item: MonitorItem) => void;
   onClose: () => void;
 }) {
@@ -23,7 +23,7 @@ export function MonitorInbox({ items, dismissed, onDismiss, onSelect, onClose }:
     return () => window.removeEventListener('keydown', handle);
   }, [onClose]);
 
-  const visible = items.filter(item => !dismissed.has(item.id));
+  const visible = items.filter(item => !isHidden(item, dismissed));
   return (
     <section className="monitor-panel" role="dialog" aria-label={tr('monitor.title')} aria-modal="false">
       <header className="monitor-header">
@@ -47,7 +47,7 @@ export function MonitorInbox({ items, dismissed, onDismiss, onSelect, onClose }:
                   <em>{item.nextAction} <ArrowUpRight size={12}/></em>
                 </span>
               </button>
-              <button className="monitor-dismiss" onClick={() => onDismiss(item.id)} title={tr('monitor.dismissHint')} aria-label={tr('monitor.dismiss', { session: item.sessionTitle })}><X size={14}/></button>
+              {canDismiss(item) && <button className="monitor-dismiss" onClick={() => onDismiss(item)} title={tr('monitor.dismissHint')} aria-label={tr('monitor.dismiss', { session: item.sessionTitle })}><X size={14}/></button>}
             </article>)}
           </div>;
         })}

@@ -63,7 +63,7 @@ The preview is intended for validating layout and interactions, **not** for real
 
 ## Working policy
 
-Initial implementation selectively imports a few **MIT-licensed utility functions** from Acpira, with provenance in [ADR-0002](docs/decisions/0002-port-small-acpira-ui-helpers.md) and license in `third_party/acpira-LICENSE`. External runtimes should be integrated over public protocols first. A migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
+Initial implementation selectively imports a few **MIT-licensed utility functions** from Acpira, with provenance in [docs/sources.md](docs/sources.md) and [ADR-0004](docs/decisions/0004-port-small-acpira-ui-helpers.md) (a proposed exception to [ADR-0002](docs/decisions/0002-source-reuse.md)), notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the license in `third_party/acpira-LICENSE`. External runtimes should be integrated over public protocols first. A migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
 
 ## Licensing
 

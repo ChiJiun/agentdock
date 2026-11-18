@@ -146,4 +146,23 @@ describe('interactive AgentDock preview with zh-TW/English language preferences'
     expect(page.querySelector('[role="dialog"][aria-label="快速切換工作階段"]')).not.toBeNull();
     expect(dialogs()).toBe(1);
   });
+
+  it('offers no dismiss control for a pending decision, so the bell count cannot drop silently', () => {
+    const page = render();
+    const bell = () => page.querySelector<HTMLButtonElement>('button[aria-label^="Session 監控"]');
+    act(() => bell()?.click());
+    expect(page.querySelector('button[aria-label^="忽略 Review CI workflow"]')).toBeNull();
+    expect(page.querySelector('button[aria-label^="忽略 Refactor event types"]')).not.toBeNull();
+    expect(bell()?.getAttribute('aria-label')).toContain('1 項待決策');
+  });
+
+  it('ignores Enter that confirms an IME candidate in the quick switcher', () => {
+    const page = render();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const input = page.querySelector<HTMLInputElement>('input[aria-label="搜尋工作階段"]')!;
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true })));
+    expect(page.querySelector('[role="dialog"][aria-label="快速切換工作階段"]')).not.toBeNull();
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(page.querySelector('[role="dialog"][aria-label="快速切換工作階段"]')).toBeNull();
+  });
 });
