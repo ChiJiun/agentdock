@@ -89,8 +89,8 @@ function sanitizeProfile(value: unknown): LanguageProfile {
 function sanitizeOverrides(value: unknown): Record<string, LanguageProfile> {
   const overrides: Record<string, LanguageProfile> = Object.create(null);
   if (!isRecord(value)) return overrides;
-  // No arbitrary infinite mapping or special prototype property names.
-  for (const [key, raw] of Object.entries(value).slice(0, 200)) {
+  // No arbitrary infinite mapping or special prototype property names; keep the newest entries.
+  for (const [key, raw] of Object.entries(value).slice(-200)) {
     if (!key || key.length > 128 || key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     Object.defineProperty(overrides, key, {
       value: sanitizeProfile(raw), enumerable: true, writable: true, configurable: true,

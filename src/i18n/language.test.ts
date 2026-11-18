@@ -68,4 +68,25 @@ describe('end-to-end language preferences (host-owned, no adapter attached)', ()
     expect(t('en-US', 'monitor.group.decision')).toBe('Needs your decision');
     expect(t('zh-TW', 'header.notifications', { count: 2 })).toContain('2');
   });
+  it('really skips an own __proto__ key from parsed JSON and keeps the newest 200 overrides', () => {
+    const polluted = JSON.parse('{"version":1,"projects":{"__proto__":{"workflowLocale":"en-US"},"ok":{"workflowLocale":"en-US"}}}') as unknown;
+    const parsed = parseSettings(polluted);
+    expect(Object.keys(parsed.projects)).toEqual(['ok']);
+    expect(({} as { workflowLocale?: string }).workflowLocale).toBeUndefined();
+
+    const sessions = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [`s${i}`, { workflowLocale: 'en-US' }]));
+    const kept = parseSettings({ version: 1, sessions }).sessions;
+    expect(Object.keys(kept)).toHaveLength(200);
+    expect(kept.s204).toBeDefined();
+    expect(kept.s0).toBeUndefined();
+  });
+
+  it('documents current cross-layer behavior: a lower-layer workflowLocale wins over a higher-layer artifactLocale', () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.global.artifactLocale = 'en-US';
+    settings.projects.alpha = { workflowLocale: 'zh-TW' };
+    // Mirrors PR #19 layer-by-layer order; to be reconciled by the owner (see PR description).
+    expect(resolveLocale(settings, 'documentation', { projectId: 'alpha' })).toBe('zh-TW');
+    expect(resolveLocale(settings, 'documentation')).toBe('en-US');
+  });
 });

@@ -24,7 +24,7 @@ This is a browser-only prototype, not a real Rust/Tauri/ACP client:
 - No bundled or rewritten `SKILL.md`; no claim to replace Claude Code / Codex / Copilot system prompts.
 - No real Session persistence: only language preferences are saved. Demo session activity remains in memory.
 - No live code execution, terminal access, Git changes, approvals, CI access or remote VM operations.
-- The simulated source diff, code and raw evidence are never translated. Existing user-authored messages remain unchanged when switching UI languages.
+- The simulated source diff, code and raw evidence are never translated. User-typed messages are never translated; the built-in demo timeline entries (including the sample user message) are static UI strings and do follow the UI language.
 - `en-US` or `zh-TW` settings do not authorize actions or alter tool permissions.
 
 ## Reproduction

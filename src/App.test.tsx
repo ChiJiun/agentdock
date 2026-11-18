@@ -123,4 +123,27 @@ describe('interactive AgentDock preview with zh-TW/English language preferences'
     expect(page.textContent).toContain('Decision inbox');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+  it('keeps <html lang> in sync with the UI language', () => {
+    const page = render();
+    expect(document.documentElement.lang).toBe('zh-TW');
+    act(() => page.querySelector<HTMLButtonElement>('button[aria-label="語言設定"]')?.click());
+    select('#ui-locale', 'en-US', page);
+    expect(document.documentElement.lang).toBe('en-US');
+  });
+
+  it('opens only one overlay at a time (language panel, inbox, switcher)', () => {
+    const page = render();
+    const dialogs = () => page.querySelectorAll('[role="dialog"]').length;
+    act(() => page.querySelector<HTMLButtonElement>('button[aria-label="語言設定"]')?.click());
+    expect(page.querySelector('[role="dialog"][aria-label="語言與輸出設定"]')).not.toBeNull();
+    act(() => page.querySelector<HTMLButtonElement>('button[aria-label^="Session 監控"]')?.click());
+    expect(page.querySelector('[role="dialog"][aria-label="語言與輸出設定"]')).toBeNull();
+    expect(dialogs()).toBe(1);
+    act(() => page.querySelector<HTMLButtonElement>('button[aria-label="語言設定"]')?.click());
+    expect(dialogs()).toBe(1);
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    expect(page.querySelector('[role="dialog"][aria-label="語言與輸出設定"]')).toBeNull();
+    expect(page.querySelector('[role="dialog"][aria-label="快速切換工作階段"]')).not.toBeNull();
+    expect(dialogs()).toBe(1);
+  });
 });
