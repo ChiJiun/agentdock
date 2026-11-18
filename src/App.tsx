@@ -11,7 +11,7 @@ import { ProgressRail } from './components/ProgressRail';
 import { MonitorInbox } from './components/MonitorInbox';
 import { SessionSwitcher } from './components/SessionSwitcher';
 import { demoProjects, demoSessions, nextId } from './demo';
-import { decisionCount, deriveMonitorItems, type MonitorItem } from './monitor';
+import { decisionCount, deriveMonitorItems, dismissKey, isHidden, type MonitorItem } from './monitor';
 import type { AgentName, Project, Session, SessionStatus, TimelineEntry } from './model';
 import { useRoving } from './vendor/acpira/roving';
 
@@ -166,7 +166,7 @@ export default function App() {
   const bellRef = useRef<HTMLButtonElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const monitorItems = useMemo(() => deriveMonitorItems(sessions, projects), [sessions, projects]);
-  const visibleMonitorItems = useMemo(() => monitorItems.filter(item => !dismissed.has(item.id)), [monitorItems, dismissed]);
+  const visibleMonitorItems = useMemo(() => monitorItems.filter(item => !isHidden(item, dismissed)), [monitorItems, dismissed]);
   const blockingCount = decisionCount(visibleMonitorItems);
 
   useEffect(() => {
@@ -229,7 +229,7 @@ export default function App() {
     <main className="main">
       <header className="topbar">
         <div className="breadcrumbs"><FolderGit2 size={15}/><span>{project.name}</span><ChevronRight size={13}/><strong>{active?.title ?? 'No session selected'}</strong></div>
-        <div className="topbar-actions"><span className="mode-pill"><span/> Demo mode</span><button className="icon-button" aria-label="Switch sessions" title="Switch sessions (Ctrl/Cmd+K)" onClick={() => { setMonitorOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button><div className="monitor-anchor"><button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={`Session monitor, ${blockingCount} decisions needing attention`} title="Session Sentinel · Decision Inbox" aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>{monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={id => setDismissed(old => new Set([...old, id]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}</div><button className="icon-button" onClick={() => setShowInspector(v => !v)} title="Toggle details" aria-label="Toggle details"><FileDiff size={17}/></button></div>
+        <div className="topbar-actions"><span className="mode-pill"><span/> Demo mode</span><button className="icon-button" aria-label="Switch sessions" title="Switch sessions (Ctrl/Cmd+K)" onClick={() => { setMonitorOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button><div className="monitor-anchor"><button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={`Session monitor, ${blockingCount} decisions needing attention`} title="Session Sentinel · Decision Inbox" aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>{monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={item => setDismissed(old => new Set([...old, dismissKey(item)]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}</div><button className="icon-button" onClick={() => setShowInspector(v => !v)} title="Toggle details" aria-label="Toggle details"><FileDiff size={17}/></button></div>
       </header>
       <div className="preview-banner"><CircleAlert size={15}/><span>Interactive UI prototype — sample data only. No Git commands, API requests, or coding agents are running.</span><a href="https://github.com/ChiJiun/agentdock/issues/6" target="_blank" rel="noreferrer">ACP integration <ArrowUpRight size={12}/></a></div>
       {active ? <>

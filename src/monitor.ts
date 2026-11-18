@@ -53,6 +53,22 @@ function summarize(text: string): string {
   return flat.length <= 125 ? flat : `${flat.slice(0, 122).trimEnd()}…`;
 }
 
+/**
+ * A dismissal is bound to the event it was made for, so a new event in the same session shows the item again.
+ * Items that need a decision can never be dismissed: dismissing is not an approval and must not hide pending work.
+ */
+export function dismissKey(item: MonitorItem): string {
+  return `${item.id}:${item.sourceEventId ?? ''}`;
+}
+
+export function canDismiss(item: MonitorItem): boolean {
+  return item.level !== 'decision';
+}
+
+export function isHidden(item: MonitorItem, dismissed: Set<string>): boolean {
+  return canDismiss(item) && dismissed.has(dismissKey(item));
+}
+
 export function decisionCount(items: MonitorItem[]): number {
   return items.filter(item => item.level === 'decision').length;
 }

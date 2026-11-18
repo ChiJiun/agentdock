@@ -52,4 +52,23 @@ describe('interactive preview shell', () => {
     expect(page.querySelector('[role="dialog"][aria-label="Quick switch sessions"]')).toBeNull();
     expect(page.textContent).toContain('Inspect API tests');
   });
+
+  it('offers no dismiss control for a pending decision, so the bell count cannot drop silently', () => {
+    const page = render();
+    const bell = () => page.querySelector<HTMLButtonElement>('button[aria-label^="Session monitor"]');
+    act(() => bell()?.click());
+    expect(page.querySelector('button[aria-label^="Dismiss preview for Review CI workflow"]')).toBeNull();
+    expect(page.querySelector('button[aria-label^="Dismiss preview for Refactor event types"]')).not.toBeNull();
+    expect(bell()?.getAttribute('aria-label')).toContain('1 decisions');
+  });
+
+  it('ignores Enter that confirms an IME candidate in the quick switcher', () => {
+    const page = render();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const input = page.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]')!;
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true })));
+    expect(page.querySelector('[role="dialog"][aria-label="Quick switch sessions"]')).not.toBeNull();
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(page.querySelector('[role="dialog"][aria-label="Quick switch sessions"]')).toBeNull();
+  });
 });
