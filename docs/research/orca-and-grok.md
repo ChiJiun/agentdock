@@ -131,8 +131,9 @@ Criticism recorded in those same sources:
 
 - A typed answer always fits the schema, but it can still pick the wrong branch.
 - Confidence thresholds must be re-tuned per model, per version and per question wording.
-- Escalating low-confidence answers to a larger model does not catch **high-confidence errors**: one analysis found that on Jev's 84 most confident mistakes, three LLM judges repeated the same answer in 242 of 252 judgments.
+- Escalating low-confidence answers to a larger model does not catch **high-confidence errors**: one analysis found that on Jev's 84 most confident mistakes, three LLM judges repeated the same answer in 242 of 252 judgments (a community write-up; the exact source was not recorded in this note and the figure was not reproduced).
 - A screen built on the decision model can itself be steered by injected text.
+- **Independent evaluation** ([Anaconda, 2026-10-20](https://www.anaconda.com/blog/decision-time), full text read): on 2,400 held-out CFPB complaints, zero-shot Jev scored below always guessing the majority class on all three questions; after the rules were written into the prompt it reached 82% on one question and 54% and 55% on the others, still below a classifier trained on the structured fields alone. Reordering options changed the answer in 1 of 80 cases but moved probabilities by up to 0.20 (7 cases crossed a 0.9 threshold); identical requests differed by up to 0.04; `confidence` is not a second accuracy estimate. Takeaway: good when label meaning is generic, weak when labels depend on one's own rules or history, so thresholds must be tuned and re-checked per question.
 
 ### 3.6 Fit with AgentDock's rules
 
@@ -183,7 +184,7 @@ Excluded, with reasons:
 **Design points relevant to AgentDock** (from `README.md`, `docs/decision-model.md`, `docs/approval-levels.md`, `docs/runtime-contract.md`, `docs/sentinel.md`, `docs/usage-caps.md`, `docs/pausing-bots.md`, all at the pinned SHA):
 
 - **Decision model is real and shipped.** Providers: TypeSafe Jev (default), Cloudflare Workers AI, OpenRouter, or a custom endpoint speaking System One or OpenAI Decisions. Used for "who answers in a room" and inbox triage. Threshold 0.6 on the top probability; **fails open** to the room's lead; every answer is validated; 1.5 second budget; each call logged as an NDJSON row with provider, probability, latency and a hash of the state (never the text). The documents state what leaves the machine for each provider. This confirms pattern A1 and A3 is workable, and shows a custom endpoint is how a self-hosted Laya would plug in.
-- **Provenance labels.** Every line an agent reads starts with a harness-written `[From <who> · <what> · <authority>]` note; model-written text that imitates it is escaped; a relayed "approved" from another bot, webhook or outside page is information only. Matches APR-1 and X-1; adopt the idea.
+- **Provenance labels.** Every line an agent reads starts with a harness-written `[From <who> · <what> · <authority>]` note; model-written text that imitates it is escaped; a relayed "approved" from another bot, webhook or outside page is information only. Matches APR-1 and PRL-8 (untrusted text is rendered quoted so it cannot spoof an approval card) and the architecture rule that tool output and issue text are untrusted; adopt the idea.
 - **Job runtime contract** (`docs/runtime-contract.md`): one assignment record with a lifecycle, append-only event table, exactly-once result report, restart policy that never re-runs a turn that already acted outward, per-root budgets, invariants asserted after every test scenario. Strong reference for ADR-0003 and #10.
 - **Usage caps** that stop *unattended* work first, never mid-turn; **pause** switch that returns a typed "held" error.
 - **Health scanner ("Sentinel")**: plain code, read-only, out-of-process, groups failures by a normalized signature; no model calls. Same name as AgentDock's Session Sentinel but a different thing (log health, not an attention inbox).
@@ -308,11 +309,11 @@ Observed practice (GitHub REST, sampled on 2026-11-17; **a small sample from a s
 
 - Volume: pull request numbers had reached #43,596 eight months after the repository was created. In one listing, 45 pull requests were merged between 08:40 and 13:06 UTC.
 - A reviewer agent's sample of 40 merged PRs from about four hours: median 14 minutes from open to merge, longest 1.8 hours; `reviewDecision` empty on all 40; 20 of them by one account (`OrcaWin`), all titled "test: remove low-value … tests".
-- Five PRs were inspected individually (#43558, #43309, #43575, #43596, #43560; the last request timed out). On the four that returned: **the author merged their own PR in all four**; auto-merge was not used; the only reviewer other than the author was the `coderabbitai[bot]` app, which commented on three of them and submitted no approval. PR #43575 changed 563 files and merged 67 minutes after opening with no review comments.
+- Five PRs were inspected individually (#43558, #43309, #43575, #43596, #43560; its detail request timed out the first time and was repeated afterwards). On the four first inspected: **the author merged their own PR in all four**; a fifth, #43560, opened by an outside contributor, was merged by a maintainer about 64 minutes later, so self-merge describes maintainers' own PRs, not every PR; auto-merge was not used; the only reviewer other than the author was the `coderabbitai[bot]` app, which commented on three of them and submitted no approval. PR #43575 changed 563 files and merged 67 minutes after opening with no review comments.
 - Commit subjects end in `(#NNNN)` with committer "GitHub", which is consistent with squash merging. The parent count of the merge commits was not confirmed.
 - Releases: about one desktop release a day (10 stable versions in 11 days), cut by a manually triggered workflow.
 
-Reading: the Orca team optimizes for throughput. Many small PRs, an automated gate, a bot reviewer, author self-merge, and daily releases. It is **not** an independent-review workflow, and it deliberately keeps the test suite small.
+Reading: the Orca team optimizes for throughput. Many small PRs, an automated gate, a bot reviewer, maintainers merging their own PRs (outside contributors' PRs are merged by a maintainer), and daily releases. It is **not** an independent-review workflow, and it deliberately keeps the test suite small.
 
 #### What the product offers (public docs at `orca.dev/docs`, same content under `docs/site/content/docs/` in the repository)
 
@@ -387,7 +388,7 @@ Priority is a recommendation for the owner, not a decision. "Issue" is the track
 | 1. Safety and process, cheap to adopt now | B9, B10 (CI and PR template), B4 (worktree safety), B8 (untrusted wrapping), A4, A7 (approval vocabulary and card behavior) | They harden work that is already in open PRs (#28, #29) and need no new runtime |
 | 2. Core product patterns | B1, B3 (status and notifications), B6 (batched diff annotations), B7, A6, A5 (child-session contract) | They shape #15, #9 and #10 before those are built in Rust |
 | 3. Protocol work | B11, A8 (ACP compatibility and Grok Build), B2 (OSC 7501) | Depends on #6 landing |
-| 4. Optional, needs an owner decision first | A1, A2, A3 (decision provider, Sentinel triage, shadow mode) | New external dependency and a privacy decision; value is unproven |
+| 4. Optional, needs an owner decision first | A1, A2, A3 (decision provider, Sentinel triage, shadow mode) | New external dependency and a privacy decision; value is unproven; the one independent evaluation read (Anaconda, 2026-10-20) found calibration must be validated per use |
 | 5. Later | B5, B12, B13, B14, B15, B16, B17, A9 | Useful details; no urgency |
 
 ## 6. Source table
