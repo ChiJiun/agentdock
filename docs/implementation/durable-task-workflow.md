@@ -60,7 +60,9 @@ Evidence chain:
 | 3 | `pull_request` (with a `https://github.com/<owner>/<repo>/pull/<n>` reference) | `reviewing` | same `commitSha` as link 2 (the PR head is the reviewed commit) |
 | 4 | `ci_checks` | `ci` | same `commitSha` as link 3 (CI ran on the PR head) |
 
-For every link the **latest** record of that kind decides: it must be `passed`. A newer `failed` or `pending` record, a record from an earlier round (for example before `ci → implementing`), or a commit mismatch anywhere upstream blocks the gate. Recording a new PR head while CI is running therefore cannot reach `awaiting_merge` without a new review of that commit. `local_tests`, `independent_review`, `pull_request` and `ci_checks` evidence must carry a full 40-character lowercase `commitSha`; `plan` evidence must not.
+For every link the **latest** record of that kind decides: it must be `passed`. A newer `failed` or `pending` record, a record from an earlier round (for example before `ci → implementing`), or a commit mismatch anywhere upstream blocks the gate. Recording a new PR head while CI is running therefore cannot reach `awaiting_merge` without a new passing `independent_review` and `local_tests` record for that commit.
+
+**Known limitation:** evidence may be recorded while the task is in *any* non-terminal state; "current round" only means "recorded after the task last entered the phase". An operator can therefore stay in `ci`, record fresh `local_tests`, `independent_review`, `pull_request` and `ci_checks` evidence for a new commit and reach `awaiting_merge` without looping back through `implementing`, and without a human confirmation for that new head. Because evidence is operator-supplied in the first place this adds no new trust, but it means the loop-back is a convention, not an enforced path. Restricting each evidence kind to the state in which it is meaningful is left for the slice that records evidence from real runs. `local_tests`, `independent_review`, `pull_request` and `ci_checks` evidence must carry a full 40-character lowercase `commitSha`; `plan` evidence must not.
 
 "Latest" and "since" use insertion order (`task_evidence.rowid`, `task_transitions.seq`), not wall-clock timestamps, so a clock change cannot reorder evidence.
 
@@ -115,7 +117,7 @@ ADR-0003 (`docs/contracts/` on the `design/contracts` branch, PR #22) is still a
 | --- | --- | --- |
 | Task states | 16: `queued`, `planning`, `awaiting_plan_approval`, `preparing`, `implementing`, `verifying`, `reviewing`, `ready_for_pr`, `awaiting_pr_approval`, `pr_open`, `ci`, `awaiting_merge`, `interrupted`, `failed`, `cancelled`, `complete` | 12: `queued`, `preparing`, `running`, `awaiting_approval`, `verifying`, `review`, `pr`, `ci`, `completed`, `interrupted`, `failed`, `cancelled` |
 | Naming | `implementing`, `reviewing`, `complete` | `running`, `review`, `completed` |
-| Approvals | One state per approval (`awaiting_plan_approval`, `awaiting_pr_approval`, `awaiting_merge`) plus a `humanConfirmed` flag | One `awaiting_approval` state with a persisted `Approval` and `return_state`; no planning phase |
+| Approvals | One state per approval point (`awaiting_plan_approval`, `awaiting_pr_approval`, `awaiting_merge`) plus a `humanConfirmed` flag on the transitions into `preparing` and `pr_open` (`awaiting_merge` itself has no human gate; `complete` is refused) | One `awaiting_approval` state with a persisted `Approval` and `return_state`; no planning phase |
 | PR phase | `ready_for_pr` / `awaiting_pr_approval` / `pr_open`, fed by operator-submitted `pull_request` evidence | One `pr` state driven by recorded `git_push` / `pr_create` operations (`pr_published_this_round`) |
 | Completion | `complete` is unreachable; no "accepted without PR" edge | `review → completed` (T29) and `ci → completed` (T39) with merge evidence |
 | Actors | `human`, `system` | `user`, `orchestrator`, `policy`, `adapter`, `integration`, `recovery` |
@@ -128,13 +130,13 @@ ADR-0003 (`docs/contracts/` on the `design/contracts` branch, PR #22) is still a
 
 More differences:
 
-- ADR-0003 has `interrupted → failed` (T45); this preview does not. Here `planning`, the `awaiting_*` states, `ready_for_pr` and `awaiting_merge` cannot move to `interrupted` or `failed`, whereas ADR-0003's `awaiting_approval` can.
+- ADR-0003 has `interrupted → failed` (T45); this preview does not. Here `planning` can move to `failed` but not to `interrupted`; `awaiting_plan_approval`, `awaiting_pr_approval`, `ready_for_pr` and `awaiting_merge` can move to neither. ADR-0003's `awaiting_approval` can move to `interrupted` (T20) but not to `failed`.
 - ADR-0003 bounds retries (`repair_limit_reached`, T25/T31/T42); this preview has no limit on how often an operator loops back to `implementing`.
 - This preview allows `ready_for_pr → implementing` and `awaiting_merge → implementing`; ADR-0003's `pr` cannot return directly to `running`.
 - ADR-0003 operations carry an `idempotency_key`; `advance` here relies on the `expectedRevision` compare-and-set instead, so a client that gets `409 stale task revision` cannot tell "my request was already applied" from "someone else got there first" without reading `history`.
 - **Approval timing:** `pr_open` requires the PR to already exist (its URL and head commit are recorded `pull_request` evidence). The human confirmation is therefore a confirmation *after* the PR was opened, not a permission *before* push or PR creation as Issue #10 asks. A real pre-push / pre-PR gate belongs to the later slice that performs those writes, and the state order will need to change then.
 
-Both agree that `failed` is not terminal, that only `cancelled` and the completed state are terminal, and that the projection is updated in the same transaction as the log append. ADR-0003 says the agent never changes task state; this preview has no agent-facing transition path, but it does **not enforce** that (any local process can call the API, see the trust boundary above). Both agree that a resumed task never skips verification or review.
+Both agree that `failed` is not terminal, that only `cancelled` and the completed state are terminal, and that the projection is updated in the same transaction as the log append. ADR-0003 says the agent never changes task state; this preview has no agent-facing transition path, but it does **not enforce** that (any local process can call the API, see the trust boundary above). The resume rules differ: here an `interrupted` or `failed` task always goes back to `planning` or `implementing` and so repeats verification and review; in ADR-0003 an interrupted task may be restored directly into `review`, `pr` or `ci` (T06–T08) and only never skips the phases *before* its resume point.
 
 ## Test
 

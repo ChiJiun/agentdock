@@ -311,6 +311,10 @@ test('transition and evidence ledgers are append-only at the database level; fai
     const failed = f.tasks.evidence(task.id).at(-1);
     assert.throws(() => db.prepare('INSERT OR REPLACE INTO task_evidence(id,task_id,kind,result,summary,created_at,commit_sha,transition_seq) VALUES(?,?,?,?,?,?,?,?)')
       .run(failed.id, task.id, 'local_tests', 'passed', 'forged', failed.created_at, SHA_A, failed.transition_seq), /append-only/);
+    // ... and replacing by an explicit rowid with a fresh id must be refused too.
+    const failedRow = f.tasks.evidence(task.id).at(-1);
+    assert.throws(() => db.prepare('INSERT OR REPLACE INTO task_evidence(rowid,id,task_id,kind,result,summary,created_at,commit_sha,transition_seq) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(failedRow.seq, '77777777-7777-4777-8777-777777777777', task.id, 'local_tests', 'passed', 'forged', failedRow.created_at, SHA_A, failedRow.transition_seq), /append-only/);
     const first = f.tasks.history(task.id)[0];
     assert.throws(() => db.prepare('INSERT OR REPLACE INTO task_transitions(seq,task_id,previous_state,state,actor,reason,created_at,revision) VALUES(?,?,?,?,?,?,?,?)')
       .run(first.seq, task.id, null, 'complete', 'human', 'forged', first.created_at, 0), /append-only/);

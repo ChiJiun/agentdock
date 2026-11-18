@@ -144,8 +144,9 @@ export class TaskWorkflow {
         BEGIN SELECT RAISE(ABORT, 'task_transitions is append-only'); END;
       -- INSERT OR REPLACE deletes the old row without firing DELETE triggers
       -- (recursive_triggers is off by default), so refuse a reused key up front.
-      CREATE TRIGGER IF NOT EXISTS task_evidence_no_replace BEFORE INSERT ON task_evidence
-        WHEN EXISTS (SELECT 1 FROM task_evidence WHERE id = NEW.id)
+      DROP TRIGGER IF EXISTS task_evidence_no_replace;
+      CREATE TRIGGER task_evidence_no_replace BEFORE INSERT ON task_evidence
+        WHEN EXISTS (SELECT 1 FROM task_evidence WHERE id = NEW.id OR rowid = NEW.rowid)
         BEGIN SELECT RAISE(ABORT, 'task_evidence is append-only'); END;
       CREATE TRIGGER IF NOT EXISTS task_transitions_no_replace BEFORE INSERT ON task_transitions
         WHEN NEW.seq IS NOT NULL AND EXISTS (SELECT 1 FROM task_transitions WHERE seq = NEW.seq)
