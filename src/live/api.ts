@@ -29,6 +29,7 @@ export interface RuntimeEvent {
     approvalId?: string;
     title?: string;
     decision?: string;
+    reason?: string;
     message?: string;
   };
   createdAt: string;
@@ -38,6 +39,8 @@ export interface RuntimeApproval {
   session_id: string;
   title: string;
   choices: { id: string; kind: string; name: string }[];
+  /** What the agent asked to do, redacted and bounded by the host. */
+  detail?: { kind?: string | null; input?: unknown; locations?: string[] };
   status: string;
   created_at: string;
   expires_at: string;

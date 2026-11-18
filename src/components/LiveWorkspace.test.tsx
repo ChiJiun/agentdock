@@ -97,4 +97,31 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     // Rendered approvals may arrive after the first sync, but no approval API call may happen without a click.
     expect(requests.some(r=>r.method==='POST'&&r.path.includes('/approvals/'))).toBe(false);
   });
+
+  it('shows what is being approved and sends only the decision the user clicked', async () => {
+    approvals=[{id:approvalId,session_id:sessionId,title:'Run a command',status:'pending',
+      detail:{kind:'execute',input:{command:'git push origin main',api_key:'[REDACTED]'},locations:['/mock/project']},
+      choices:[{id:'allow-once',kind:'allow_once',name:'Allow Once'},{id:'always',kind:'allow_always',name:'Always'}],
+      expires_at:new Date(Date.now()+60000).toISOString()}];
+    const ui=await render();
+    const tab=[...ui.querySelectorAll<HTMLButtonElement>('.live-tabs button')].find(b=>b.textContent?.includes('待批准事項'))!;
+    expect(tab).toBeDefined();
+    await act(async()=>{tab.click();await Promise.resolve();});
+    const card=ui.querySelector('.live-approval')!;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain('Run a command');
+    expect(card.textContent).toContain('execute');
+    expect(card.textContent).toContain('git push origin main');
+    expect(card.textContent).toContain('/mock/project');
+    // Only deny and allow-once exist: the page offers no way to pick allow_always.
+    const labels=[...card.querySelectorAll('button')].map(b=>b.textContent?.trim());
+    expect(labels).toEqual(['拒絕','僅允許一次']);
+    expect(requests.some(r=>r.method==='POST'&&r.path.includes('/approvals/'))).toBe(false);
+    const deny=[...card.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes('拒絕'))!;
+    await act(async()=>{deny.click();await Promise.resolve();});
+    const sent=requests.filter(r=>r.method==='POST'&&r.path.includes('/approvals/'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].path).toContain(`/sessions/${sessionId}/approvals/${approvalId}`);
+    expect(sent[0].data).toEqual({decision:'deny'});
+  });
 });

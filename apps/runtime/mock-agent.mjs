@@ -27,7 +27,11 @@ app.onRequest(acp.methods.agent.session.prompt, async ctx => {
   if (/approval/i.test(question)) {
     const response = await ctx.client.request(acp.methods.client.session.requestPermission, {
       sessionId,
-      toolCall: { toolCallId: randomUUID(), title: 'Mock read-only approval request', kind: 'read', status: 'pending' },
+      toolCall: {
+        toolCallId: randomUUID(), title: 'Mock read-only approval request', kind: 'read', status: 'pending',
+        rawInput: { path: 'README.md', api_key: 'mock-value-that-must-be-redacted' },
+        locations: [{ path: 'README.md' }],
+      },
       options: [
         { optionId: 'allow-once', name: 'Allow Once', kind: 'allow_once' },
         { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
@@ -36,7 +40,10 @@ app.onRequest(acp.methods.agent.session.prompt, async ctx => {
     await ctx.client.notify(acp.methods.client.session.update, {
       sessionId,
       update: { sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: response.outcome.outcome === 'selected' ? 'Approved in mock. No real tool executed.' : 'Mock permission was denied.' } },
+        // Only the explicit allow option counts as approval; a selected reject option is a denial.
+        content: { type: 'text', text: response.outcome.outcome === 'selected' && response.outcome.optionId === 'allow-once'
+          ? 'Approved in mock. No real tool executed.'
+          : `Mock permission was denied (${response.outcome.outcome === 'selected' ? response.outcome.optionId : response.outcome.outcome}).` } },
     });
   }
   return { stopReason: session.cancelled ? 'cancelled' : 'end_turn' };
