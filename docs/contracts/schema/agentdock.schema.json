@@ -154,7 +154,7 @@
         "detail": { "$ref": "#/$defs/RedactedText" },
         "retry_hint": { "$ref": "#/$defs/RetryHint" },
         "auto_resume_armed": {
-          "description": "True only when the reason is quota_exhausted or rate_limited, the task's auto_resume_policy opts in, and retry_hint has a not_before time. Never true after a crash.",
+          "description": "True only when the reason is quota_exhausted or rate_limited, the task's auto_resume_policy opts in, and retry_hint has a not_before time. Never true on an interruption written by crash recovery (reason host_crashed); an interruption that was already armed before the crash is not touched by recovery.",
           "type": "boolean"
         },
         "summary_id": { "$ref": "#/$defs/SummaryId" },
@@ -416,7 +416,7 @@
     "CheckOrigin": { "type": "string", "enum": ["local", "ci"] },
 
     "UsageSource": {
-      "description": "provider_reported: a number the agent or provider gave us; locally_estimated: AgentDock computed it (estimator required); unknown: no number exists.",
+      "description": "provider_reported: a number the agent or provider gave us; locally_estimated: AgentDock computed it (estimator required); unknown: no number exists. The UX source tags Not applicable and Sign-in needed are not values of this enum: they are derived (see ADR-0003 section 7).",
       "type": "string",
       "enum": ["provider_reported", "locally_estimated", "unknown"]
     },
@@ -958,7 +958,7 @@
       "properties": { "by": { "type": "string", "enum": ["user", "auto"] } }
     },
     "SessionUnarchivedPayload": {
-      "description": "user: Undo or Unarchive (sets restored_by_user; never auto-archived again). system: the archived session entered a waiting state (needs reply) and is unarchived in the same transaction.",
+      "description": "user: Undo or Unarchive (sets restored_by_user; never auto-archived again). system: the archived session entered a waiting state (needs reply) and is unarchived in the same transaction, by the orchestrator, or by the recovery actor while crash recovery is in progress.",
       "type": "object",
       "additionalProperties": false,
       "required": ["by"],

@@ -269,6 +269,8 @@ RECOVERY_WRITES = {
     "session.state_changed": lambda p: p.get("to") == "disconnected" and p.get("trigger") == "host_recovery",
     "task.state_changed": lambda p: p.get("to") == "interrupted"
     and (p.get("interruption") or {}).get("reason") == "host_crashed",
+    # An archived session that a recovery event made wait is unarchived in that same transaction (UX-47).
+    "session.unarchived": lambda p: p.get("by") == "system",
     "system.recovery_started": lambda p: True,
     "system.recovery_completed": lambda p: True,
 }
@@ -369,7 +371,8 @@ class Replay:
             if allowed is None or not ("tombstone" in ev or allowed(ev["payload"])):
                 self.err(ev, "the recovery actor may only invalidate approvals, mark started operations/running checks "
                              "outcome_unknown{host_crash}, abandon recorded operations (host_recovery), disconnect "
-                             "sessions (host_recovery) and interrupt tasks (host_crashed)")
+                             "sessions (host_recovery), interrupt tasks (host_crashed) and unarchive (by: system) an "
+                             "archived session that these events made wait")
             elif self.recovery is None and ev["type"] != "system.recovery_started":
                 self.err(ev, "recovery-actor events are only written between system.recovery_started and "
                              "system.recovery_completed")
@@ -698,9 +701,16 @@ class Replay:
             a = self.approvals.get(p["approval_id"])
             if not a or a["state"] != "pending" or a["source"] != "acp_permission":
                 self.err(ev, "ACP permission must be recorded as a pending approval first")
+            elif a["session_id"] != ev["session_id"]:
+                self.err(ev, "permission_requested must name an approval of this session")
             s["waiting_approval"] = p["approval_id"]
         if p["trigger"] == "permission_resolved" and p.get("approval_id") != s["waiting_approval"]:
             self.err(ev, "permission_resolved must name the approval the session is waiting on")
+        if edge["id"] in ("S09", "S14"):
+            for other_id, other in self.approvals.items():
+                if other["session_id"] == ev["session_id"] and other["state"] == "pending":
+                    self.err(ev, f"{edge['id']}: approval {other_id} of this session is still pending (the adapter "
+                                 f"forwards one permission request of a session at a time)")
         if p["trigger"] == "reattach_attempt":
             s["launch_method"], s["launch_seq"] = p["launch_method"], ev["seq"]
         if to == "idle" and frm == "starting" and p.get("external_session_id"):
@@ -798,8 +808,10 @@ class Replay:
                 self.err(ev, "unarchived by 'user' must have a user actor")
             s["restored"] = True
         else:
-            if ev["actor"]["kind"] != "orchestrator":
-                self.err(ev, "a system unarchive is written by the orchestrator")
+            writer = "recovery" if self.recovery is not None else "orchestrator"
+            if ev["actor"]["kind"] != writer:
+                self.err(ev, "a system unarchive is written by the orchestrator, or by the recovery actor while "
+                             "recovery is in progress")
             if sid not in self._waiting_sessions():
                 self.err(ev, "a system unarchive happens only when the archived session is waiting for the user")
         s["archived"] = None
@@ -870,11 +882,19 @@ class Replay:
                                "expires_at": p.get("expires_at"),
                                "options": {o["option_id"]: o["kind"] for o in p.get("acp", {}).get("options", [])}}
 
+    def routed(self, ev, entity, what):
+        """The envelope's task_id (and session_id, for an approval) must be the ones of the entity the payload names."""
+        if ev.get("task_id") != entity["task_id"]:
+            self.err(ev, f"task_id of the event is not the task of the {what} it names")
+        elif what == "approval" and ev.get("session_id") != entity["session_id"]:
+            self.err(ev, "session_id of the event is not the session of the approval it names")
+
     def approval_resolved(self, ev, p):
         aid = p["approval_id"]
         a = self.approvals.get(aid)
         if a is None:
             return self.err(ev, "unknown approval")
+        self.routed(ev, a, "approval")
         state, actor = p["state"], ev["actor"]["kind"]
         unused_grant = (a["state"] == "approved" and a["source"] == "host_policy" and state == "invalidated"
                         and aid not in self.consumed_approvals)
@@ -920,6 +940,8 @@ class Replay:
         if oid in self.operations:
             return self.err(ev, "operation already recorded")
         tid = ev["task_id"]
+        if ev["actor"]["kind"] != "orchestrator":
+            self.err(ev, f"operation.recorded is written by the orchestrator, not {ev['actor']['kind']}")
         st = self.tasks[tid]["state"]
         if st not in OP_STATES[p["kind"]]:
             self.err(ev, f"cannot record {p['kind']} while task is {st}")
@@ -959,6 +981,7 @@ class Replay:
         op = self.operations.get(p["operation_id"])
         if op is None:
             return self.err(ev, "operation must be recorded before it starts")
+        self.routed(ev, op, "operation")
         if op["state"] != "recorded":
             return self.err(ev, f"operation is {op['state']}; an operation id executes at most once")
         if ev["actor"]["kind"] == "recovery":
@@ -1000,6 +1023,7 @@ class Replay:
         op = self.operations.get(p["operation_id"])
         if op is None or op["state"] != "started":
             return self.err(ev, f"operation must be started to become {new_state}")
+        self.routed(ev, op, "operation")
         if new_state in ("succeeded", "failed") and ev["actor"]["kind"] not in RESULT_ACTORS:
             self.err(ev, f"operation.{new_state} is reported by the orchestrator or integration that ran it, "
                          f"not {ev['actor']['kind']}")
@@ -1020,6 +1044,7 @@ class Replay:
         op = self.operations.get(p["operation_id"])
         if op is None or op["state"] != "recorded":
             return self.err(ev, "only recorded (never started) operations can be abandoned")
+        self.routed(ev, op, "operation")
         actor, reason = ev["actor"]["kind"], p["reason"]
         if actor not in ("orchestrator", "policy", "user", "recovery"):
             self.err(ev, f"operations are not abandoned by {actor}")
@@ -1037,6 +1062,7 @@ class Replay:
         op = self.operations.get(p["operation_id"])
         if op is None or op["state"] != "outcome_unknown":
             return self.err(ev, "only outcome_unknown operations are reconciled")
+        self.routed(ev, op, "operation")
         if ev["actor"]["kind"] not in ("orchestrator", "integration", "user"):
             self.err(ev, "reconciliation is a live read-only probe, not part of recovery")
         if op["strategy"] == "none" and p["finding"] != "undeterminable":
@@ -1056,6 +1082,7 @@ class Replay:
         c = self.checks.get(p["check_id"])
         if c is None or c["state"] != "running":
             return self.err(ev, "check must be running")
+        self.routed(ev, c, "check")
         if p["state"] == "outcome_unknown" and ev["actor"]["kind"] != "recovery":
             self.err(ev, "outcome_unknown is assigned by crash recovery")
         elif p["state"] != "outcome_unknown" and ev["actor"]["kind"] not in RESULT_ACTORS:
@@ -2259,8 +2286,85 @@ def _m_r5_tombstone_between_wait_and_unarchive(ev):  # Y1b
 
 
 def _m_r5_session_resumes_on_other_approval(ev):  # adversarial H1: S14 names an approval it is not waiting on
-    i = _find(ev, "session.state_changed", lambda e: e["payload"]["trigger"] == "permission_resolved")
-    ev[i]["payload"]["approval_id"] = "apr_ZZZZZZZZZZZZZZZZZZZZZZZZ01"
+    # Fixture 13, task A: the same session asks twice. The second S14 names the first, already resolved, approval.
+    first = _find(ev, "session.state_changed", lambda e: e["payload"]["trigger"] == "permission_resolved")
+    sid = ev[first]["session_id"]
+    second = _find(ev, "session.state_changed", lambda e: e["payload"]["trigger"] == "permission_resolved"
+                   and e["session_id"] == sid, nth=1)
+    ev[second]["payload"]["approval_id"] = ev[first]["payload"]["approval_id"]
+    return ev
+
+
+def _recovery_unarchives(ev):
+    return [i for i, e in enumerate(ev) if e["type"] == "session.unarchived" and e["actor"]["kind"] == "recovery"]
+
+
+def _m_r6_orchestrator_unarchives_during_recovery(ev):  # inside the bracket only the recovery actor writes
+    i = _recovery_unarchives(ev)[0]
+    ev[i]["actor"], ev[i]["provenance"] = {"kind": "orchestrator"}, "live"
+    return ev
+
+
+def _m_r6_recovery_leaves_waiting_session_archived(ev):  # reviewer exp1 "none" and exp3
+    drop = set(_recovery_unarchives(ev))
+    return _renumber([e for i, e in enumerate(ev) if i not in drop])
+
+
+def _m_r6_unarchive_deferred_until_after_recovery(ev):  # reviewer exp1 "orchestrator_after"
+    i = _recovery_unarchives(ev)[0]
+    done = _next(ev, "system.recovery_completed", i)
+    e = ev.pop(i)
+    e["actor"], e["provenance"] = {"kind": "orchestrator"}, "live"
+    e["occurred_at"] = e["recorded_at"] = ev[done - 1]["recorded_at"]
+    ev.insert(done, e)
+    return _renumber(ev)
+
+
+def _m_r6_recovery_unarchives_as_user(ev):  # the whitelist admits only by: system
+    ev[_recovery_unarchives(ev)[0]]["payload"]["by"] = "user"
+    return ev
+
+
+def _m_r6_recovery_actor_unarchives_live(ev):  # outside recovery the orchestrator writes the system unarchive
+    i = _find(ev, "session.unarchived", lambda e: e["payload"]["by"] == "system" and e["actor"]["kind"] == "orchestrator")
+    ev[i]["actor"], ev[i]["provenance"] = {"kind": "recovery"}, "recovery"
+    return ev
+
+
+def _m_r6_permission_of_other_session(ev):  # S10 names an approval that belongs to another session of the task
+    i = _find(ev, "session.state_changed", lambda e: e["payload"]["trigger"] == "permission_requested")
+    aid, sid, tid = ev[i]["payload"]["approval_id"], ev[i]["session_id"], ev[i]["task_id"]
+    other = next(e["session_id"] for e in ev[:i] if e["type"] == "session.created" and e["task_id"] == tid
+                 and e["session_id"] != sid)
+    for e in ev:
+        if e["type"] in ("approval.requested", "approval.resolved") and e["payload"].get("approval_id") == aid:
+            e["session_id"] = other
+    return ev
+
+
+def _m_r6_session_leaves_with_second_pending_approval(ev):  # reviewer X1: two pending requests, one answer
+    # Fixture 13, task A: the second request is recorded before the first is answered (non-blocking, so the task-level
+    # "one blocking approval" rule is not what fires).
+    first = _find(ev, "session.state_changed", lambda e: e["payload"]["trigger"] == "permission_resolved")
+    sid = ev[first]["session_id"]
+    req = _find(ev, "approval.requested", lambda e: e.get("session_id") == sid, nth=1)
+    e = ev.pop(req)
+    e["payload"].pop("return_state", None)
+    e["occurred_at"] = e["recorded_at"] = ev[first - 2]["recorded_at"]
+    ev.insert(first - 1, e)
+    return _renumber(ev)
+
+
+def _m_r6_approval_resolved_routed_to_other_task(ev):  # reviewer X4
+    i = [k for k, e in enumerate(ev) if e["type"] == "approval.resolved" and "session_id" not in e][-1]
+    other = next(e for e in ev[:i] if e["type"] == "task.created" and e["task_id"] != ev[i]["task_id"])
+    ev[i]["task_id"], ev[i]["project_id"] = other["task_id"], other["project_id"]
+    return ev
+
+
+def _m_r6_adapter_records_operation(ev):
+    i = _find(ev, "operation.recorded")
+    ev[i]["actor"] = next(e["actor"] for e in ev if e["actor"]["kind"] == "adapter")
     return ev
 
 
@@ -2400,7 +2504,18 @@ MUTATIONS = [
     ("01-happy-path-pr.jsonl", _m_r5_push_after_checkpoint_without_worktree, "the latest task.checkpoint_recorded must carry a worktree"),
     ("deleting/12-session-edge-cases.jsonl", _m_r5_second_deletion_with_one_sidecar, "2 task.deleted events; a stream with a pre-deletion copy deletes exactly one task"),
     ("12-session-edge-cases.jsonl", _m_r5_tombstone_between_wait_and_unarchive, "must be written in the same transaction"),
-    ("01-happy-path-pr.jsonl", _m_r5_session_resumes_on_other_approval, "permission_resolved must name the approval the session is waiting on"),
+    ("13-crash-archived-sessions.jsonl", _m_r5_session_resumes_on_other_approval, "permission_resolved must name the approval the session is waiting on"),
+    ("13-crash-archived-sessions.jsonl", _m_r6_orchestrator_unarchives_during_recovery,
+     "only recovery-actor events may be written while recovery is in progress"),
+    ("13-crash-archived-sessions.jsonl", _m_r6_recovery_leaves_waiting_session_archived, "must be written in the same transaction"),
+    ("13-crash-archived-sessions.jsonl", _m_r6_unarchive_deferred_until_after_recovery, "must be written in the same transaction"),
+    ("13-crash-archived-sessions.jsonl", _m_r6_recovery_unarchives_as_user, "the recovery actor may only invalidate approvals"),
+    ("12-session-edge-cases.jsonl", _m_r6_recovery_actor_unarchives_live,
+     "recovery-actor events are only written between system.recovery_started and system.recovery_completed"),
+    ("13-crash-archived-sessions.jsonl", _m_r6_permission_of_other_session, "permission_requested must name an approval of this session"),
+    ("13-crash-archived-sessions.jsonl", _m_r6_session_leaves_with_second_pending_approval, "of this session is still pending"),
+    ("09-pr-ci-edges.jsonl", _m_r6_approval_resolved_routed_to_other_task, "task_id of the event is not the task of the approval it names"),
+    ("01-happy-path-pr.jsonl", _m_r6_adapter_records_operation, "operation.recorded is written by the orchestrator"),
     ("09-pr-ci-edges.jsonl", _m_r5_merge_bound_to_earlier_success, "pr_merge expected_sha must equal the PR head AgentDock last pushed"),
     ("08-review-loop-pause-children.jsonl", _m_r5_archive_idle_child, "manual archive of a child session is offered only when it is closed, failed, suspended or disconnected (session is idle)"),
 ]

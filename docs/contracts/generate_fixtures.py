@@ -1072,6 +1072,62 @@ def f12():
               att("background", "workflow_step", k)])
 
 
+def f13():
+    fx = Fx(13, "crash-archived-sessions", "Host crash while main sessions are archived: a cleanup operation of a "
+            "cancelled task is left outcome_unknown, and a resumed task loses its agent. In both cases a recovery event "
+            "makes the archived main session wait, so the recovery actor unarchives it in the same transaction. The "
+            "first task also shows one session asking for permission twice in a turn and a review sub-task.")
+    a = fx.task("A: cleanup crashes after the main session was archived")
+    pa = fx.drive_to(a, "running")
+    ca = fx.session(a, role="review", adapter_id="codex", parent=pa)
+    fx.ready(ca)
+    turn = fx.prompt(pa, "Rename the config keys.")
+    ap1 = fx.acp_permission(pa, turn, "Edit src/config.rs", "call-a1", classified="workspace_edit")
+    fx.resolve_acp(pa, ap1)
+    ap2 = fx.acp_permission(pa, turn, "Edit src/main.rs", "call-a2", classified="workspace_edit")
+    fx.resolve_acp(pa, ap2)
+    fx.end_turn(pa, turn)
+    fx.tr(a, "cancelled", "user_cancel", USER)
+    fx.close(ca, "cancelled")
+    fx.close(pa, "cancelled")
+    fx.ack_task(a)
+    oid, aid = fx.host_op(a, "worktree_remove", {"description": "remove the worktree of the cancelled task",
+                                                 "path": f"agentdock-{a[-4:]}"}, "path_exists_lookup", blocking=False)
+    fx.approve_op(a, aid, blocking=False)
+    fx.run_op(a, oid, aid)
+    fx.emit("session.archived", USER, {"by": "user"}, task=a, session=pa)  # nothing is waiting: the cleanup is running
+
+    b = fx.task("B: resumed after a rate-limit stop, main session still archived")
+    pb = fx.drive_to(b, "running")
+    turn = fx.prompt(pb, "Split the config module.")
+    fx.end_turn(pb, turn)
+    fx.sst(pb, "suspended", "task_interrupted", ORCH)
+    fx.interrupt(b, "rate_limited", adapter("claude-code"))
+    fx.ack_task(b)
+    fx.emit("session.archived", USER, {"by": "user"}, task=b, session=pb)
+    fx.tr(b, "queued", "resume_requested", USER, resume_phase="running")
+    fx.tr(b, "preparing", "scheduled")
+    fx.tr(b, "running", "session_ready")
+    fx.prompt(pb, "Continue the split.")
+
+    fx.emit("system.recovery_started", RECOV, {"previous_run_id": "run-13", "last_seq_before_crash": len(fx.events)})
+    # The unknown cleanup makes task A need a reply (reconcile_needed): its archived main session is waiting.
+    fx.emit("operation.outcome_unknown", RECOV, {"operation_id": oid, "cause": "host_crash"}, task=a)
+    fx.emit("session.unarchived", RECOV, {"by": "system"}, task=a, session=pa)
+    # Sessions first, tasks second (the order of checkpoint-and-replay.md): between the two events task B is running
+    # without an agent (session_unavailable), so its archived main session is waiting and is unarchived.
+    fx.sst(pb, "disconnected", "host_recovery", RECOV)
+    fx.emit("session.unarchived", RECOV, {"by": "system"}, task=b, session=pb)
+    fx.interrupt(b, "host_crashed", RECOV)
+    fx.emit("system.recovery_completed", RECOV, {"tasks_interrupted": [b], "sessions_disconnected": [pb],
+                                                 "approvals_invalidated": [], "operations_marked_unknown": [oid],
+                                                 "operations_abandoned": [], "checks_marked_unknown": []})
+    fx.write({a: "cancelled", b: "interrupted"}, {pa: "closed", ca: "closed", pb: "disconnected"},
+             [att("needs_reply", "reconcile_needed", a, ref=oid),
+              att("needs_review", "child_result_unviewed", a, ca),
+              att("needs_review", "interruption_needs_decision", b)])
+
+
 def samples():
     fx = Fx(99, "samples", "")
     prj, tsk, ses, child = fx.project, fx.id("tsk"), fx.id("ses"), fx.id("ses")
@@ -1134,6 +1190,6 @@ def samples():
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    for fn in (f01, f02, f03, f04, f05, f06, f07, f08, f09, f10, f11, f12, samples):
+    for fn in (f01, f02, f03, f04, f05, f06, f07, f08, f09, f10, f11, f12, f13, samples):
         fn()
     print(f"wrote fixtures to {OUT}")
