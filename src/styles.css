@@ -1430,12 +1430,16 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
 @media(max-width:760px){.live-sidebar{flex-basis:185px}.live-setup{padding:10px 8px}.live-main-header{padding:10px}.live-main-header h2{font-size:14px}.live-cwd{display:none}.live-notice{padding:9px 10px}.live-history{padding:12px}.live-composer{padding:12px}}
 @media(max-width:480px){.live-sidebar{flex-basis:140px}.live-setup select{font-size:10px}.live-actions button{padding:6px}.live-main-header{flex-wrap:wrap}.live-tabs{padding:0 3px}.live-tabs button{padding:10px 6px;font-size:10px}.live-compose-footer small{display:none}}
 
-/* Event-driven Live Session Sentinel. A dismiss is visibility-only, never an approval. */
+/* Event-driven Live Session Sentinel. "Mark reviewed" is visibility-only and never offered for approvals. */
 .live-sidebar>header{position:relative}
 .live-attention-anchor{position:relative;width:100%}
 .live-attention-bell{width:100%;display:flex;align-items:center;justify-content:flex-start;gap:9px;background:#304135;color:#d9ebd6;border:1px solid #4f6953;border-radius:8px;padding:9px 11px;font-size:11px;font-weight:650;text-align:left}
 .live-attention-bell:hover,.live-attention-bell[aria-expanded=true]{background:#3d533e}
-.live-attention-count{margin-left:auto;border-radius:15px;padding:2px 7px;font-size:10px;font-weight:800;background:#dfb781;color:#292316}
+.live-attention-count{margin-left:auto;border-radius:15px;padding:1px 7px;font-size:10px;font-weight:800;background:transparent;color:#e7d8bd;border:1.5px solid #dfb781}
+.live-attention-count.reply{border-radius:4px;background:#dfb781;color:#292316;border-color:#dfb781}
+.live-attention-bell.needs-reply{border-color:#dfb781;box-shadow:inset 3px 0 0 #dfb781}
+.live-attention-inbox:focus-visible{outline:2px solid #dfb781;outline-offset:2px}
+.live-attention-section-title.live-attention-section-reply{color:#f0cf9f}
 .live-attention-inbox{z-index:80;position:absolute;left:0;top:42px;width:min(390px,calc(100vw - 75px));max-height:min(75vh,660px);display:flex;flex-direction:column;overflow:hidden;background:#222d27;border:1px solid #526957;border-radius:12px;box-shadow:0 25px 65px #000a}
 .live-attention-inbox>header{display:flex;flex-direction:row;align-items:flex-start;justify-content:space-between;padding:16px 14px 12px;border-bottom:1px solid #3c503f}
 .live-attention-inbox>header>div{display:flex;flex-direction:column;gap:6px}
@@ -1448,17 +1452,18 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
 .live-attention-section-title span{background:#405544;border-radius:10px;padding:2px 7px;font-size:9px}
 .live-attention-empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:9px;padding:35px 12px;color:#b6c9b5;font-size:11px;text-align:center}
 .live-attention-card{position:relative;background:#2a3b30;border:1px solid #48624f;border-radius:9px;margin-bottom:9px}
-.live-attention-decision{background:#3a342b;border-color:#79634a}
+.live-attention-reply{background:#3a342b;border-color:#c79a5e;border-width:1.5px}
 .live-attention-review{background:#382e2c;border-color:#77514b}
 .live-attention-main{display:flex;gap:10px;text-align:left;width:100%;border:0;color:#e7eddf;background:transparent;padding:13px 32px 13px 10px}
 .live-attention-main:hover{background:#ffffff09}
 .live-attention-icon{width:25px;height:25px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:7px;background:#3e5843;color:#bfdaa8}
-.live-attention-decision .live-attention-icon{color:#ecc18f;background:#655138}
+.live-attention-reply .live-attention-icon{color:#ecc18f;background:#655138}
 .live-attention-review .live-attention-icon{color:#e9aaaa;background:#623e3e}
 .live-attention-copy{display:flex;flex-direction:column;gap:5px;min-width:0}
 .live-attention-copy strong{font-size:12px}
 .live-attention-copy small{font-size:10px;color:#a2b5a3}
+.live-attention-copy small b{font-weight:700;color:#e4ecdf}
 .live-attention-copy>span{font-size:11px;line-height:1.6;color:#d4e0d1}
 .live-attention-copy em{display:flex;align-items:center;gap:4px;color:#c7dca7;font-size:10px;font-style:normal;line-height:1.5}
-.live-attention-dismiss{position:absolute;right:6px;top:8px;border:0;background:transparent;color:#b2c3b3;display:flex;align-items:center;padding:4px;border-radius:5px}
-.live-attention-dismiss:hover{background:#526251}
+.live-attention-reviewed{position:absolute;right:6px;top:8px;border:0;background:transparent;color:#b2c3b3;display:flex;align-items:center;padding:4px;border-radius:5px}
+.live-attention-reviewed:hover{background:#526251}
