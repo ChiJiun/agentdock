@@ -1,8 +1,11 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createRuntimeServer } from './server.mjs';
+import { DEFAULT_MOCK } from './adapters.mjs';
 import { GitHubEvidenceError, GitHubReader, parseGithubRemote } from './github-reader.mjs';
 
 const READ_ONLY_PREFIX = ['api','--method','GET','--hostname','github.com','-H','Accept: application/vnd.github+json'];
@@ -48,6 +51,7 @@ describe('read-only GitHub evidence (no writes)', () => {
     assert.equal(parseGithubRemote('https://github.com/ChiJiun/agentdock.git?token=x'),null);
     assert.equal(parseGithubRemote('https://user:token@github.com/ChiJiun/agentdock.git'),null);
     assert.equal(parseGithubRemote('https://github.com.evil.test/ChiJiun/agentdock'),null);
+    assert.equal(parseGithubRemote('https://github.com/ChiJiun/agentdock.git/').fullName,'ChiJiun/agentdock');
   });
   test('fetches Issues separately from PRs, with fixed read-only endpoint paths', async () => {
     const f=sampleRepo();
@@ -102,15 +106,24 @@ describe('read-only GitHub evidence (no writes)', () => {
   test('gh cannot be redirected to another host or repository by environment', async () => {
     const f=sampleRepo();
     const seen=[];
-    const saved={GH_HOST:process.env.GH_HOST,GH_REPO:process.env.GH_REPO};
+    const names=['GH_HOST','GH_REPO','GH_TOKEN','GIT_DIR','GIT_WORK_TREE','GIT_CONFIG_COUNT'];
+    const saved=Object.fromEntries(names.map(k=>[k,process.env[k]]));
     process.env.GH_HOST='evil.example';
     process.env.GH_REPO='someone/else';
+    process.env.GH_TOKEN='test-token-not-real';
+    process.env.GIT_WORK_TREE='/elsewhere';
+    process.env.GIT_CONFIG_COUNT='0';
     try {
       const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec(seen)});
       await reader.issues(f.dir);
+      assert.ok(seen.some(x=>x.program==='git')&&seen.some(x=>x.program==='fake-gh'));
       for (const entry of seen) {
         assert.equal(entry.opts.env.GH_HOST,undefined);
         assert.equal(entry.opts.env.GH_REPO,undefined);
+        assert.equal(entry.opts.env.GIT_WORK_TREE,undefined);
+        assert.equal(entry.opts.env.GIT_CONFIG_COUNT,undefined);
+        // Only gh may see its token; git subprocesses never get it.
+        assert.equal(entry.opts.env.GH_TOKEN,entry.program==='git'?undefined:'test-token-not-real');
         assert.equal(entry.opts.env.GH_PROMPT_DISABLED,'1');
         assert.equal(entry.opts.windowsHide,true);
         assert.ok(entry.opts.timeout>0);
@@ -147,5 +160,37 @@ describe('read-only GitHub evidence (no writes)', () => {
       await assert.rejects(reader.issues(resolve('/')),/outside/);
       await assert.rejects(reader.issues('relative'),/absolute/);
     } finally {f.close();}
+  });
+  test('/api/github refreshes approved roots, so a worktree swapped for a link is rejected before any process runs', async () => {
+    const root=realpathSync(mkdtempSync(join(tmpdir(),'agentdock gh 測試-')));
+    const repo=join(root,'src repo'), outside=join(root,'outside repo');
+    mkdirSync(repo,{recursive:true}); mkdirSync(outside,{recursive:true});
+    for (const dir of [repo,outside]) {
+      execFileSync('git',['-C',dir,'init','-b','main'],{stdio:'ignore'});
+      execFileSync('git',['-C',dir,'remote','add','origin','git@github.com:ChiJiun/agentdock.git'],{stdio:'ignore'});
+    }
+    writeFileSync(join(repo,'README.md'),'fixture\n');
+    execFileSync('git',['-C',repo,'add','README.md']);
+    execFileSync('git',['-C',repo,'-c','user.name=AgentDock Test','-c','user.email=test@example.invalid','commit','-m','fixture'],{stdio:'ignore'});
+    const options={roots:[repo],dbPath:join(root,'store.db'),adapters:[DEFAULT_MOCK],worktreeRoot:join(root,'isolated')};
+    const first=createRuntimeServer(options);
+    const item=await first.worktrees.create({repoPath:repo});
+    await first.close();
+    // A restarted runtime trusts the registered worktree: it is in the shared roots array.
+    const server=createRuntimeServer(options);
+    try {
+      assert.ok(server.allowedRoots.includes(item.path));
+      renameSync(item.path,item.path+'-moved');
+      symlinkSync(outside,item.path,process.platform==='win32'?'junction':'dir');
+      // The stale root is still in the array until some request refreshes it.
+      assert.ok(server.allowedRoots.includes(item.path));
+      const url=`http://127.0.0.1:${(await server.listen(0)).port}`;
+      const response=await fetch(`${url}/api/github/issues?cwd=${encodeURIComponent(item.path)}`);
+      assert.equal(response.status,400);
+      assert.match((await response.json()).error,/outside approved roots/);
+    } finally {
+      await server.close();
+      rmSync(root,{recursive:true,force:true});
+    }
   });
 });

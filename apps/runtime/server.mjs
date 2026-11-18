@@ -75,7 +75,7 @@ export function createRuntimeServer({
       }
       if (method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true, mode: 'local-development', protocol: 'ACP v1', storage: 'sqlite' });
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
-      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/')) refreshRoots();
+      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/') || pathname.startsWith('/api/github/')) refreshRoots();
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
       if (method === 'GET' && pathname === '/api/worktrees') return json(response, 200, worktrees.list());
       if (method === 'POST' && pathname === '/api/worktrees') {

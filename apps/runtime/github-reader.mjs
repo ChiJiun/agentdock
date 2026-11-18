@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { ensureInside } from './adapters.mjs';
+import { childEnvironment, ensureInside } from './adapters.mjs';
 
 const REPO = /^[a-zA-Z0-9_.-]{1,100}$/;
 const SHA = /^[a-f0-9]{40}$/;
@@ -12,8 +12,12 @@ const GIT_TIMEOUT = 15_000;
 // Issue/PR list responses include full bodies and repository objects; 30 open PRs measured
 // at roughly 20 KB each, so a 256 KB cap failed on a real repository. Keep a hard upper bound.
 const MAX_BUFFER = 8 * 1024 * 1024;
-// Strip variables that could redirect `gh` to another host or repository than the parsed origin.
-const STRIPPED_ENV = ['GH_HOST', 'GH_REPO', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
+// Child processes get an allow-listed environment (never the whole process.env). Git never sees
+// GH tokens or GIT_DIR / GIT_WORK_TREE; `gh` gets only its auth, config and proxy variables, so
+// GH_HOST / GH_REPO / enterprise tokens cannot redirect it away from the parsed github.com origin.
+const GIT_ENV = ['ProgramData', 'XDG_CONFIG_HOME'];
+const GH_ENV = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'XDG_CONFIG_HOME', 'ProgramData',
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR'];
 
 /** Errors whose message is safe to show the operator (never contains gh stderr or tokens). */
 export class GitHubEvidenceError extends Error {
@@ -36,7 +40,7 @@ export function parseGithubRemote(remote) {
   else if (remote.startsWith('git@github.com:')) name = remote.slice('git@github.com:'.length);
   else if (remote.startsWith('ssh://git@github.com/')) name = remote.slice('ssh://git@github.com/'.length);
   else return null;
-  name = name.replace(/\.git$/, '').replace(/\/$/,'');
+  name = name.replace(/\/$/, '').replace(/\.git$/, '');
   const [owner,repo,...extra]=name.split('/');
   if (extra.length || !REPO.test(owner||'') || !REPO.test(repo||'')) return null;
   if (owner === '.' || repo === '.' || owner === '..' || repo === '..') return null;
@@ -63,16 +67,21 @@ export class GitHubReader {
     this.exec = exec;
   }
   async run(program, args, cwd, timeout) {
-    const env = { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', GH_NO_UPDATE_NOTIFIER: '1' };
-    for (const key of STRIPPED_ENV) delete env[key];
+    const isGit = program === 'git';
+    const env = {
+      ...childEnvironment(isGit ? GIT_ENV : GH_ENV),
+      GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1',
+    };
     try {
       const output = await this.exec(program, args, {
         cwd, encoding:'utf8', timeout, maxBuffer:MAX_BUFFER, windowsHide:true, env,
       });
       return String(output).trim();
     } catch {
-      // Never surface gh stderr; it may expose config, paths or credentials.
-      throw new GitHubEvidenceError(502, 'read-only GitHub CLI request failed (check gh login, network and repository permissions)');
+      // Never surface stderr; it may expose config, paths or credentials.
+      throw new GitHubEvidenceError(502, isGit
+        ? 'could not read the Git repository for this workspace'
+        : 'read-only GitHub CLI request failed (check gh login, network and repository permissions)');
     }
   }
   async identify(candidate) {
