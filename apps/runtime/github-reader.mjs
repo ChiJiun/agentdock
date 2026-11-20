@@ -5,6 +5,8 @@ import { childEnvironment, ensureInside } from './adapters.mjs';
 const REPO = /^[a-zA-Z0-9_.-]{1,100}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const PAGE = 30;
+const API_PAGE = 100;
+const MAX_PAGES = 5; // Explicit upper bound; incomplete evidence is never promoted to success.
 // Network-bound: on a congested link single responses took 30-100 s in local measurements, so
 // the request runs asynchronously (never blocking the ACP event loop) with a bounded timeout.
 const GH_TIMEOUT = 60_000;
@@ -102,16 +104,20 @@ export class GitHubReader {
   }
   async issues(candidate) {
     const repo = await this.identify(candidate);
-    const rows = await this.fetchJson(`repos/${repo.fullName}/issues?state=open&per_page=${PAGE}`,repo.root);
-    if (!Array.isArray(rows)) throw new GitHubEvidenceError(502, 'Unexpected GitHub response');
-    return {
-      repo: repo.fullName,
-      // The Issues endpoint also returns PRs; a full page means more results may exist.
-      truncated: rows.length >= PAGE,
-      items: rows.filter(x=>!x.pull_request).slice(0,PAGE).map(x=>({
+    const issues = [];
+    let truncated = true;
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const rows = await this.fetchJson(`repos/${repo.fullName}/issues?state=open&per_page=${API_PAGE}&page=${page}`,repo.root);
+      if (!Array.isArray(rows)) throw new GitHubEvidenceError(502, 'Unexpected GitHub issue response');
+      // GitHub's Issues API includes PRs. Continue paging after filtering;
+      // 100 open PRs must not masquerade as an empty issue tracker.
+      issues.push(...rows.filter(x => !x.pull_request).map(x => ({
         number:Number(x.number),title:text(x.title,200),url:safeGithubLink(x.html_url),state:word(x.state)??'unknown',
-      })),
-    };
+      })));
+      if (rows.length < API_PAGE) { truncated = issues.length > PAGE; break; }
+      if (issues.length >= PAGE) break;
+    }
+    return { repo: repo.fullName, truncated, items: issues.slice(0,PAGE) };
   }
   async pulls(candidate) {
     const repo = await this.identify(candidate);
@@ -132,16 +138,49 @@ export class GitHubReader {
   async checks(candidate, sha) {
     if (typeof sha !== 'string' || !SHA.test(sha)) throw new GitHubEvidenceError(400, 'invalid commit SHA');
     const repo = await this.identify(candidate);
-    const row = await this.fetchJson(`repos/${repo.fullName}/commits/${sha}/check-runs?per_page=${PAGE}`,repo.root);
-    if (!row || !Array.isArray(row.check_runs)) throw new GitHubEvidenceError(502, 'Unexpected GitHub check response');
-    const total = Number.isInteger(row.total_count) ? row.total_count : row.check_runs.length;
-    return {
-      repo: repo.fullName, sha, total,
-      truncated: total > row.check_runs.length,
-      items: row.check_runs.slice(0,PAGE).map(x=>({
+    const items = [];
+    let total = null;
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const row = await this.fetchJson(`repos/${repo.fullName}/commits/${sha}/check-runs?per_page=${API_PAGE}&page=${page}`, repo.root);
+      if (!row || !Array.isArray(row.check_runs) || !Number.isSafeInteger(row.total_count)
+          || row.total_count < 0 || row.check_runs.length > API_PAGE) {
+        throw new GitHubEvidenceError(502, 'Unexpected GitHub check response');
+      }
+      if (total !== null && row.total_count !== total) {
+        throw new GitHubEvidenceError(502, 'GitHub checks changed during pagination; refresh required');
+      }
+      total = row.total_count;
+      items.push(...row.check_runs.map(x => ({
         id:Number(x.id),name:text(x.name,150),status:word(x.status)??'unknown',
         conclusion:word(x.conclusion),url:safeGithubLink(x.html_url),
-      })),
+      })));
+      if (items.length >= total || row.check_runs.length < API_PAGE) break;
+    }
+    const checkRunsComplete = items.length === total;
+    // Legacy commit status contexts are independent of Checks API. GitHub's
+    // combined endpoint includes the most recent status for each context.
+    // Treat >=100 returned contexts conservatively as potentially incomplete.
+    const combined = await this.fetchJson(`repos/${repo.fullName}/commits/${sha}/status?per_page=${API_PAGE}`,repo.root);
+    if (!combined || !Array.isArray(combined.statuses) || !['success','failure','pending','error'].includes(combined.state)
+        || combined.statuses.length > API_PAGE) {
+      throw new GitHubEvidenceError(502, 'Unexpected GitHub commit status response');
+    }
+    const statuses = combined.statuses.map(x => ({
+      context:text(x.context,150),state:word(x.state)??'unknown',url:safeGithubLink(x.target_url),
+    }));
+    const complete = checkRunsComplete && statuses.length < API_PAGE;
+    const bad = items.some(x => ['failure','cancelled','timed_out','action_required','startup_failure','stale'].includes(x.conclusion))
+      || combined.state === 'failure' || combined.state === 'error'
+      || statuses.some(x => ['failure','error'].includes(x.state));
+    const pending = items.some(x => x.status !== 'completed' || !['success','skipped','neutral'].includes(x.conclusion))
+      || combined.state === 'pending' || statuses.some(x => x.state === 'pending');
+    // No checks AND no status contexts is absence of evidence, not a green build.
+    const verdict = !complete ? 'unknown' : bad ? 'failure' : pending ? 'pending'
+      : (items.length || statuses.length) ? 'success' : 'unknown';
+    return {
+      repo:repo.fullName, sha, total, truncated:!complete, complete,
+      sources:['check_runs','commit_status'], verdict,
+      statusState:combined.state, statuses, items,
     };
   }
 }

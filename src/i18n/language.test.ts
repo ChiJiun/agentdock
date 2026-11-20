@@ -68,4 +68,32 @@ describe('end-to-end language preferences (host-owned, no adapter attached)', ()
     expect(t('en-US', 'monitor.group.decision')).toBe('Needs your decision');
     expect(t('zh-TW', 'header.notifications', { count: 2 })).toContain('2');
   });
+  it('really skips an own __proto__ key from parsed JSON and keeps the newest 200 overrides', () => {
+    const polluted = JSON.parse('{"version":1,"projects":{"__proto__":{"workflowLocale":"en-US"},"ok":{"workflowLocale":"en-US"}}}') as unknown;
+    const parsed = parseSettings(polluted);
+    expect(Object.keys(parsed.projects)).toEqual(['ok']);
+    expect(({} as { workflowLocale?: string }).workflowLocale).toBeUndefined();
+
+    const sessions = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [`s${i}`, { workflowLocale: 'en-US' }]));
+    const kept = parseSettings({ version: 1, sessions }).sessions;
+    expect(Object.keys(kept)).toHaveLength(200);
+    expect(kept.s204).toBeDefined();
+    expect(kept.s0).toBeUndefined();
+  });
+
+  it('resolves artifact preferences independently of workflow language across scopes', () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.global.artifactLocale = 'en-US';
+    settings.projects.alpha = { artifactLocale: 'zh-TW', workflowLocale: 'en-US' };
+    settings.sessions.one = { workflowLocale: 'en-US' };
+    const scope = { projectId: 'alpha', sessionId: 'one' };
+    expect(resolveLocale(settings, 'documentation', scope)).toBe('zh-TW');
+    expect(resolveLocale(settings, 'plan', scope)).toBe('en-US');
+    expect(resolveLocale(settings, 'commitMessage', scope)).toBe('zh-TW');
+    expect(resolveLocale(settings, 'commitMessage', { sessionId: 'one' })).toBe('en-US');
+    expect(resolveLocale(settings, 'documentation', { sessionId: 'one' })).toBe('en-US');
+    settings.sessions.one = { workflowLocale: 'en-US', outputs: { documentation: 'en-US' } };
+    expect(resolveLocale(settings, 'documentation', scope)).toBe('en-US');
+    expect(resolveLocale(settings, 'codeComments', scope)).toBe('preserve-original');
+  });
 });

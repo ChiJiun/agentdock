@@ -17,7 +17,14 @@ function sampleRepo() {
   execFileSync('git',['-C',dir,'remote','add','origin','git@github.com:ChiJiun/agentdock.git'],{stdio:'ignore'});
   return { dir,close:()=>rmSync(dir,{recursive:true,force:true}) };
 }
-function fakeGh(url, { pullCount = 1, checkTotal } = {}) {
+function fakeGh(url, { pullCount = 1, checkTotal, legacyState = 'success', issueCrowding = false, failChecksPage = 0 } = {}) {
+  const page = Number(new URLSearchParams(url.split('?')[1] || '').get('page') || '1');
+  if (url.includes('/issues?') && issueCrowding) {
+    if (page === 1) return JSON.stringify(Array.from({ length: 100 }, (_, i) => ({
+      number: i+1, pull_request: {}, title: 'PR in issues', state: 'open',
+    })));
+    return JSON.stringify([{ number: 202, title: 'Real issue on page 2', state: 'open' }]);
+  }
   if (url.includes('/issues?')) return JSON.stringify([
     {number:7,title:'Feature:\ntest',html_url:'https://github.com/ChiJiun/agentdock/issues/7',state:'open'},
     {number:8,title:'A PR in issues endpoint',pull_request:{url:'some'},html_url:'https://github.com/ChiJiun/agentdock/pull/8',state:'open'},
@@ -26,9 +33,18 @@ function fakeGh(url, { pullCount = 1, checkTotal } = {}) {
     number:11+i,title:'Open PR',html_url:i===0?'https://github.com/ChiJiun/agentdock/pull/11':'javascript:alert(1)',draft:false,state:'open',
     head:{sha:i===0?'a'.repeat(40):'not-a-sha'},
   })));
-  if (url.includes('/check-runs?')) return JSON.stringify({total_count:checkTotal ?? 1,check_runs:[
-    {id:17,name:'unit tests',status:'completed',conclusion:'success',html_url:'https://github.com/ChiJiun/agentdock/actions/runs/999'},
-  ]});
+  if (url.includes('/check-runs?')) {
+    if (page === failChecksPage) throw new Error('simulated failed pagination');
+    const total = checkTotal ?? 1;
+    return JSON.stringify({total_count:total,check_runs:Array.from({
+      length: Math.max(0, Math.min(100, total - (page - 1) * 100)),
+    },(_,i)=>({ id: (page-1)*100+i+17, name:'unit tests',status:'completed',
+      conclusion:'success',html_url:'https://github.com/ChiJiun/agentdock/actions/runs/999' }))});
+  }
+  if (url.includes('/status?')) return JSON.stringify({
+    state: legacyState, statuses:[{context:'legacy/build',state:legacyState === 'failure'?'failure':'success',
+      target_url:'https://github.com/ChiJiun/agentdock/actions/runs/999'}],
+  });
   throw new Error('unknown fake URL');
 }
 function makeExec(seen, options) {
@@ -71,7 +87,7 @@ describe('read-only GitHub evidence (no writes)', () => {
       const gh=seen.filter(x=>x.program==='fake-gh');
       assert.deepEqual(gh.map(x=>x.args.slice(0,-1)),[READ_ONLY_PREFIX,READ_ONLY_PREFIX]);
       assert.deepEqual(gh.map(x=>x.args.at(-1)),[
-        'repos/ChiJiun/agentdock/issues?state=open&per_page=30',
+        'repos/ChiJiun/agentdock/issues?state=open&per_page=100&page=1',
         'repos/ChiJiun/agentdock/pulls?state=open&per_page=30',
       ]);
     } finally {f.close();}
@@ -79,11 +95,14 @@ describe('read-only GitHub evidence (no writes)', () => {
   test('a full page is reported as truncated instead of complete', async () => {
     const f=sampleRepo();
     try {
-      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec([],{pullCount:30,checkTotal:45})});
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',exec:makeExec([],{pullCount:30,checkTotal:501})});
       assert.equal((await reader.pulls(f.dir)).truncated,true);
       const checks=await reader.checks(f.dir,'a'.repeat(40));
-      assert.equal(checks.total,45);
+      assert.equal(checks.total,501);
+      assert.equal(checks.items.length,500);
       assert.equal(checks.truncated,true);
+      assert.equal(checks.complete,false);
+      assert.equal(checks.verdict,'unknown');
     } finally {f.close();}
   });
   test('checks require full SHA and never invoke remote writes', async () => {
@@ -99,8 +118,54 @@ describe('read-only GitHub evidence (no writes)', () => {
       assert.equal(checks.items[0].conclusion,'success');
       assert.equal(checks.truncated,false);
       const gh=seen.filter(x=>x.program==='fake-gh');
-      assert.equal(gh.length,1);
-      assert.deepEqual(gh[0].args,[...READ_ONLY_PREFIX,`repos/ChiJiun/agentdock/commits/${'a'.repeat(40)}/check-runs?per_page=30`]);
+      assert.equal(gh.length,2);
+      assert.deepEqual(gh.map(x=>x.args),[
+        [...READ_ONLY_PREFIX,`repos/ChiJiun/agentdock/commits/${'a'.repeat(40)}/check-runs?per_page=100&page=1`],
+        [...READ_ONLY_PREFIX,`repos/ChiJiun/agentdock/commits/${'a'.repeat(40)}/status?per_page=100`],
+      ]);
+    } finally {f.close();}
+  });
+  test('paginates more than 30 check runs and reports a failing legacy status', async () => {
+    const f=sampleRepo();
+    const seen=[];
+    try {
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',
+        exec:makeExec(seen,{checkTotal:135,legacyState:'failure'})});
+      const result=await reader.checks(f.dir,'a'.repeat(40));
+      assert.equal(result.items.length,135);
+      assert.equal(result.total,135);
+      assert.equal(result.complete,true);
+      assert.equal(result.truncated,false);
+      assert.equal(result.verdict,'failure');
+      assert.deepEqual(result.sources,['check_runs','commit_status']);
+      assert.deepEqual(result.statuses.map(x=>[x.context,x.state]),[['legacy/build','failure']]);
+      const paths=seen.filter(x=>x.program==='fake-gh').map(x=>x.args.at(-1));
+      assert.equal(paths.length,3);
+      assert.match(paths[1],/check-runs\?per_page=100&page=2$/);
+      assert.match(paths[2],/\/status\?per_page=100$/);
+    } finally {f.close();}
+  });
+  test('pages past 100 pull requests in the Issues endpoint to find actual Issues', async () => {
+    const f=sampleRepo();
+    const seen=[];
+    try {
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',
+        exec:makeExec(seen,{issueCrowding:true})});
+      const result=await reader.issues(f.dir);
+      assert.deepEqual(result.items.map(x=>x.number),[202]);
+      assert.equal(result.truncated,false);
+      assert.equal(seen.filter(x=>x.program==='fake-gh').length,2);
+    } finally {f.close();}
+  });
+  test('a failing later check page returns an error, never a partial green result', async () => {
+    const f=sampleRepo();
+    const seen=[];
+    try {
+      const reader=new GitHubReader({roots:[f.dir],ghBin:'fake-gh',
+        exec:makeExec(seen,{checkTotal:135,failChecksPage:2})});
+      await assert.rejects(reader.checks(f.dir,'a'.repeat(40)),
+        e=>e instanceof GitHubEvidenceError && e.status===502 && !e.message.includes('simulated'));
+      assert.equal(seen.filter(x=>x.program==='fake-gh').length,2);
     } finally {f.close();}
   });
   test('gh cannot be redirected to another host or repository by environment', async () => {
