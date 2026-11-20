@@ -83,7 +83,8 @@ function cursor(value) {
 }
 function parse(row) {
   if (!row) return null;
-  return { ...row, issue_number: row.issue_number == null ? null : Number(row.issue_number) };
+  return { ...row, issue_number: row.issue_number == null ? null : Number(row.issue_number),
+    verification: 'operator_attested', merge_ready: false };
 }
 
 export class TaskWorkflow {
@@ -112,6 +113,7 @@ export class TaskWorkflow {
         created_at TEXT NOT NULL,
         commit_sha TEXT,
         transition_seq INTEGER,
+        provenance TEXT NOT NULL DEFAULT 'operator_attested',
         FOREIGN KEY(task_id) REFERENCES coding_tasks(id)
       );
       CREATE TABLE IF NOT EXISTS task_transitions (
@@ -130,6 +132,7 @@ export class TaskWorkflow {
     // old evidence rows keep transition_seq NULL and therefore never satisfy a gate.
     this.#addColumn('task_evidence', 'commit_sha', 'TEXT');
     this.#addColumn('task_evidence', 'transition_seq', 'INTEGER');
+    this.#addColumn('task_evidence', 'provenance', "TEXT NOT NULL DEFAULT 'operator_attested'");
     this.#addColumn('task_transitions', 'revision', 'INTEGER');
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS task_evidence_idx ON task_evidence(task_id,kind,created_at);
