@@ -8,6 +8,7 @@ import { ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
 import { WorktreeError, WorktreeManager, defaultWorktreeRoot } from './worktrees.mjs';
+import { GitHubEvidenceError, GitHubReader } from './github-reader.mjs';
 
 const MAX_ATTENTION_ID = 130;
 
@@ -151,6 +152,7 @@ export function createRuntimeServer({
   const refreshRoots = () => allowedRoots.splice(sourceRoots.length, Infinity, ...worktrees.permittedWorkspacePaths());
   refreshRoots();
   const host = new AcpHost({ store, roots: allowedRoots, adapters, limits });
+  const github = new GitHubReader({ roots: allowedRoots });
   const server = createServer(async (request, response) => {
     try {
       const method = request.method;
@@ -162,7 +164,7 @@ export function createRuntimeServer({
       }
       if (method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true, mode: 'local-development', protocol: 'ACP v1', storage: 'sqlite' });
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
-      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/')) refreshRoots();
+      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/') || pathname.startsWith('/api/github/')) refreshRoots();
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
       if (method === 'GET' && pathname === '/api/worktrees') return json(response, 200, worktrees.list());
       if (method === 'POST' && pathname === '/api/worktrees') {
@@ -174,6 +176,15 @@ export function createRuntimeServer({
         });
         refreshRoots();
         return json(response, item.state === 'ready' && item.available ? 201 : 202, item);
+      }
+      if (method === 'GET' && pathname === '/api/github/issues') {
+        return json(response, 200, await github.issues(url.searchParams.get('cwd') || ''));
+      }
+      if (method === 'GET' && pathname === '/api/github/pulls') {
+        return json(response, 200, await github.pulls(url.searchParams.get('cwd') || ''));
+      }
+      if (method === 'GET' && pathname === '/api/github/checks') {
+        return json(response, 200, await github.checks(url.searchParams.get('cwd') || '', url.searchParams.get('sha') || ''));
       }
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
       if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
@@ -257,7 +268,7 @@ export function createRuntimeServer({
       }
       throw new ClientError(404, 'endpoint not found');
     } catch (error) {
-      // ClientError, HostError and WorktreeError carry an operator-safe status.
+      // ClientError, HostError, WorktreeError and GitHubEvidenceError carry status.
       const status = Number.isInteger(error?.status) ? error.status
         : /workspace|adapter/i.test(String(error?.message)) ? 400 : 500;
       const message = status === 500 ? 'internal runtime error' : String(error.message).slice(0, 200);
@@ -266,7 +277,7 @@ export function createRuntimeServer({
     }
   });
   return {
-    server, store, host, worktrees, allowedRoots,
+    server, store, host, worktrees, github, allowedRoots,
     async listen(port = PORT) {
       return await new Promise((resolveListen, rejectListen) => {
         server.once('error', rejectListen);

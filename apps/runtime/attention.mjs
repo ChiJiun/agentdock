@@ -71,10 +71,15 @@ export function deriveAttention(store, { includeViewed = false } = {}) {
       });
     }
     if (approvals.length) continue;
-    const key = reviewKey(session, session.status === 'ready' ? store.latestTurn(session.id) : null);
+    const turn = session.status === 'ready' ? store.latestTurn(session.id) : null;
+    const key = reviewKey(session, turn);
+    // A finished turn is the result evidence. Later bookkeeping events must
+    // not resurrect a result already viewed, nor change its stable item id.
+    const evidence = session.status === 'ready' ? turn : event;
+    const evidenceCursor = evidence?.seq ?? cursor;
     if (key) {
-      if (includeViewed || !isViewed(store.attentionView(session.id), event)) {
-        items.push({ ...common, id: `attention:${session.id}:review:${cursor}`, type: 'review', key });
+      if (includeViewed || !isViewed(store.attentionView(session.id), evidence)) {
+        items.push({ ...common, evidenceCursor, id: `attention:${session.id}:review:${evidenceCursor}`, type: 'review', key });
       }
     } else if (['starting', 'running', 'awaiting_approval'].includes(session.status)) {
       items.push({ ...common, id: `attention:${session.id}:background`, type: 'background', key: 'agent_running' });

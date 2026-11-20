@@ -3,11 +3,24 @@ export interface RuntimeHealth {
 }
 export interface RuntimeAdapter { id: string; label: string; }
 export interface RuntimeWorkspace { path: string; }
+export interface GithubIssue { number: number; title: string; url: string | null; state: string; }
+export interface GithubPull { number: number; title: string; url: string | null; state: string; headSha: string; }
+export interface GithubCheck { id: number; name: string; status: string; conclusion: string | null; url: string | null; }
+export interface GithubEvidence<T> { repo: string; items: T[]; truncated: boolean; }
+export interface GithubCommitStatus { context: string; state: string; url: string | null; }
+export interface GithubChecksEvidence extends GithubEvidence<GithubCheck> {
+  sha: string; total: number; complete: boolean;
+  sources: ('check_runs' | 'commit_status')[];
+  verdict: 'success' | 'failure' | 'pending' | 'unknown';
+  statusState: string;
+  statuses: GithubCommitStatus[];
+}
 export interface RuntimeWorktree {
   id: string; source_repo: string; path: string; branch: string; created_at: string;
   state: 'creating' | 'ready' | 'partial' | 'orphan' | 'failed';
   exists: boolean; available: boolean;
 }
+
 export type RuntimeSessionStatus =
   | 'starting' | 'ready' | 'running' | 'awaiting_approval'
   | 'interrupted' | 'failed' | 'closed';
@@ -117,3 +130,6 @@ export const gitStatus = (cwd: string) =>
   runtimeApi<{ cwd: string; status: string }>(`git/status?cwd=${encodeURIComponent(cwd)}`);
 export const gitDiff = (cwd: string) =>
   runtimeApi<{ cwd: string; diff: string; truncated: boolean }>(`git/diff?cwd=${encodeURIComponent(cwd)}`);
+export const getGithubIssues = (cwd: string) => runtimeApi<GithubEvidence<GithubIssue>>(`github/issues?cwd=${encodeURIComponent(cwd)}`);
+export const getGithubPulls = (cwd: string) => runtimeApi<GithubEvidence<GithubPull>>(`github/pulls?cwd=${encodeURIComponent(cwd)}`);
+export const getGithubChecks = (cwd: string, sha: string) => runtimeApi<GithubChecksEvidence>(`github/checks?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}`);

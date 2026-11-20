@@ -31,6 +31,9 @@ function mockedFetch(path: string | URL | Request, options?: RequestInit): Promi
   if (uri.endsWith('/api/health')) return Promise.resolve(returnJson({ok:true,protocol:'ACP v1',mode:'local-development'}));
   if (uri.endsWith('/api/adapters')) return Promise.resolve(returnJson([{id:'mock',label:'ACP mock'}]));
   if (uri.endsWith('/api/attention')) return Promise.resolve(returnJson(attentionItems));
+  if (uri.includes('/api/github/issues')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',truncated:false,items:[{number:9,title:'GitHub issue fixture',url:'https://github.com/ChiJiun/agentdock/issues/9',state:'open'}]}));
+  if (uri.includes('/api/github/pulls')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',truncated:true,items:[{number:25,title:'GitHub PR fixture',url:'https://github.com/ChiJiun/agentdock/pull/25',state:'open',headSha:'a'.repeat(40)}]}));
+  if (uri.includes('/api/github/checks')) return Promise.resolve(returnJson({repo:'ChiJiun/agentdock',sha:'a'.repeat(40),total:0,truncated:false,complete:true,sources:['check_runs','commit_status'],verdict:'unknown',statusState:'pending',statuses:[],items:[]}));
   if (uri.endsWith('/reviewed') && method === 'POST') {
     // Like the runtime: a reviewed result is no longer derived.
     attentionItems=attentionItems.filter(item=>`/api/attention/${encodeURIComponent((item as {id:string}).id)}/reviewed`!==uri);
@@ -165,6 +168,48 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect(requests.some(r=>r.path.includes('/prompt')&&r.method==='POST')).toBe(false);
   });
 
+  it('reads GitHub Issues/PRs/checks without invoking remote mutations or claiming missing CI passed', async () => {
+    const ui=await render();
+    const tab=[...ui.querySelectorAll<HTMLButtonElement>('.live-tabs button')].find(b=>b.textContent?.includes('GitHub'));
+    expect(tab).not.toBeNull();
+    expect(requests.some(r=>r.path.includes('/github/'))).toBe(false);
+    await act(async()=>tab?.click());
+    expect(ui.textContent).toContain('GitHub issue fixture');
+    expect(ui.textContent).toContain('GitHub PR fixture');
+    expect(requests.filter(r=>r.path.includes('/github/') && r.method!=='GET')).toHaveLength(0);
+    const checks=[...ui.querySelectorAll<HTMLButtonElement>('.live-github-pull button')][0];
+    await act(async()=>checks?.click());
+    expect(ui.textContent).toContain('不代表通過');
+    expect(ui.textContent).toContain('未知或證據不完整');
+    expect(ui.textContent).toContain('GitHub Check Runs 與 Commit Status');
+    expect(ui.textContent).toContain('清單可能不完整');
+    expect(ui.textContent).toContain('#25');
+    expect(ui.textContent).toContain('a'.repeat(12));
+    expect(requests.some(r=>r.path.includes('/api/github/checks') && r.method==='GET')).toBe(true);
+  });
+
+  it('does not display green CI when the checks list is incomplete and shows failing legacy status', async () => {
+    const baseFetch = mockedFetch;
+    vi.stubGlobal('fetch', vi.fn((path: string | URL | Request, options?: RequestInit) => {
+      const uri = typeof path === 'string' ? path : path instanceof URL ? path.toString() : path.url;
+      if (uri.includes('/api/github/checks')) return Promise.resolve(returnJson({
+        repo: 'ChiJiun/agentdock', sha: 'a'.repeat(40), total: 135, truncated: true,
+        complete: false, sources: ['check_runs', 'commit_status'], verdict: 'unknown',
+        statusState: 'failure', statuses: [{ context: 'legacy/build', state: 'failure', url: null }],
+        items: [{ id: 1, name: 'unit tests', status: 'completed', conclusion: 'success', url: null }],
+      }));
+      return baseFetch(path, options);
+    }));
+    const ui = await render();
+    await act(async () => [...ui.querySelectorAll<HTMLButtonElement>('.live-tabs button')]
+      .find(b => b.textContent?.includes('GitHub'))?.click());
+    await act(async () => ui.querySelector<HTMLButtonElement>('.live-github-pull button')?.click());
+    expect(ui.textContent).toContain('未知或證據不完整');
+    expect(ui.textContent).toContain('[Commit Status] legacy/build: failure');
+    expect(ui.textContent).toContain('部分證據');
+    expect(ui.textContent).not.toContain('目前讀取的檢查已通過');
+  });
+
   it('keeps keyboard focus inside the inbox after acknowledging a row and wraps Tab', async () => {
     availableSessions = [session, other];
     attentionItems = [reviewItem()];
@@ -189,6 +234,7 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect(ui.querySelector('.live-attention-reviewed')).toBeNull();
     expect(document.activeElement).toBe(close);
     expect(dialog.contains(document.activeElement)).toBe(true);
+
   });
 
   it('the session on screen is not listed unless it needs a reply', async () => {

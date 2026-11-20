@@ -63,6 +63,27 @@ describe('event-driven Session Sentinel (no model calls)', () => {
     assert.deepEqual(deriveAttention(store).map(i => i.type), ['background']);
   }));
 
+  test('viewed finished turn is not resurrected by bookkeeping; a new turn is', () => withStore(store => {
+    store.create({ id: 'stable', adapter: 'mock', cwd });
+    store.status('stable', 'ready');
+    store.event('stable', 'user_message', { text: 'first' });
+    const firstTurn = store.event('stable', 'turn_finished', { stopReason: 'end_turn' }).seq;
+    const first = deriveAttention(store)[0];
+    assert.equal(first.evidenceCursor, firstTurn);
+    store.event('stable', 'cancel_requested', { by: 'user' });
+    assert.equal(deriveAttention(store)[0].id, first.id);
+    assert.equal(deriveAttention(store)[0].evidenceCursor, firstTurn);
+    store.markViewed('stable', firstTurn);
+    assert.deepEqual(deriveAttention(store), []);
+    store.event('stable', 'connected');
+    assert.deepEqual(deriveAttention(store), []);
+    store.event('stable', 'user_message', { text: 'second' });
+    store.event('stable', 'turn_finished', { stopReason: 'end_turn' });
+    const next = deriveAttention(store);
+    assert.equal(next.length, 1);
+    assert.notEqual(next[0].id, first.id);
+  }));
+
   test('pending permission needs a reply and cannot be hidden by "mark reviewed"', async () => {
     const runtime = createRuntimeServer({ roots: [cwd], dbPath: ':memory:', adapters: [DEFAULT_MOCK] });
     const { port } = await runtime.listen(0);

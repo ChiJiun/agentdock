@@ -8,7 +8,7 @@
     "dev": "vite --host 127.0.0.1",
     "runtime:dev": "node apps/runtime/server.mjs",
     "dev:full": "concurrently -k \"npm run runtime:dev\" \"npm run dev\"",
-    "test:runtime": "node --test apps/runtime/runtime.test.mjs apps/runtime/attention.test.mjs apps/runtime/worktrees.test.mjs",
+    "test:runtime": "node --test apps/runtime/runtime.test.mjs apps/runtime/attention.test.mjs apps/runtime/worktrees.test.mjs apps/runtime/github-reader.test.mjs",
     "test:all": "npm run test && npm run test:runtime",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
