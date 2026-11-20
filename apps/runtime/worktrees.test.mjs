@@ -268,6 +268,27 @@ describe('safe worktree-per-task isolation', () => {
     } finally { db.close(); f.close(); }
   });
 
+  test('branch registration change revokes a previously trusted worktree without restart', async () => {
+    const f = fixture();
+    const server = createRuntimeServer({ roots: [f.repo], dbPath: ':memory:', adapters: [DEFAULT_MOCK], worktreeRoot: f.worktreeRoot });
+    try {
+      const item = await server.worktrees.create({ repoPath: f.repo });
+      const url = `http://127.0.0.1:${(await server.listen(0)).port}`;
+      assert.ok((await (await fetch(url + '/api/workspaces')).json()).some(x => x.path === item.path));
+      execFileSync('git', ['-C', item.path, 'switch', '-c', 'different-branch'], { encoding: 'utf8', timeout: 60_000 });
+      assert.equal(realpathSync(item.path), item.path, 'directory remains at the same canonical path');
+      const roots = await (await fetch(url + '/api/workspaces')).json();
+      assert.ok(!roots.some(x => x.path === item.path), 'changed Git registration revokes access');
+      const entries = await (await fetch(url + '/api/worktrees')).json();
+      assert.equal(entries.find(x => x.id === item.id).available, false);
+      const session = await fetch(url + '/api/sessions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ adapterId: 'mock', cwd: item.path }),
+      });
+      assert.equal(session.status, 400, 'ACP cannot launch in the revoked worktree');
+    } finally { await server.close(); f.close(); }
+  });
+
   test('registered worktrees remain available after runtime restart', async () => {
     const f = fixture(), dbPath = join(f.root, 'store.db');
     let server = createRuntimeServer({ roots: [f.repo], dbPath, adapters: [DEFAULT_MOCK], worktreeRoot: f.worktreeRoot });
