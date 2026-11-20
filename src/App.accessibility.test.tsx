@@ -52,6 +52,37 @@ describe('preview accessibility', () => {
     expect(document.activeElement).toBe(last);
   });
 
+  it('isolates the background and redirects programmatic focus while the switcher is open', () => {
+    const page = renderApp();
+    const background = page.querySelector<HTMLButtonElement>('.side-toggle')!;
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const dialog = page.querySelector<HTMLElement>('.switcher[role="dialog"]')!;
+    const input = dialog.querySelector<HTMLInputElement>('input')!;
+    expect(page.querySelector('.sidebar')?.inert).toBe(true);
+    expect(page.querySelector('.main')?.inert).toBe(true);
+    act(() => background.focus());
+    expect(document.activeElement).toBe(input);
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(page.querySelector('.sidebar')?.inert).toBe(false);
+    expect(page.querySelector('.main')?.inert).toBe(false);
+  });
+
+  it('keeps focus in the dialog when filtering removes the focused result', () => {
+    const page = renderApp();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const dialog = page.querySelector<HTMLElement>('.switcher[role="dialog"]')!;
+    const result = dialog.querySelector<HTMLButtonElement>('.switcher-result')!;
+    const input = dialog.querySelector<HTMLInputElement>('input')!;
+    act(() => result.focus());
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'unlikely-search-no-matches-123456');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(dialog.querySelector('.switcher-result')).toBeNull();
+    expect(document.activeElement).toBe(input);
+  });
+
   it('closes the session switcher on Escape from a result button', () => {
     const page = renderApp();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
