@@ -208,6 +208,9 @@ export class WorktreeManager {
   }
 
   list() {
+    // Authorization must reflect current Git registration, not a startup-only
+    // snapshot: the same folder may later be registered to another branch.
+    this.trusted = this.verifyRegistered();
     return this.store.listWorktrees().map(item => ({
       ...item,
       exists: existsSync(item.path),
