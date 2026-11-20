@@ -50,7 +50,8 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (dialog && dialog.contains(document.activeElement)) {
+    if (dialog) {
+      if (!dialog.contains(document.activeElement)) { input.current?.focus(); return; }
       const focusedElement = document.activeElement as HTMLElement | null;
       if (focusedElement && focusedElement !== input.current &&
           !focusedElement.matches('.switcher-result') && !focusedElement.matches('.switcher-input button')) {
