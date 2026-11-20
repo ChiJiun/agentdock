@@ -52,6 +52,17 @@ describe('preview accessibility', () => {
     expect(document.activeElement).toBe(last);
   });
 
+  it('renders generated session titles without leaking localization markers', () => {
+    const page = renderApp();
+    const newSession = [...page.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.getAttribute('aria-label') === '新增工作階段' || button.getAttribute('aria-label') === 'New session');
+    expect(newSession).toBeDefined();
+    act(() => newSession!.click());
+    expect(page.querySelector('.session-title-row h1')?.textContent).not.toContain('__agentdock_demo:');
+    expect(page.querySelector('.breadcrumbs strong')?.textContent).not.toContain('__agentdock_demo:');
+    expect(page.querySelector('.session-item.session-selected strong')?.textContent).not.toContain('__agentdock_demo:');
+  });
+
   it('keeps exactly one inspector tab in the keyboard tab order', () => {
     const page = renderApp();
     const tabs = [...page.querySelectorAll<HTMLButtonElement>('.inspector-tabs [role="tab"]')];
