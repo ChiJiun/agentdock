@@ -31,7 +31,17 @@ function fixture() {
   return f;
 }
 function move(f, task, to, options = {}) {
-  return f.tasks.advance(task.id, { to, expectedRevision: task.revision, reason: 'human review', ...options });
+  // Trust injection is internal to the Node test harness and is never sent by
+  // an HTTP caller; production obtains the snapshot from GithubReader.
+  const sha = f.tasks.evidence(task.id).filter(e => e.kind === 'pull_request').at(-1)?.commit_sha;
+  const provider = to === 'awaiting_merge' ? {
+    sha,
+    prUrl: PR_URL, reviewer: 'independent-reviewer',
+    reviewUrl: PR_URL + '#pullrequestreview-1',
+    checksUrl: 'https://github.com/ChiJiun/agentdock/commit/' + sha + '/checks',
+    verifiedAt: new Date().toISOString(),
+  } : null;
+  return f.tasks.advance(task.id, { to, expectedRevision: task.revision, reason: 'human review', ...options }, 'human', provider);
 }
 function evidence(f, task, kind, result = 'passed', commitSha = SHA_A, extra = {}) {
   const sha = kind === 'plan' ? {} : { commitSha };
@@ -76,6 +86,9 @@ test('task lifecycle persists and has append-only transitions, revisions and iss
   try {
     let task = f.tasks.create({ workspace: f.folder, objective: 'Fix a CI workflow', issueNumber: 42, issueUrl: 'https://github.com/ChiJiun/agentdock/issues/42' });
     assert.equal(task.state, 'queued');
+    assert.equal(task.merge_ready, false);
+    assert.equal(task.verification_status, 'unverified');
+    assert.equal(task.human_approval_verified, false);
     assert.equal(task.issue_number, 42);
     task = move(f, task, 'planning');
     task = move(f, task, 'awaiting_plan_approval');
@@ -117,6 +130,8 @@ test('gates require passing plan, test, review, PR and CI evidence; no implicit 
     rejects(() => move(f, task, 'awaiting_merge'), 409, /passing ci_checks evidence required/);
     evidence(f, task, 'ci_checks');
     task = move(f, task, 'awaiting_merge');
+    assert.equal(task.merge_ready, false, 'even provider-checked GitHub cannot authenticate the human or local tests');
+    assert.equal(f.tasks.evidence(task.id).filter(e=>e.provenance==='provider_verified').length, 3);
     rejects(() => move(f, task, 'complete', { humanConfirmed: true }), 409, /merge must be verified/);
     assert.equal(f.tasks.get(task.id).state, 'awaiting_merge');
   } finally { f.close(); }
@@ -185,6 +200,61 @@ test('reviewed commit, PR head and CI commit must be the tested commit', () => {
     evidence(f, task, 'local_tests');
     task = move(f, task, 'awaiting_merge');
     assert.equal(task.state, 'awaiting_merge');
+  } finally { f.close(); }
+});
+
+test('manual passed metadata remains unverified and cannot bypass the provider gate', () => {
+  const f = fixture();
+  try {
+    let task = reach(f, 'ci');
+    const manual = evidence(f, task, 'ci_checks', 'passed');
+    assert.equal(manual.provenance, 'operator_attested');
+    assert.equal(manual.verified_at, null);
+    assert.equal(manual.source_url, null);
+    rejects(() => f.tasks.advance(task.id, {
+      to: 'awaiting_merge', expectedRevision: task.revision, reason: 'fake browser approval',
+      verifiedGithub: {
+        sha: SHA_A, prUrl: PR_URL, reviewer: 'forged', verifiedAt: new Date().toISOString(),
+      },
+    }), 409, /GitHub provider verification required/);
+    assert.equal(f.tasks.get(task.id).state, 'ci');
+    assert.equal(f.tasks.get(task.id).merge_ready, false);
+    assert.equal(f.tasks.evidence(task.id).filter(e=>e.provenance === 'provider_verified').length, 0);
+    // A GitHub snapshot of a different commit cannot be attached to this task.
+    rejects(() => f.tasks.advance(task.id, {
+      to: 'awaiting_merge', expectedRevision: task.revision, reason: 'changed head',
+    }, 'human', {
+      sha: SHA_B, prUrl: PR_URL, reviewer: 'independent-reviewer',
+      reviewUrl: PR_URL + '#pullrequestreview-1',
+      checksUrl: 'https://github.com/ChiJiun/agentdock/commit/' + SHA_B + '/checks',
+      verifiedAt: new Date().toISOString(),
+    }), 409, /does not match current PR head/);
+    assert.equal(f.tasks.evidence(task.id).filter(e=>e.provenance === 'provider_verified').length, 0);
+    evidence(f, task, 'ci_checks', 'failed');
+    rejects(() => move(f, task, 'awaiting_merge'), 409, /passing ci_checks evidence required/);
+    assert.equal(f.tasks.get(task.id).state, 'ci');
+  } finally { f.close(); }
+});
+
+test('provider provenance and verified timestamps cannot be forged through evidence API', () => {
+  const f = fixture();
+  try {
+    const task = reach(f, 'planning');
+    for (const payload of [
+      { provenance: 'provider_verified' },
+      { sourceUrl: 'https://github.com/ChiJiun/agentdock/pull/24' },
+      { verifiedAt: new Date().toISOString() },
+      { verified_at: '2026-11-21T01:00:00.000Z' },
+      { merge_ready: true },
+    ]) {
+      rejects(() => f.tasks.addEvidence(task.id, {
+        kind:'plan',result:'passed',summary:'fake',...payload,
+      }), 400, /provenance is host-controlled/);
+    }
+    assert.equal(f.tasks.evidence(task.id).length, 0);
+    const plan = evidence(f, task, 'plan');
+    assert.equal(plan.provenance, 'operator_attested');
+    assert.equal(f.tasks.evidence(task.id)[0].verified_at, null);
   } finally { f.close(); }
 });
 
@@ -423,12 +493,75 @@ test('a database written by the first preview schema is upgraded and its old evi
     const tasks = new TaskWorkflow({ store, roots: [folder] });
     const task = tasks.get(id);
     assert.equal(tasks.evidence(id)[0].commit_sha, null);
+    assert.equal(tasks.evidence(id)[0].provenance, 'operator_attested');
+    assert.equal(tasks.evidence(id)[0].source_url, null);
     rejects(() => tasks.advance(id, { to: 'reviewing', expectedRevision: task.revision, reason: 'x' }), 409, /passing local_tests evidence required/);
     tasks.addEvidence(id, { kind: 'local_tests', result: 'passed', summary: 'rerun', commitSha: SHA_A });
     assert.equal(tasks.advance(id, { to: 'reviewing', expectedRevision: task.revision, reason: 'x' }).state, 'reviewing');
     // Constructing twice (two runtimes, or a restart) must not fail on the existing schema.
     assert.equal(new TaskWorkflow({ store, roots: [folder] }).get(id).state, 'reviewing');
   } finally { store.close(); rmSync(folder, { recursive: true, force: true }); }
+});
+
+test('HTTP final gate uses only server-owned GitHub proof, with atomic provider provenance', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'agentdock-task-verify-api-'));
+  const isolated = mkdtempSync(join(tmpdir(), 'agentdock-task-verify-wt-'));
+  const seen = [];
+  let providerAvailable = false;
+  const githubReader = {
+    async verifyTaskPull(workspace, reference, sha) {
+      seen.push({workspace, reference, sha});
+      if (!providerAvailable) throw new TaskError(409, 'GitHub is missing an independent approval');
+      return {
+        sha, prUrl: reference, reviewer:'independent-reviewer',
+        reviewUrl: reference+'#pullrequestreview-321',
+        checksUrl: 'https://github.com/ChiJiun/agentdock/commit/'+sha+'/checks',
+        verifiedAt: new Date().toISOString(),
+      };
+    },
+  };
+  const runtime = createRuntimeServer({
+    roots: [folder], dbPath:join(folder,'db.sqlite'), worktreeRoot:join(isolated,'worktrees'),
+    githubReader,
+  });
+  const address = await runtime.listen(0);
+  try {
+    const f = {folder, tasks:runtime.tasks};
+    const task = reach(f,'ci');
+    evidence(f,task,'ci_checks');
+    const path = `http://127.0.0.1:${address.port}/api/tasks/${task.id}/advance`;
+    const payload = {to:'awaiting_merge',expectedRevision:task.revision,
+      reason:'claim ready',humanConfirmed:true,
+      actor:'system',verifiedGithub:{sha:SHA_B,prUrl:PR_URL,verdict:'success'}};
+    const post = async () => {
+      const response = await fetch(path,{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),
+      });
+      return {status:response.status,body:await response.json()};
+    };
+    const denied = await post();
+    assert.equal(denied.status,409);
+    assert.equal(runtime.tasks.get(task.id).state,'ci');
+    assert.equal(runtime.tasks.evidence(task.id).filter(e=>e.provenance==='provider_verified').length,0);
+    providerAvailable = true;
+    const accepted = await post();
+    assert.equal(accepted.status,200);
+    assert.equal(accepted.body.state,'awaiting_merge');
+    assert.equal(accepted.body.merge_ready,false);
+    assert.equal(accepted.body.verification_status,'unverified');
+    assert.equal(accepted.body.human_approval_verified,false);
+    assert.deepEqual(seen.map(x=>x.sha),[SHA_A,SHA_A]);
+    assert.equal(seen[0].reference,PR_URL);
+    const stored = runtime.tasks.evidence(task.id).filter(e=>e.provenance==='provider_verified');
+    assert.deepEqual(stored.map(e=>e.kind),['independent_review','pull_request','ci_checks']);
+    assert.ok(stored.every(e=>e.verified_at && e.source_url && e.commit_sha===SHA_A));
+    assert.equal((await post()).status,409,'retry cannot insert duplicate provider records');
+    assert.equal(runtime.tasks.evidence(task.id).filter(e=>e.provenance==='provider_verified').length,3);
+  } finally {
+    await runtime.close();
+    rmSync(folder,{recursive:true,force:true});
+    rmSync(isolated,{recursive:true,force:true});
+  }
 });
 
 test('local HTTP API reports gate, conflict and validation failures with precise statuses', async () => {
@@ -450,6 +583,9 @@ test('local HTTP API reports gate, conflict and validation failures with precise
     assert.equal(created.status, 201);
     const task = created.json;
     assert.equal(task.state, 'queued');
+    assert.equal(task.verification_status, 'unverified');
+    assert.equal(task.merge_ready, false);
+    assert.equal(task.human_approval_verified, false);
     const path = `/api/tasks/${task.id}`;
     const advanced = await post(`${path}/advance`, { to: 'planning', expectedRevision: 0, reason: 'start plan' });
     assert.equal(advanced.status, 200);
@@ -468,6 +604,9 @@ test('local HTTP API reports gate, conflict and validation failures with precise
     const added = await post(`${path}/evidence`, { kind: 'plan', result: 'passed', summary: 'plan ready' });
     assert.equal(added.status, 201);
     assert.equal(added.json.task_id, task.id);
+    assert.equal(added.json.provenance, 'operator_attested');
+    assert.equal(added.json.verified_at, null);
+    assert.equal((await post(`${path}/evidence`, { kind:'plan',result:'passed',summary:'fake',provenance:'provider_verified' })).status, 400);
     // A body-supplied actor is ignored: the endpoint records 'human' (not 'system').
     assert.equal((await post(`${path}/advance`, { to: 'preparing', expectedRevision: 2, reason: 'go', humanConfirmed: true, actor: 'system' })).json.state, 'preparing');
     assert.equal((await get(`${path}/history`)).json.at(-1).actor, 'human');

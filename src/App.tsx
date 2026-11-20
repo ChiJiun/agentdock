@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ArrowUpRight, Bell, Bot, Check, CheckCheck, Globe2, Terminal,
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, Clock3, Command, Cpu, FileCode2,
@@ -16,9 +16,8 @@ import { LanguageProvider, useT } from './i18n/context';
 import { t, type MessageKey } from './i18n/messages';
 import { loadLanguageSettings, saveLanguageSettings, resolveLocale, resolveUiLocale, languageSnapshot, type LanguageSettings } from './i18n/language';
 import { demoProjects, demoSessions, nextId } from './demo';
-import { decisionCount, deriveMonitorItems, type MonitorItem } from './monitor';
+import { decisionCount, deriveMonitorItems, dismissKey, isHidden, type MonitorItem } from './monitor';
 import type { AgentName, Project, Session, SessionStatus, TimelineEntry } from './model';
-import { useRoving } from './vendor/acpira/roving';
 
 const demoEntryKeys: Record<string, MessageKey> = {
   's1-e1': 'demo.message1', 's1-e2': 'demo.event1',
@@ -133,15 +132,28 @@ function Inspector({ session, project, settings, onClose }: { session: Session; 
   const tr = useT();
   const snapshot = languageSnapshot(settings, { projectId: project.id, sessionId: session.id });
   const [tab, setTab] = useState<InspectorTab>('changes');
-  const tabs = useRoving<HTMLDivElement>({ select: true });
+  const tabOrder: InspectorTab[] = ['changes', 'checks', 'context'];
+  function handleTabKeys(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
+    const current = tabOrder.indexOf(tab);
+    let next = current;
+    if (event.key === 'ArrowRight') next = (current + 1) % tabOrder.length;
+    else if (event.key === 'ArrowLeft') next = (current + tabOrder.length - 1) % tabOrder.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabOrder.length - 1;
+    else return;
+    event.preventDefault();
+    setTab(tabOrder[next]!);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+  }
   return <aside className="inspector">
     <div className="inspector-header"><strong>{tr('inspector.workspace')}</strong><button className="icon-button" onClick={onClose} aria-label={tr('inspector.close')}><PanelRightClose size={17}/></button></div>
-    <div className="inspector-tabs" role="tablist" aria-label={tr('inspector.tabs')} ref={tabs.ref} onKeyDown={tabs.onKeyDown}>
+    <div className="inspector-tabs" role="tablist" aria-label={tr('inspector.tabs')} onKeyDown={handleTabKeys}>
       {([['changes', tr('inspector.changes')], ['checks', tr('inspector.checks')], ['context', tr('inspector.details')]] as const).map(([id, label]) => (
-        <button key={id} role="tab" aria-selected={tab === id} aria-controls="inspector-pane" onClick={() => setTab(id)}>{label}</button>
+        <button key={id} id={`inspector-tab-${id}`} role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls="inspector-pane" onClick={() => setTab(id)}>{label}</button>
       ))}
     </div>
-    <div className="inspector-body" id="inspector-pane" role="tabpanel">
+    <div className="inspector-body" id="inspector-pane" role="tabpanel" aria-labelledby={`inspector-tab-${tab}`}>
       {tab === 'changes' && <>
         <div className="evidence-callout"><FileDiff size={15}/> {tr('inspector.simulatedChanges')}</div>
         <div className="diff-summary"><span>{tr('inspector.fileCount')}</span><span><b className="added">+18</b> <b className="removed">−4</b></span></div>
@@ -182,6 +194,8 @@ export default function App() {
   const [liveMode, setLiveMode] = useState(false);
   const langButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => saveLanguageSettings(settings), [settings]);
+  // Keep <html lang> in sync so screen readers pronounce the UI in the selected language.
+  useEffect(() => { document.documentElement.lang = uiLocale; }, [uiLocale]);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
@@ -191,7 +205,7 @@ export default function App() {
     const result = resolveLocale(settings, 'sessionSummary', { projectId: session.projectId, sessionId: session.id });
     return result === 'preserve-original' ? uiLocale : result;
   }), [sessions, projects, settings, uiLocale]);
-  const visibleMonitorItems = useMemo(() => monitorItems.filter(item => !dismissed.has(item.id)), [monitorItems, dismissed]);
+  const visibleMonitorItems = useMemo(() => monitorItems.filter(item => !isHidden(item, dismissed)), [monitorItems, dismissed]);
   const blockingCount = decisionCount(visibleMonitorItems);
 
   useEffect(() => {
@@ -199,6 +213,7 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setMonitorOpen(false);
+        setLanguageOpen(false);
         setSwitcherOpen(open => !open);
       }
     };
@@ -260,7 +275,22 @@ export default function App() {
     <main className="main">
       <header className="topbar">
         <div className="breadcrumbs"><FolderGit2 size={15}/><span>{project.name}</span><ChevronRight size={13}/><strong>{active?.title ?? tr('session.noSelected')}</strong></div>
-        <div className="topbar-actions"><button className="live-nav-button" onClick={() => { setLiveMode(true); setSwitcherOpen(false); setMonitorOpen(false); }} title="Connect to the local ACP development runtime"><Terminal size={15}/> Live ACP</button><span className="mode-pill"><span/> {tr('header.demo')}</span><button className="icon-button" aria-label={tr('header.switchSessions')} title={tr('header.switchSessions')} onClick={() => { setMonitorOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button><div className="language-anchor"><button ref={langButtonRef} className="language-toggle" onClick={() => { setMonitorOpen(false); setSwitcherOpen(false); setLanguageOpen(v => !v); }} aria-label={tr('header.language')} title={tr('header.language')} aria-expanded={languageOpen}><Globe2 size={14}/><span>{uiLocale === 'zh-TW' ? '繁中' : 'EN'}</span></button>{languageOpen && <LanguageSettingsPanel settings={settings} onChange={setSettings} projectId={project.id} sessionId={active?.id} onClose={closeLanguage}/>}</div><div className="monitor-anchor"><button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={tr('header.notifications', { count: blockingCount })} title={tr('header.monitorTitle')} aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>{monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={id => setDismissed(old => new Set([...old, id]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}</div><button className="icon-button" onClick={() => setShowInspector(v => !v)} title={tr('header.details')} aria-label={tr('header.details')}><FileDiff size={17}/></button></div>
+        <div className="topbar-actions">
+          <button className="live-nav-button" onClick={() => { setLiveMode(true); setSwitcherOpen(false); setMonitorOpen(false); setLanguageOpen(false); }} title={uiLocale === 'zh-TW' ? '連接本機 ACP 開發 Runtime' : 'Connect to the local ACP development runtime'}>
+            <Terminal size={15}/> {uiLocale === 'zh-TW' ? '即時 ACP' : 'Live ACP'}
+          </button>
+          <span className="mode-pill"><span/> {tr('header.demo')}</span>
+          <button className="icon-button" aria-label={tr('header.switchSessions')} title={tr('header.switchSessions')} onClick={() => { setMonitorOpen(false); setLanguageOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button>
+          <div className="language-anchor">
+            <button ref={langButtonRef} className="language-toggle" onClick={() => { setMonitorOpen(false); setSwitcherOpen(false); setLanguageOpen(v => !v); }} aria-label={tr('header.language')} title={tr('header.language')} aria-expanded={languageOpen}><Globe2 size={14}/><span>{uiLocale === 'zh-TW' ? '繁中' : 'EN'}</span></button>
+            {languageOpen && <LanguageSettingsPanel settings={settings} onChange={setSettings} projectId={project.id} sessionId={active?.id} onClose={closeLanguage}/>}
+          </div>
+          <div className="monitor-anchor">
+            <button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={tr('header.notifications', { count: blockingCount })} title={tr('header.monitorTitle')} aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setLanguageOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>
+            {monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={item => setDismissed(old => new Set([...old, dismissKey(item)]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}
+          </div>
+          <button className="icon-button" onClick={() => setShowInspector(v => !v)} title={tr('header.details')} aria-label={tr('header.details')}><FileDiff size={17}/></button>
+        </div>
       </header>
       <div className="preview-banner"><CircleAlert size={15}/><span>{tr('preview.banner')}</span><a href="https://github.com/ChiJiun/agentdock/issues/6" target="_blank" rel="noreferrer">{tr('preview.acp')} <ArrowUpRight size={12}/></a></div>
       {active ? <>

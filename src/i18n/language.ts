@@ -89,8 +89,8 @@ function sanitizeProfile(value: unknown): LanguageProfile {
 function sanitizeOverrides(value: unknown): Record<string, LanguageProfile> {
   const overrides: Record<string, LanguageProfile> = Object.create(null);
   if (!isRecord(value)) return overrides;
-  // No arbitrary infinite mapping or special prototype property names.
-  for (const [key, raw] of Object.entries(value).slice(0, 200)) {
+  // No arbitrary infinite mapping or special prototype property names; keep the newest entries.
+  for (const [key, raw] of Object.entries(value).slice(-200)) {
     if (!key || key.length > 128 || key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     Object.defineProperty(overrides, key, {
       value: sanitizeProfile(raw), enumerable: true, writable: true, configurable: true,
@@ -144,18 +144,23 @@ export function resolveLocale(
     settings.global,
   ];
 
+  // Resolve stage-specific and artifact preferences before falling back to a
+  // workflow language. A session's workflow locale must not silently override
+  // a project's generated-prose locale or the default commit-message policy.
   for (const profile of layers) {
     if (!profile) continue;
     const explicit = profile.outputs?.[stage];
     if (explicit && explicit !== 'inherit') return explicit;
-    // Changing the default language of prose artifacts must not rewrite code comments.
-    if (stage === 'codeComments') continue;
-    if (ARTIFACT_STAGES.has(stage) && profile.artifactLocale && profile.artifactLocale !== 'inherit') {
+    if (ARTIFACT_STAGES.has(stage) && stage !== 'codeComments'
+        && profile.artifactLocale && profile.artifactLocale !== 'inherit') {
       return profile.artifactLocale;
     }
-    if (profile.workflowLocale) return profile.workflowLocale;
   }
-  return stage === 'codeComments' ? 'preserve-original' : 'en-US';
+  if (stage === 'codeComments') return 'preserve-original';
+  for (const profile of layers) {
+    if (profile?.workflowLocale) return profile.workflowLocale;
+  }
+  return 'zh-TW';
 }
 
 export function resolveUiLocale(settings: LanguageSettings): Locale {

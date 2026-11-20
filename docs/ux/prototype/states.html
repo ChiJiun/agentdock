@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDock state gallery</title>
+  <meta name="description" content="Static gallery of AgentDock empty, loading, offline, auth-required, quota-error and approval-required states. Fictional data.">
+  <link rel="stylesheet" href="../tokens/tokens.css">
+  <link rel="stylesheet" href="prototype.css">
+  <style>
+    body { overflow-y: auto; }
+    .gallery { max-width: 1180px; margin: 0 auto; padding: var(--ad-space-8) var(--ad-space-6) var(--ad-space-11); display: grid; gap: var(--ad-space-9); }
+    .gallery > header { display: flex; flex-wrap: wrap; gap: var(--ad-space-5); align-items: center; }
+    .gallery > header h1 { font-size: var(--ad-text-xl); flex: 1; }
+    .state { display: grid; gap: var(--ad-space-5); }
+    .state h2 { font-size: var(--ad-text-lg); display: flex; gap: var(--ad-space-4); align-items: center; }
+    .state > p { color: var(--ad-text-secondary); max-width: 80ch; }
+    .surfaces { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--ad-space-6); }
+    .surface { border: 1px solid var(--ad-border-subtle); border-radius: var(--ad-radius-lg); background: var(--ad-bg-surface); overflow: hidden; }
+    .surface-label { font-size: var(--ad-text-2xs); text-transform: uppercase; letter-spacing: .05em; color: var(--ad-text-tertiary); padding: var(--ad-space-4) var(--ad-space-6); border-bottom: 1px solid var(--ad-border-subtle); background: var(--ad-bg-canvas); }
+    .surface-body { padding: var(--ad-space-6); display: grid; gap: var(--ad-space-5); }
+    .empty { text-align: center; display: grid; gap: var(--ad-space-4); justify-items: center; padding: var(--ad-space-8) var(--ad-space-6); }
+    .empty .big { width: 40px; height: 40px; color: var(--ad-text-tertiary); }
+    .empty .big .ico { width: 40px; height: 40px; }
+    .empty h3 { font-size: var(--ad-text-lg); }
+    .skel { height: 12px; border-radius: var(--ad-radius-sm); background: var(--ad-bg-sunken); }
+    .side-mock { background: var(--ad-bg-sunken); padding: var(--ad-space-4); border-radius: var(--ad-radius-md); }
+    .banner { display: flex; gap: var(--ad-space-4); align-items: flex-start; padding: var(--ad-space-4) var(--ad-space-5); border-radius: var(--ad-radius-md); border: 1px solid var(--ad-border-strong); }
+    .banner[data-tone="neutral"] { border-style: dashed; }
+    .banner p { flex: 1; }
+    .static-badge { position: static; display: inline-block; }
+    .row-inline { display: flex; gap: var(--ad-space-4); align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+<main class="gallery">
+  <header>
+    <h1>AgentDock state gallery</h1>
+    <span class="proto-tag">Prototype · fictional data</span>
+    <a href="index.html">Open interactive prototype</a>
+    <button class="btn btn-sm" type="button" id="theme">Theme: system</button>
+  </header>
+  <p class="muted">Every state pairs a distinct glyph shape with a text label; colour is a secondary cue. Copy here is the proposed product copy (English UI; localisation later).</p>
+
+  <section class="state" aria-labelledby="st-empty">
+    <h2 id="st-empty"><span data-icon="folder"></span> Empty</h2>
+    <p>First run or nothing to show. Always offer the next useful action; never an empty white box.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Home · first run</div><div class="surface-body empty">
+        <span class="big" data-icon="folder"></span><h3>Add your first repository</h3>
+        <p class="muted">Choose a local Git folder. AgentDock creates a worktree for every task, so your current checkout is never touched.</p>
+        <button class="btn btn-primary" type="button"><span data-icon="plus"></span> Choose repository…</button>
+        <p class="muted" style="font-size:var(--ad-text-xs)">Next: connect an agent in Settings → Agents & adapters.</p>
+      </div></div>
+      <div class="surface"><div class="surface-label">Sidebar · no sessions in project</div><div class="surface-body">
+        <div class="side-mock"><div class="tree-row" data-level="1" style="margin:0"><span class="tree-caret" data-icon="chevronDown"></span><span class="tree-title">thesis-lab</span><span class="tree-meta">0</span></div>
+        <p class="muted" style="padding:var(--ad-space-3) var(--ad-space-6);font-size:var(--ad-text-xs)">No tasks yet. <a href="#">Start a task</a></p></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Inbox · nothing waiting</div><div class="surface-body">
+        <div class="row-inline"><span data-icon="bell"></span><span class="muted" style="font-size:var(--ad-text-xs)">No badge is shown when the count is 0.</span></div>
+        <p class="pop-empty" style="padding:0">No agent is waiting for you. You have seen every result. Nothing is running.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-loading">
+    <h2 id="st-loading"><span class="st" data-tone="running" data-icon="stLoading"></span> Loading</h2>
+    <p>Show structure immediately with a text label; skeletons never animate when reduced motion is requested. After 10 s, add what is slow and a cancel or retry action.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Session · restoring history</div><div class="surface-body" aria-busy="true">
+        <p class="row-inline"><span class="st st-spin" data-tone="running" data-icon="stRunning"></span> Loading history from local store… (1,240 of ~3,000 events)</p>
+        <div class="skel" style="width:70%"></div><div class="skel" style="width:90%"></div><div class="skel" style="width:55%"></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Review panel · computing diff</div><div class="surface-body" aria-busy="true">
+        <p class="row-inline"><span class="st st-spin" data-tone="running" data-icon="stRunning"></span> Computing diff for wt/sqlite-events…</p>
+        <div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div>
+        <p class="muted" style="font-size:var(--ad-text-xs)">Slow after 10 s → “Large diff (4,812 files). Show file list only?”</p>
+      </div></div>
+      <div class="surface"><div class="surface-label">Adapter · starting</div><div class="surface-body">
+        <p class="row-inline"><span class="st st-spin" data-tone="running" data-icon="stRunning"></span> Starting Codex adapter… negotiating capabilities</p>
+        <p class="muted" style="font-size:var(--ad-text-xs)">The composer stays editable; Send is queued until the handshake completes.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-offline">
+    <h2 id="st-offline"><span class="st" data-tone="neutral" data-icon="stOffline"></span> Offline / disconnected</h2>
+    <p>Say what is unreachable, what still runs, and what AgentDock does not know. Never claim remote work is still running without a fresh event.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Remote task · worker unreachable</div><div class="surface-body">
+        <div class="banner" data-tone="neutral"><span class="st" data-tone="neutral" data-icon="stOffline"></span><p><strong>lab-vm is unreachable.</strong> Reconnecting in 8 s. Last event 2 min ago. The task was running then; its current state is unknown until we reconnect.</p></div>
+        <div class="row-inline"><button class="btn btn-sm" type="button">Reconnect now</button><button class="btn btn-sm btn-quiet" type="button">Connection details</button></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Network offline · local work</div><div class="surface-body">
+        <div class="banner" data-tone="neutral"><span class="st" data-tone="neutral" data-icon="stOffline"></span><p><strong>No network.</strong> Local history, diffs and checks still work. Agents that need their provider will fail on the next request.</p></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Sidebar row · remote, stale</div><div class="surface-body"><div class="side-mock">
+        <div class="tree-row" data-level="2"><span class="tree-caret"></span><span class="st" data-tone="neutral" data-icon="stOffline"></span><span class="tree-title">Regenerate figures for chapter 4</span><span class="tree-meta"><span class="kind" data-kind="remote" data-icon="kindRemote"></span>2m</span></div>
+        <p class="muted" style="font-size:var(--ad-text-xs);padding:0 var(--ad-space-6)">Status glyph switches to “disconnected”; the last known state is in the tooltip and accessible name.</p>
+      </div></div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-auth">
+    <h2 id="st-auth"><span class="st" data-tone="danger" data-icon="stAuth"></span> Auth required</h2>
+    <p>The agent's own CLI owns authentication. AgentDock hands off to that flow and never asks for, stores or displays the credential.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Session · adapter needs sign-in</div><div class="surface-body">
+        <div class="card" data-tone="danger"><div class="card-head"><span class="st" data-tone="danger" data-icon="stAuth"></span><span class="card-title">Codex needs you to sign in</span></div>
+        <div class="card-body"><p>The adapter reported that its CLI session expired. Sign in with the agent's own flow, then retry. Your message is kept as a draft.</p>
+        <div class="card-actions"><button class="btn btn-primary" type="button">Open the agent's sign-in</button><button class="btn" type="button">Use another agent</button></div></div></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Usage popover · not signed in</div><div class="surface-body">
+        <div class="acct" style="padding:0"><div class="acct-head"><span class="monogram">AK</span><strong>API key (optional)</strong><span class="src">Sign-in needed</span></div><small>No usage shown until an account is connected.</small></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">GitHub · token missing for PR</div><div class="surface-body">
+        <div class="banner"><span class="st" data-tone="danger" data-icon="stAuth"></span><p><strong>GitHub sign-in needed to open a PR.</strong> Local commits are unaffected. Nothing was pushed.</p></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-quota">
+    <h2 id="st-quota"><span class="st" data-tone="danger" data-icon="stQuota"></span> Quota error</h2>
+    <p>Quote what the provider said and label the source. When the provider gives no reset time or remaining amount, show “unknown” — never an estimate presented as fact.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Session · request rejected</div><div class="surface-body">
+        <div class="card" data-tone="danger"><div class="card-head"><span class="st" data-tone="danger" data-icon="stQuota"></span><span class="card-title">Quota limit — the provider rejected the request</span></div>
+        <div class="card-body"><div class="kv"><span>Source</span><span>Provider error (HTTP 429)</span><span>Reset</span><span>Unknown — not provided</span><span>Stopped at</span><span>Task 7 of 12</span></div>
+        <div class="card-actions"><button class="btn btn-primary" type="button">Retry now</button><button class="btn" type="button">Switch to another agent</button></div></div></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Usage · reported vs unknown</div><div class="surface-body">
+        <div class="acct" style="padding:0"><div class="acct-head"><span class="monogram">CO</span><strong>Codex</strong><span class="src">Provider-reported</span></div>
+          <div class="meter" data-high="true" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-label="Codex rolling window used"><span style="width:100%"></span></div><small>100% · limit reached · resets in 1 h 40 m (provider)</small></div>
+        <div class="acct" style="padding:0"><div class="acct-head"><span class="monogram">CC</span><strong>Claude Code</strong><span class="src" data-src="unknown">? Unknown</span></div><div class="meter-unknown" aria-hidden="true"></div><small>Remaining quota: unknown. The adapter does not expose it.</small></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-approval">
+    <h2 id="st-approval"><span class="st" data-tone="attention" data-icon="stApproval"></span> Approval required</h2>
+    <p>Blocks the agent until a human decides. Visible in four places at once: inline card, sticky banner when the card is scrolled away, sidebar glyph, inbox badge with “!”.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Inline card</div><div class="surface-body">
+        <div class="card" data-tone="attention"><div class="card-head"><span class="st" data-tone="attention" data-icon="stApproval"></span><span class="tone-label">Approval required</span></div>
+        <div class="card-body"><p class="card-title">Run command</p><code class="cmd">git push origin task/inbox</code><div class="kv"><span>Effect</span><span>Publishes commits to the remote.</span><span>Rule</span><span>Push always requires approval</span></div>
+        <div class="card-actions"><button class="btn btn-primary" type="button">Approve once</button><button class="btn" type="button">Deny</button></div></div></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Top bar badge + sidebar row</div><div class="surface-body">
+        <div class="row-inline"><button class="icon-btn inbox-btn" type="button" data-level="reply"><span data-icon="bellAlert"></span><span class="inbox-badge static-badge" data-level="reply">!3</span><span class="sr-only">Inbox: 1 need reply, 2 to review</span></button>
+          <span class="muted" style="font-size:var(--ad-text-xs)">“!” prefix + square badge + alert bell = something blocks an agent.</span></div>
+        <div class="row-inline"><button class="icon-btn inbox-btn" type="button"><span data-icon="bell"></span><span class="inbox-badge static-badge">2</span><span class="sr-only">Inbox: 2 to review</span></button>
+          <span class="muted" style="font-size:var(--ad-text-xs)">Round outlined badge, plain bell = only results to review.</span></div>
+        <div class="side-mock"><div class="tree-row" data-level="2" data-unread="true"><span class="tree-caret"></span><span class="st" data-tone="attention" data-icon="stApproval"></span><span class="tree-title">Fix flaky worktree cleanup test</span><span class="tree-meta"><span class="new-pill">1 new</span>3m</span></div></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">After restart</div><div class="surface-body">
+        <div class="banner"><span class="st" data-tone="attention" data-icon="stApproval"></span><p><strong>Still waiting for your decision.</strong> AgentDock restarted; this pending approval was restored and was not auto-approved or re-run.</p></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-int">
+    <h2 id="st-int"><span class="st" data-tone="neutral" data-icon="stInterrupted"></span> Interrupted / resume unavailable</h2>
+    <p>Separate history restore, agent reattach and task resume. Only offer reattach when the adapter advertised it.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Session · reattach not supported</div><div class="surface-body">
+        <div class="card" data-tone="neutral"><div class="card-head"><span class="st" data-tone="neutral" data-icon="stInterrupted"></span><span class="card-title">Interrupted — history restored, agent not reattached</span></div>
+        <div class="card-body"><p>This agent did not advertise session reattach. Nothing was re-run automatically.</p><div class="card-actions"><button class="btn btn-primary" type="button">New session from this history</button><button class="btn" type="button">Close</button></div></div></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="state" aria-labelledby="st-enf">
+    <h2 id="st-enf"><span class="enf" data-icon="enfOff"></span> Policy not enforced (agent bypass / full-access mode)</h2>
+    <p>A session mode, not a status: the agent runs its own tools without asking, so AgentDock’s approval rules have nothing to act on. It is labelled wherever the session is shown, never counted in the inbox badge, and no session ever gets a “protected” badge.</p>
+    <div class="surfaces">
+      <div class="surface"><div class="surface-label">Session header · not enforced</div><div class="surface-body">
+        <div class="row-inline"><span class="chip"><span class="st" data-tone="running" data-icon="stRunning"></span>Running</span><span class="chip">Codex</span><span class="chip" data-enf="off"><span data-icon="enfOff"></span>Policy not enforced</span></div>
+        <div class="enforce-note" role="note" aria-labelledby="st-enf-title" style="border:1px dashed var(--ad-status-danger);border-radius:var(--ad-radius-md)"><span class="enf" data-icon="enfOff"></span><p><strong id="st-enf-title">AgentDock policy is not enforced in this session.</strong> Codex is running in its own <span class="mono">full access</span> mode (reported by the adapter): it runs commands and edits files without asking AgentDock, so approval rules do not apply to what the agent does. AgentDock still asks before the operations it performs itself (push, pull request, merge, worktree removal).</p></div>
+      </div></div>
+      <div class="surface"><div class="surface-label">Session header · adapter does not report its mode</div><div class="surface-body">
+        <div class="row-inline"><span class="chip"><span class="st" data-tone="running" data-icon="stRunning"></span>Running</span><span class="chip">Other agent</span><span class="chip" data-enf="unknown">? Policy coverage unknown</span></div>
+        <p class="muted">This adapter does not report its permission mode. AgentDock applies its rules to the requests it receives and cannot tell whether the agent asks for everything.</p>
+      </div></div>
+      <div class="surface"><div class="surface-label">Sidebar row + inbox row</div><div class="surface-body">
+        <div class="side-mock"><div class="tree-row" data-level="2"><span class="tree-caret"></span><span class="st" data-tone="running" data-icon="stRunning"></span><span class="tree-title">Rename fixture files to kebab-case</span><span class="tree-meta"><span class="enf" title="Policy not enforced — the agent runs in its own full access mode" data-icon="enfOff"></span>6m</span></div></div>
+        <p class="muted" style="font-size:var(--ad-text-xs)">Accessible name: “Rename fixture files to kebab-case. Running, Local task, policy not enforced, updated 6 min ago”. Inbox, Home, project and switcher rows add the words “policy not enforced”.</p>
+      </div></div>
+      <div class="surface"><div class="surface-label">Turning it on through AgentDock · confirmation</div><div class="surface-body">
+        <div class="card" data-tone="neutral"><div class="card-head"><span class="enf" data-icon="enfOff"></span><span class="card-title">Let Codex run without asking AgentDock?</span></div>
+        <div class="card-body"><p>In full access mode the agent runs commands and edits files without sending permission requests. AgentDock’s approval rules will not apply to what the agent does in this session. AgentDock will still ask before it pushes, opens a pull request, merges or removes a worktree.</p>
+        <div class="card-actions"><button class="btn btn-primary" type="button">Cancel</button><button class="btn" type="button">Turn on full access</button></div></div></div>
+        <p class="muted" style="font-size:var(--ad-text-xs)">Cancel is the default button. AgentDock never turns this on by itself.</p>
+      </div></div>
+    </div>
+  </section>
+</main>
+<script src="icons.js"></script>
+<script>
+  (function () {
+    document.querySelectorAll('[data-icon]').forEach(function (el) { el.innerHTML = window.AD.icon(el.dataset.icon); });
+    var order = ['system', 'light', 'dark'], cur = new URLSearchParams(location.search).get('theme') || 'system';
+    function apply(t) {
+      cur = t;
+      if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+      document.getElementById('theme').textContent = 'Theme: ' + t;
+    }
+    apply(cur);
+    document.getElementById('theme').addEventListener('click', function () { apply(order[(order.indexOf(cur) + 1) % order.length]); });
+    document.querySelectorAll('a[href="#"], .surface button').forEach(function (b) { b.addEventListener('click', function (e) { e.preventDefault(); }); });
+  })();
+</script>
+</body>
+</html>

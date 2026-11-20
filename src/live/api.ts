@@ -7,8 +7,20 @@ export interface GithubIssue { number: number; title: string; url: string | null
 export interface GithubPull { number: number; title: string; url: string | null; state: string; headSha: string; }
 export interface GithubCheck { id: number; name: string; status: string; conclusion: string | null; url: string | null; }
 export interface GithubEvidence<T> { repo: string; items: T[]; truncated: boolean; }
-export interface GithubChecksEvidence extends GithubEvidence<GithubCheck> { sha: string; total: number; }
-export interface RuntimeWorktree { id: string; source_repo: string; path: string; branch: string; created_at: string; exists: boolean; }
+export interface GithubCommitStatus { context: string; state: string; url: string | null; }
+export interface GithubChecksEvidence extends GithubEvidence<GithubCheck> {
+  sha: string; total: number; complete: boolean;
+  sources: ('check_runs' | 'commit_status')[];
+  verdict: 'success' | 'failure' | 'pending' | 'unknown';
+  statusState: string;
+  statuses: GithubCommitStatus[];
+}
+export interface RuntimeWorktree {
+  id: string; source_repo: string; path: string; branch: string; created_at: string;
+  state: 'creating' | 'ready' | 'partial' | 'orphan' | 'failed';
+  exists: boolean; available: boolean;
+}
+
 export type RuntimeSessionStatus =
   | 'starting' | 'ready' | 'running' | 'awaiting_approval'
   | 'interrupted' | 'failed' | 'closed';
@@ -35,6 +47,7 @@ export interface RuntimeEvent {
     approvalId?: string;
     title?: string;
     decision?: string;
+    reason?: string;
     message?: string;
   };
   createdAt: string;
@@ -47,8 +60,9 @@ export interface LiveAttentionItem {
   status: RuntimeSessionStatus;
   evidenceCursor: number;
   updatedAt: string;
-  type: 'decision' | 'review' | 'background' | 'completed';
-  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished';
+  /** The three inbox sections of docs/ux/states-and-indicators.md section 4. */
+  type: 'reply' | 'review' | 'background';
+  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished' | 'turn_cancelled';
   approvalId?: string;
 }
 export interface RuntimeApproval {
@@ -56,6 +70,8 @@ export interface RuntimeApproval {
   session_id: string;
   title: string;
   choices: { id: string; kind: string; name: string }[];
+  /** What the agent asked to do, redacted and bounded by the host. */
+  detail?: { kind?: string | null; input?: unknown; locations?: string[] };
   status: string;
   created_at: string;
   expires_at: string;
@@ -89,10 +105,14 @@ export const getHealth = (signal?: AbortSignal) => runtimeApi<RuntimeHealth>('he
 export const getAdapters = () => runtimeApi<RuntimeAdapter[]>('adapters');
 export const getWorkspaces = () => runtimeApi<RuntimeWorkspace[]>('workspaces');
 export const getWorktrees = () => runtimeApi<RuntimeWorktree[]>('worktrees');
-export const createWorktree = (repoPath: string) => runtimeApi<RuntimeWorktree>('worktrees', { method: 'POST', data: { repoPath } });
+export const createWorktree = (repoPath: string, idempotencyKey?: string) =>
+  runtimeApi<RuntimeWorktree>('worktrees', { method: 'POST', data: { repoPath, idempotencyKey } });
 export const getSessions = () => runtimeApi<RuntimeSession[]>('sessions');
 export const getAttention = () => runtimeApi<LiveAttentionItem[]>('attention');
-export const dismissAttention = (id: string) => runtimeApi<{ ok: boolean }>(`attention/${encodeURIComponent(id)}/dismiss`, { method: 'POST', data: {} });
+/** Marks one result row reviewed. The runtime refuses it for approvals (409). */
+export const markAttentionReviewed = (id: string) => runtimeApi<{ ok: boolean }>(`attention/${encodeURIComponent(id)}/reviewed`, { method: 'POST', data: {} });
+/** Records that the session was on screen, up to the newest rendered event. */
+export const markSessionViewed = (id: string, cursor: number) => runtimeApi<{ ok: boolean }>(`sessions/${encodeURIComponent(id)}/viewed`, { method: 'POST', data: { cursor } });
 export const getEvents = (id: string, after = 0) => runtimeApi<RuntimeEvent[]>(`sessions/${encodeURIComponent(id)}/events?after=${after}`);
 export const getApprovals = (id: string) => runtimeApi<RuntimeApproval[]>(`sessions/${encodeURIComponent(id)}/approvals`);
 export const createRuntimeSession = (adapterId: string, cwd: string) =>

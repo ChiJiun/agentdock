@@ -41,7 +41,7 @@ Open **http://127.0.0.1:5173/**. The original preview demonstrates the UI using 
 
 For standalone UI work: `npm run dev`. For tests: `npm run typecheck && npm run test:all && npm run build`.
 
-Full setup, adapter allowlist, storage, restart behavior and security limitations: **[Live ACP runtime implementation](docs/implementation/live-acp-runtime.md)**. The Live ACP sidebar also includes **[Session Sentinel](docs/implementation/live-session-sentinel.md)**, a real event-driven cross-session inbox for pending decisions, failures, progress and recently completed turns. You can also explicitly **[create isolated Git Worktrees](docs/implementation/git-worktrees.md)** from approved repositories and then launch an ACP Session inside one without touching the original checked-out branch. In the **[read-only GitHub panel](docs/implementation/github-readonly-evidence.md)**, the authenticated operator can inspect open Issues, PRs and CI Checks without submitting GitHub writes. The production Rust/Tauri desktop shell is tracked in Issue #4, ACP host in Issue #6, SQLite session history in Issue #7, and event-driven Session Sentinel in Issue #15.
+Full setup, adapter allowlist, storage, restart behavior and security limitations: **[Live ACP runtime implementation](docs/implementation/live-acp-runtime.md)**. The Live ACP sidebar also includes **[Session Sentinel](docs/implementation/live-session-sentinel.md)**, a real event-driven cross-session inbox with the three UX sections: needs your reply, new results to review, running in background. You can also explicitly **[create isolated Git Worktrees](docs/implementation/git-worktrees.md)** from approved repositories and then launch an ACP Session inside one without touching the original checked-out branch. In the **[read-only GitHub panel](docs/implementation/github-readonly-evidence.md)**, the authenticated operator can inspect open Issues, PRs and CI Checks without submitting GitHub writes. The production Rust/Tauri desktop shell is tracked in Issue #4, ACP host in Issue #6, SQLite session history in Issue #7, and event-driven Session Sentinel in Issue #15.
 
 ## Project documents
 
@@ -50,7 +50,7 @@ Full setup, adapter allowlist, storage, restart behavior and security limitation
 - [Upstream source inventory, migration matrix and licenses](docs/sources.md)
 - [Roadmap and release gates](docs/roadmap.md)
 - [Live ACP development runtime and verification](docs/implementation/live-acp-runtime.md)
-- [Real event-driven Session Sentinel, decisions and persistent dismissals](docs/implementation/live-session-sentinel.md)
+- [Real event-driven Session Sentinel: needs reply, results to review, background](docs/implementation/live-session-sentinel.md)
 - [Isolated Git Worktree creation and safe session selection](docs/implementation/git-worktrees.md)
 - [Read-only GitHub Issues / PR / CI evidence](docs/implementation/github-readonly-evidence.md)
 - [Language UI and safe Skill output policy](docs/implementation/language-ui.md)
@@ -67,8 +67,8 @@ Full setup, adapter allowlist, storage, restart behavior and security limitation
 
 ## Working policy
 
-Initial implementation selectively imports a few **MIT-licensed utility functions** from Acpira, with provenance in [ADR-0002](docs/decisions/0002-port-small-acpira-ui-helpers.md) and license in `third_party/acpira-LICENSE`. External runtimes should be integrated over public protocols first. A migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
+The UI preview uses original AgentDock components and helpers, following the **reimplement** decision in [ADR-0002](docs/decisions/0002-source-reuse.md). No Acpira source files are vendored. External runtimes should be integrated over public protocols first. A future migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
 
 ## Licensing
 
-**To be decided before publishing copied third-party implementation.** Third-party repositories have different obligations, especially AGPL-3.0. The initial repository is private while architecture and provenance are being evaluated. See [sources.md](docs/sources.md).
+AgentDock's distribution license remains to be decided. The UI preview depends on published npm packages, whose notices must be included in release artifacts. Third-party repositories have different obligations, especially AGPL-3.0. See [sources.md](docs/sources.md).

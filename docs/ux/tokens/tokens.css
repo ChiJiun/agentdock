@@ -1,0 +1,245 @@
+/*
+ * AgentDock design tokens (original; draft for issue #2).
+ * Canonical source for docs/ux/design-system.md and the static prototype.
+ * Naming: --ad-<category>-<role>[-<variant>]. Components consume semantic
+ * tokens only; raw palette values appear in this file and nowhere else.
+ *
+ * Theme selection:
+ *   <html data-theme="light|dark">  explicit choice
+ *   no data-theme                   follows prefers-color-scheme
+ */
+
+:root {
+  /* ---------- Typography ---------- */
+  --ad-font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    "Noto Sans TC", "Microsoft JhengHei UI", "PingFang TC", sans-serif;
+  --ad-font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "JetBrains Mono",
+    ui-monospace, "SFMono-Regular", monospace;
+
+  --ad-text-2xs: 11px;   /* badges, kbd hints */
+  --ad-text-xs: 12px;    /* meta, timestamps */
+  --ad-text-sm: 13px;    /* UI default: sidebar, buttons, menus */
+  --ad-text-md: 14px;    /* transcript body, composer */
+  --ad-text-lg: 16px;    /* section titles */
+  --ad-text-xl: 20px;    /* screen titles */
+  --ad-text-2xl: 24px;   /* empty-state headline */
+
+  --ad-leading-tight: 1.25;
+  --ad-leading-ui: 1.4;
+  --ad-leading-prose: 1.6; /* transcript; generous for CJK */
+
+  --ad-weight-regular: 400;
+  --ad-weight-medium: 500;
+  --ad-weight-semibold: 600;
+
+  /* ---------- Spacing (4px grid) ---------- */
+  --ad-space-0: 0;
+  --ad-space-1: 2px;
+  --ad-space-2: 4px;
+  --ad-space-3: 6px;
+  --ad-space-4: 8px;
+  --ad-space-5: 12px;
+  --ad-space-6: 16px;
+  --ad-space-7: 20px;
+  --ad-space-8: 24px;
+  --ad-space-9: 32px;
+  --ad-space-10: 40px;
+  --ad-space-11: 48px;
+
+  /* ---------- Radius ---------- */
+  --ad-radius-xs: 2px;   /* kbd, inline code */
+  --ad-radius-sm: 4px;   /* inputs, rows, buttons */
+  --ad-radius-md: 6px;   /* cards, tool events */
+  --ad-radius-lg: 10px;  /* popovers, dialogs, drawers */
+  --ad-radius-pill: 999px;
+
+  /* ---------- Layout ---------- */
+  --ad-topbar-h: 44px;
+  --ad-sidebar-w: 280px;       /* resizable 220-400 */
+  --ad-sidebar-w-min: 220px;
+  --ad-sidebar-w-max: 400px;
+  --ad-review-w: 440px;        /* resizable 360-720 */
+  --ad-review-w-min: 360px;
+  --ad-review-w-max: 720px;
+  --ad-transcript-max: 820px;  /* readable measure in main column */
+  --ad-row-h: 30px;            /* sidebar row, comfortable density */
+  --ad-row-h-compact: 26px;
+  --ad-hit-min: 24px;          /* WCAG 2.5.8 minimum target */
+  /* Breakpoints (documented; CSS media queries cannot read vars):
+     wide >= 1280px, medium 960-1279px, narrow < 960px, compact < 600px */
+
+  /* ---------- Motion ---------- */
+  --ad-duration-instant: 0ms;
+  --ad-duration-fast: 80ms;     /* hover, press */
+  --ad-duration-base: 140ms;    /* popover, row expand */
+  --ad-duration-slow: 220ms;    /* drawer slide, panel resize */
+  --ad-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ad-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ad-spin-period: 1.1s;       /* running indicator */
+
+  /* ---------- Layers ---------- */
+  --ad-z-base: 0;
+  --ad-z-sticky: 10;
+  --ad-z-drawer: 30;
+  --ad-z-popover: 40;
+  --ad-z-dialog: 50;
+  --ad-z-toast: 60;
+
+  /* ---------- Focus ---------- */
+  --ad-focus-width: 2px;
+  --ad-focus-offset: 2px;
+}
+
+/* ---------- Light theme (default) ---------- */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ad-bg-canvas: #F5F6F8;    /* app background behind panels */
+  --ad-bg-surface: #FFFFFF;   /* main column, cards */
+  --ad-bg-sunken: #ECEEF2;    /* sidebar, code blocks, inputs */
+  --ad-bg-raised: #FFFFFF;    /* popovers, dialogs (with shadow) */
+  --ad-bg-hover: #E4E7EC;
+  --ad-bg-selected: #DCEFEC;  /* current session row (also has bar + aria-current) */
+  --ad-bg-scrim: rgba(15, 18, 23, 0.40);
+
+  --ad-border-subtle: #E0E3E8;
+  --ad-border-strong: #7A8394; /* >= 3:1 on canvas/surface for UI boundaries */
+
+  --ad-text-primary: #151A22;
+  --ad-text-secondary: #465061;
+  --ad-text-tertiary: #5F6878; /* still >= 4.5:1 on surface and canvas */
+  --ad-text-on-accent: #FFFFFF;
+
+  --ad-accent: #0A6B66;        /* "harbor teal": primary actions, selection bar */
+  --ad-accent-hover: #085955;
+  --ad-accent-soft: #DCEFEC;
+  --ad-focus-ring: #0A6B66;
+
+  /* Status hues. Never the only cue: always paired with glyph + text. */
+  --ad-status-running: #1D5FC2;
+  --ad-status-attention: #8F4E00;   /* needs reply / approval */
+  --ad-status-success: #1B7339;
+  --ad-status-danger: #B3261E;
+  --ad-status-neutral: #5F6878;     /* queued, cancelled, archived */
+  --ad-status-running-soft: #E3ECFA;
+  --ad-status-attention-soft: #FBEBD6;
+  --ad-status-success-soft: #DFF1E5;
+  --ad-status-danger-soft: #FBE3E1;
+
+  /* Task-kind hues (glyph + label carry meaning; hue is secondary) */
+  --ad-kind-local: #465061;
+  --ad-kind-background: #2D6577;
+  --ad-kind-remote: #6B3FC4;
+
+  /* Diff */
+  --ad-diff-add-bg: #E3F4E8;
+  --ad-diff-add-fg: #1B7339;
+  --ad-diff-del-bg: #FBE6E4;
+  --ad-diff-del-fg: #B3261E;
+
+  --ad-shadow-1: 0 1px 2px rgba(15, 18, 23, 0.08);
+  --ad-shadow-2: 0 4px 12px rgba(15, 18, 23, 0.12), 0 1px 3px rgba(15, 18, 23, 0.08);
+  --ad-shadow-3: 0 12px 32px rgba(15, 18, 23, 0.18), 0 2px 6px rgba(15, 18, 23, 0.10);
+}
+
+/* ---------- Dark theme ---------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ad-bg-canvas: #0F1217;
+  --ad-bg-surface: #161A21;
+  --ad-bg-sunken: #0B0E12;
+  --ad-bg-raised: #1D222B;
+  --ad-bg-hover: #232934;
+  --ad-bg-selected: #12312F;
+  --ad-bg-scrim: rgba(0, 0, 0, 0.55);
+
+  --ad-border-subtle: #262C36;
+  --ad-border-strong: #5D6676;
+
+  --ad-text-primary: #E7EAF0;
+  --ad-text-secondary: #AEB6C3;
+  --ad-text-tertiary: #959EAD;
+  --ad-text-on-accent: #0F1217;
+
+  --ad-accent: #3FC7BB;
+  --ad-accent-hover: #63D6CC;
+  --ad-accent-soft: #12312F;
+  --ad-focus-ring: #3FC7BB;
+
+  --ad-status-running: #6FA6FF;
+  --ad-status-attention: #F0B44C;
+  --ad-status-success: #5CCB7E;
+  --ad-status-danger: #FF8A80;
+  --ad-status-neutral: #959EAD;
+  --ad-status-running-soft: #172742;
+  --ad-status-attention-soft: #3A2A0E;
+  --ad-status-success-soft: #13301D;
+  --ad-status-danger-soft: #3D1A18;
+
+  --ad-kind-local: #AEB6C3;
+  --ad-kind-background: #7FC3D6;
+  --ad-kind-remote: #B79BFF;
+
+  --ad-diff-add-bg: #12301C;
+  --ad-diff-add-fg: #5CCB7E;
+  --ad-diff-del-bg: #3B1716;
+  --ad-diff-del-fg: #FF8A80;
+
+  /* Dark shadows are weak cues; raised surfaces also get a border. */
+  --ad-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --ad-shadow-2: 0 4px 14px rgba(0, 0, 0, 0.50);
+  --ad-shadow-3: 0 14px 36px rgba(0, 0, 0, 0.60);
+}
+
+/* System preference when the user has not chosen a theme explicitly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --ad-bg-canvas: #0F1217;
+    --ad-bg-surface: #161A21;
+    --ad-bg-sunken: #0B0E12;
+    --ad-bg-raised: #1D222B;
+    --ad-bg-hover: #232934;
+    --ad-bg-selected: #12312F;
+    --ad-bg-scrim: rgba(0, 0, 0, 0.55);
+    --ad-border-subtle: #262C36;
+    --ad-border-strong: #5D6676;
+    --ad-text-primary: #E7EAF0;
+    --ad-text-secondary: #AEB6C3;
+    --ad-text-tertiary: #959EAD;
+    --ad-text-on-accent: #0F1217;
+    --ad-accent: #3FC7BB;
+    --ad-accent-hover: #63D6CC;
+    --ad-accent-soft: #12312F;
+    --ad-focus-ring: #3FC7BB;
+    --ad-status-running: #6FA6FF;
+    --ad-status-attention: #F0B44C;
+    --ad-status-success: #5CCB7E;
+    --ad-status-danger: #FF8A80;
+    --ad-status-neutral: #959EAD;
+    --ad-status-running-soft: #172742;
+    --ad-status-attention-soft: #3A2A0E;
+    --ad-status-success-soft: #13301D;
+    --ad-status-danger-soft: #3D1A18;
+    --ad-kind-local: #AEB6C3;
+    --ad-kind-background: #7FC3D6;
+    --ad-kind-remote: #B79BFF;
+    --ad-diff-add-bg: #12301C;
+    --ad-diff-add-fg: #5CCB7E;
+    --ad-diff-del-bg: #3B1716;
+    --ad-diff-del-fg: #FF8A80;
+    --ad-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+    --ad-shadow-2: 0 4px 14px rgba(0, 0, 0, 0.50);
+    --ad-shadow-3: 0 14px 36px rgba(0, 0, 0, 0.60);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ad-duration-fast: 0ms;
+    --ad-duration-base: 0ms;
+    --ad-duration-slow: 0ms;
+  }
+}

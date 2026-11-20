@@ -173,29 +173,44 @@ export class WorktreeManager {
     }
   }
 
+  /** Reconcile durable intent with Git metadata after a crash. No Git writes or file deletion. */
   verifyRegistered() {
     const trusted = new Set();
     const listings = new Map();
     for (const item of this.store.listWorktrees()) {
-      if (!this.stillInPlace(item)) continue;
+      let approved = false;
       try {
         ensureInside(item.source_repo, this.sourceRoots);
-      } catch {
-        continue; // Source repository is no longer approved by the operator.
+        approved = true;
+      } catch { /* a revoked source root is never re-authorized */ }
+      if (approved && !listings.has(item.source_repo)) {
+        try { listings.set(item.source_repo, registeredWorktrees(item.source_repo)); }
+        catch { listings.set(item.source_repo, []); }
       }
-      if (!listings.has(item.source_repo)) {
-        try {
-          listings.set(item.source_repo, registeredWorktrees(item.source_repo));
-        } catch {
-          listings.set(item.source_repo, []);
-        }
+      const registered = listings.get(item.source_repo) ?? [];
+      // Exact branch and path are required: a repository may register a
+      // DIFFERENT branch at the same path after an interrupted checkout.
+      const match = registered.some(w => samePath(w.path, item.path)
+        && w.branch === `refs/heads/${item.branch}`);
+      const safe = approved && this.stillInPlace(item);
+      if (match && safe) {
+        // A completed checkout with a failed database commit is recoverable.
+        if (item.state !== 'ready') this.store.setWorktreeState(item.id, 'ready');
+        trusted.add(item.id);
+      } else {
+        // A registered worktree or unexpected folder with the wrong branch/path
+        // is an orphan requiring inspection. An incomplete Git operation is partial.
+        const state = existsSync(item.path) ? 'orphan' : 'partial';
+        if (item.state !== state) this.store.setWorktreeState(item.id, state);
       }
-      if (listings.get(item.source_repo).some(w => samePath(w.path, item.path))) trusted.add(item.id);
     }
     return trusted;
   }
 
   list() {
+    // Authorization must reflect current Git registration, not a startup-only
+    // snapshot: the same folder may later be registered to another branch.
+    this.trusted = this.verifyRegistered();
     return this.store.listWorktrees().map(item => ({
       ...item,
       exists: existsSync(item.path),
@@ -203,17 +218,30 @@ export class WorktreeManager {
     }));
   }
 
-  /** Serialized so two clicks cannot race on Git's worktree metadata. */
-  create({ repoPath }) {
-    const run = this.queue.then(() => this.createNow(repoPath));
+  /** Serialized so two clicks or retries cannot race on Git metadata. */
+  create({ repoPath, idempotencyKey = null }) {
+    const run = this.queue.then(() => this.createNow(repoPath, idempotencyKey));
     this.queue = run.catch(() => {});
     return run;
   }
 
-  async createNow(repoPath) {
+  async createNow(repoPath, idempotencyKey) {
     if (typeof repoPath !== 'string' || !repoPath || repoPath.length > 1000)
       throw new WorktreeError(400, 'invalid source repository path');
+    if (idempotencyKey !== null && (typeof idempotencyKey !== 'string'
+        || !/^[a-zA-Z0-9_-]{16,80}$/.test(idempotencyKey))) {
+      throw new WorktreeError(400, 'invalid worktree idempotency key');
+    }
     const { repository, head } = repositoryRoot(repoPath, this.sourceRoots);
+    if (idempotencyKey) {
+      const prior = this.store.worktreeByKey(idempotencyKey);
+      if (prior) {
+        if (!samePath(prior.source_repo, repository)) throw new WorktreeError(409, 'key belongs to a different repository');
+        // Revalidate a saved creating/partial intent without repeating any Git operation.
+        this.trusted = this.verifyRegistered();
+        return this.list().find(item => item.id === prior.id);
+      }
+    }
     this.ensureRoot();
     const id = this.newId();
     const slug = id.replace(/-/g, '').slice(0, 12).toLowerCase();
@@ -222,23 +250,42 @@ export class WorktreeManager {
     // Short folder name keeps Windows paths under MAX_PATH for deep repositories.
     const target = join(this.worktreeRoot, `task-${slug}`);
     assertSafeFolder(this.worktreeRoot, target);
+    // A crash at any later point leaves a discoverable intent. This insert must
+    // commit BEFORE the first Git mutation; retries never start a new attempt.
+    this.store.createWorktree({
+      id, sourceRepo: repository, path: target, branch, head,
+      idempotencyKey, state: 'creating',
+    });
 
     // ADR-0002 WT-2: create the branch first at the resolved commit. `git branch` without
     // --force refuses an existing name, so a user's branch is never moved or overwritten.
     try {
       await gitAsync(repository, ['branch', '--no-track', branch, head]);
     } catch (error) {
+      this.store.setWorktreeState(id, 'failed');
       if (/already exists/i.test(error.message)) throw new WorktreeError(409, `branch ${branch} already exists; nothing was changed`);
       throw new WorktreeError(502, error.message);
     }
     try {
       await gitAsync(repository, ['worktree', 'add', target, branch], GIT_CHECKOUT_TIMEOUT_MS);
     } catch (error) {
-      throw new WorktreeError(502, `${error.message} — ${this.undoFailedCreate(repository, branch, head, target)}`);
+      const outcome = this.undoFailedCreate(repository, branch, head, target);
+      this.store.setWorktreeState(id, existsSync(target) ? 'orphan' : 'partial');
+      throw new WorktreeError(502, `${error.message} — ${outcome}`);
     }
-    const path = realpathSync(target);
-    ensureInside(path, [this.worktreeRoot]);
-    this.store.createWorktree({ id, sourceRepo: repository, path, branch });
+    try {
+      const path = realpathSync(target);
+      if (!samePath(path, target) || !this.stillInPlace({ path }))
+        throw new Error('created worktree moved or became a symlink');
+      const registered = registeredWorktrees(repository);
+      if (!registered.some(w => samePath(w.path, path) && w.branch === `refs/heads/${branch}`))
+        throw new Error('Git did not register the expected worktree and branch');
+      // Only the final state transition is needed; no second INSERT can lose
+      // this folder when SQLite rejects the commit.
+      this.store.setWorktreeState(id, 'ready');
+    } catch (error) {
+      throw new WorktreeError(502, `Worktree created at ${target} but not finalized; use the same idempotency key to reconcile, and inspect before cleanup: ${String(error.message).slice(0, 120)}`);
+    }
     this.trusted.add(id);
     return this.list().find(item => item.id === id);
   }

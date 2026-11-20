@@ -1,17 +1,20 @@
 import { createServer } from 'node:http';
-import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AcpHost } from './acp-host.mjs';
-import { DEFAULT_MOCK, ensureInside, loadAdapters } from './adapters.mjs';
+import { ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
 import { deriveAttention } from './attention.mjs';
 import { WorktreeError, WorktreeManager, defaultWorktreeRoot } from './worktrees.mjs';
 import { GitHubEvidenceError, GitHubReader } from './github-reader.mjs';
 import { TaskError, TaskWorkflow } from './task-workflow.mjs';
 
-const MAX_BODY = 20_000;
+const MAX_ATTENTION_ID = 130;
+
+// Bytes, not characters: a 12,000-character CJK prompt is about 36 KB of UTF-8.
+const MAX_BODY_BYTES = 128 * 1024;
 const PORT = Number(process.env.AGENTDOCK_RUNTIME_PORT || 4319);
 
 function json(response, status, value) {
@@ -26,16 +29,91 @@ function json(response, status, value) {
 async function readJson(request) {
   if (!request.headers['content-type']?.toLowerCase().startsWith('application/json'))
     throw new ClientError(415, 'JSON content-type required');
-  let body = '';
+  // Decode once at the end: decoding per chunk corrupts multi-byte characters split across chunks.
+  // The rest of an oversized body is read and discarded so the 413 can still be
+  // delivered: leaving the loop early would destroy the socket instead.
+  const chunks = [];
+  let size = 0;
   for await (const chunk of request) {
-    body += chunk.toString('utf8');
-    if (body.length > MAX_BODY) throw new ClientError(413, 'payload too large');
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES * 8) { request.destroy(); throw new ClientError(413, 'payload too large'); }
+    if (size > MAX_BODY_BYTES) chunks.length = 0;
+    else chunks.push(chunk);
   }
-  try { return JSON.parse(body || '{}'); } catch { throw new ClientError(400, 'invalid JSON'); }
+  if (size > MAX_BODY_BYTES) throw new ClientError(413, 'payload too large');
+  let value;
+  try { value = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
+  catch { throw new ClientError(400, 'invalid JSON'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ClientError(400, 'invalid JSON body');
+  return value;
 }
 class ClientError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
+/**
+ * Reject requests addressed to any name other than the loopback of this machine.
+ * Without this, a web page whose DNS name is re-pointed at 127.0.0.1 (DNS
+ * rebinding) is same-origin with this API and could read history and diffs.
+ */
+function allowedHost(host) {
+  if (typeof host !== 'string') return false;
+  try {
+    const { hostname } = new URL(`http://${host}`);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch { return false; }
+}
+
+const heldLocks = new Set();
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === 'EPERM'; }
+}
+/**
+ * One host process per database. A second host would mark the live sessions
+ * of the first one as interrupted while their agents are still running.
+ */
+function acquireLock(dbPath) {
+  if (dbPath === ':memory:') return () => {};
+  const lockPath = `${resolve(dbPath)}.lock`;
+  mkdirSync(dirname(lockPath), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(lockPath, 'wx');
+      try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
+      heldLocks.add(lockPath);
+      return () => {
+        if (!heldLocks.delete(lockPath)) return;
+        try { unlinkSync(lockPath); } catch { /* already removed */ }
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let owner = NaN;
+      try { owner = Number(readFileSync(lockPath, 'utf8')); } catch { /* removed meanwhile */ }
+      const held = owner === process.pid ? heldLocks.has(lockPath) : Number.isInteger(owner) && owner > 0 && isAlive(owner);
+      if (held) throw new Error(`another AgentDock runtime (pid ${owner}) is already using ${dbPath}`);
+      try { unlinkSync(lockPath); } catch { /* removed meanwhile */ }
+    }
+  }
+  throw new Error(`could not take the runtime lock for ${dbPath}`);
+}
+
+// Repository configuration is untrusted input for an inspector that promises to be
+// read-only: never run fsmonitor hooks, external diff drivers or textconv filters,
+// and never take locks or rewrite the index.
+const GIT_SAFE = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '--no-pager'];
+function git(cwd, args, timeout) {
+  return new Promise((resolveGit, rejectGit) => {
+    execFile('git', ['-C', cwd, ...GIT_SAFE, ...args], {
+      timeout, encoding: 'utf8', maxBuffer: 1_000_000, windowsHide: true,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+    }, (error, stdout) => {
+      // Output beyond the buffer is cut off, which the caller reports as truncated.
+      if (!error || error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return resolveGit(String(stdout ?? ''));
+      rejectGit(new ClientError(422, 'git inspection failed for this directory'));
+    });
+  });
+}
+
 function allowedOrigin(origin) {
   if (!origin) return true; // Node/Curl testing. Browser mutation requests carry Origin.
   try {
@@ -55,38 +133,52 @@ export function createRuntimeServer({
   dbPath = resolve('.local', 'agentdock.db'),
   adapters = loadAdapters(process.env.AGENTDOCK_ADAPTER_CONFIG),
   worktreeRoot = defaultWorktreeRoot(),
+  limits = {},
+  githubReader = null, // integration-test seam; never configurable via HTTP
 } = {}) {
   const sourceRoots = roots.map(root => realpathSync(root));
   const allowedRoots = [...sourceRoots];
-  const store = new SessionStore(dbPath);
-  const worktrees = new WorktreeManager({store,sourceRoots,worktreeRoot});
+  const releaseLock = acquireLock(dbPath);
+  let store;
+  let worktrees;
+  try {
+    store = new SessionStore(dbPath);
+    worktrees = new WorktreeManager({ store, sourceRoots, worktreeRoot });
+  } catch (error) {
+    store?.close();
+    releaseLock();
+    throw error;
+  }
   // Shared by reference with AcpHost. Rebuilt in place before each use so a worktree folder
   // later replaced by a symlink/junction (or moved) stops being an approved root.
   const refreshRoots = () => allowedRoots.splice(sourceRoots.length, Infinity, ...worktrees.permittedWorkspacePaths());
   refreshRoots();
-  const host = new AcpHost({ store, roots: allowedRoots, adapters });
-  const github = new GitHubReader({ roots: allowedRoots });
+  const host = new AcpHost({ store, roots: allowedRoots, adapters, limits });
+  const github = githubReader ?? new GitHubReader({ roots: allowedRoots });
   const tasks = new TaskWorkflow({ store, roots: allowedRoots });
   const server = createServer(async (request, response) => {
     try {
       const method = request.method;
       const url = new URL(request.url || '/', 'http://127.0.0.1');
       const pathname = url.pathname;
+      if (!allowedHost(request.headers.host)) throw new ClientError(403, 'unexpected Host header');
       if (request.headers.origin && !allowedOrigin(request.headers.origin)) {
         throw new ClientError(403, 'cross-origin request rejected');
       }
       if (method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true, mode: 'local-development', protocol: 'ACP v1', storage: 'sqlite' });
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
-      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/')) refreshRoots();
+      if (pathname === '/api/workspaces' || pathname === '/api/sessions' || pathname.startsWith('/api/git/') || pathname.startsWith('/api/github/')) refreshRoots();
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
       if (method === 'GET' && pathname === '/api/worktrees') return json(response, 200, worktrees.list());
       if (method === 'POST' && pathname === '/api/worktrees') {
         const payload = await readJson(request);
         // This endpoint creates only a new branch and worktree after explicit user action.
         // Never deletes/cleans, force-pushes or modifies the base branch.
-        const item = await worktrees.create({ repoPath: payload?.repoPath });
+        const item = await worktrees.create({
+          repoPath: payload?.repoPath, idempotencyKey: payload?.idempotencyKey ?? null,
+        });
         refreshRoots();
-        return json(response, 201, item);
+        return json(response, item.state === 'ready' && item.available ? 201 : 202, item);
       }
       if (method === 'GET' && pathname === '/api/github/issues') {
         return json(response, 200, await github.issues(url.searchParams.get('cwd') || ''));
@@ -116,30 +208,42 @@ export function createRuntimeServer({
         }
         if (method === 'POST' && route === 'advance') {
           const payload = await readJson(request);
-          // Actor is set by this local operator endpoint; agent cannot claim
-          // an approval by supplying actor='human' in the request body.
-          return json(response, 200, tasks.advance(id, payload, 'human'));
+          // The body does not authenticate the actor or prove human presence.
+          // The final external gate is read-only, sourced from the operator's
+          // authenticated GitHub CLI, and bound to this task's current revision.
+          let verifiedGithub = null;
+          if (payload?.to === 'awaiting_merge') {
+            const candidate = tasks.verificationCandidate(id, payload.expectedRevision);
+            verifiedGithub = await github.verifyTaskPull(candidate.workspace, candidate.reference, candidate.sha);
+          }
+          return json(response, 200, tasks.advance(id, payload, 'human', verifiedGithub));
         }
       }
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
       if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
-      const dismissMatch = /^\/api\/attention\/([^/]+)\/dismiss$/.exec(pathname);
-      if (method === 'POST' && dismissMatch) {
+      const reviewedMatch = /^\/api\/attention\/([^/]+)\/reviewed$/.exec(pathname);
+      if (method === 'POST' && reviewedMatch) {
         await readJson(request);
-        const id = decodeURIComponent(dismissMatch[1]);
-        if (id.length > 130 || !deriveAttention(store, { includeDismissed: true }).some(item => item.id === id))
-          throw new ClientError(404, 'attention item no longer exists');
-        store.dismissAttention(id);
+        let id;
+        try { id = decodeURIComponent(reviewedMatch[1]); } catch { throw new ClientError(400, 'invalid attention id'); }
+        if (id.length > MAX_ATTENTION_ID) throw new ClientError(404, 'attention item no longer exists');
+        // Derivation and the write run in one synchronous step: no ACP event
+        // can land between the existence check and the acknowledgement.
+        const item = deriveAttention(store, { includeViewed: true }).find(entry => entry.id === id);
+        if (!item) throw new ClientError(404, 'attention item no longer exists');
+        if (item.type !== 'review')
+          throw new ClientError(409, 'only results can be marked reviewed; answer approvals in the session');
+        store.markViewed(item.sessionId, item.evidenceCursor);
         return json(response, 200, { ok: true });
       }
       if (method === 'GET' && pathname === '/api/git/status') {
         const cwd = ensureInside(url.searchParams.get('cwd') || '', allowedRoots);
-        const output = execFileSync('git', ['-C', cwd, 'status', '--short', '--branch'], { timeout: 5000, encoding: 'utf8', maxBuffer: 1_000_000 });
-        return json(response, 200, { cwd, status: output.slice(0, 25_000) });
+        const output = await git(cwd, ['status', '--short', '--branch'], 5000);
+        return json(response, 200, { cwd, status: output.slice(0, 25_000), truncated: output.length > 25_000 });
       }
       if (method === 'GET' && pathname === '/api/git/diff') {
         const cwd = ensureInside(url.searchParams.get('cwd') || '', allowedRoots);
-        const output = execFileSync('git', ['-C', cwd, '--no-pager', 'diff', '--', '.'], { timeout: 7000, encoding: 'utf8', maxBuffer: 1_000_000 });
+        const output = await git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--', '.'], 7000);
         return json(response, 200, { cwd, diff: output.slice(0, 120_000), truncated: output.length > 120_000 });
       }
       if (method === 'POST' && pathname === '/api/sessions') {
@@ -147,7 +251,7 @@ export function createRuntimeServer({
         const session = await host.start({ adapterId: payload.adapterId, cwd: payload.cwd });
         return json(response, 201, session);
       }
-      const sessionMatch = /^\/api\/sessions\/([a-f0-9-]{36})(?:\/(events|prompt|cancel|close|approvals))?$/.exec(pathname);
+      const sessionMatch = /^\/api\/sessions\/([a-f0-9-]{36})(?:\/(events|prompt|cancel|close|approvals|viewed))?$/.exec(pathname);
       if (sessionMatch) {
         const [,id,route] = sessionMatch;
         if (!store.get(id)) throw new ClientError(404, 'session not found');
@@ -158,12 +262,23 @@ export function createRuntimeServer({
           return json(response, 200, store.events(id, cursor));
         }
         if (method === 'GET' && route === 'approvals') return json(response, 200, store.pendingApprovals(id));
+        if (method === 'POST' && route === 'viewed') {
+          // The UI reports the newest event it rendered while focused. Viewing
+          // never changes session state and never answers an approval.
+          const payload = await readJson(request);
+          const latest = store.latestEvent(id)?.seq ?? 0;
+          const cursor = payload?.cursor;
+          if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > latest)
+            throw new ClientError(400, 'invalid event cursor');
+          store.markViewed(id, cursor);
+          return json(response, 200, { ok: true });
+        }
         if (method === 'POST' && route === 'prompt') {
           const payload = await readJson(request);
           if (typeof payload.text !== 'string' || !payload.text.trim() || payload.text.length > 12_000)
             throw new ClientError(400, 'invalid prompt');
           const conn = host.connections.get(id);
-          if (!conn || conn.closed) throw new ClientError(409, 'agent is not connected; view-only historical session');
+          if (!conn || conn.closed || !conn.ctx) throw new ClientError(409, 'agent is not connected; view-only historical session');
           if (conn.busy) throw new ClientError(409, 'agent already busy');
           // Not awaited: caller sees streaming updates through the event API.
           void host.prompt(id, payload.text).catch(() => {});
@@ -186,10 +301,12 @@ export function createRuntimeServer({
       }
       throw new ClientError(404, 'endpoint not found');
     } catch (error) {
-      const status = error instanceof ClientError || error instanceof WorktreeError || error instanceof GitHubEvidenceError || error instanceof TaskError ? error.status
-        : /workspace|adapter|approval|not connected|already processing|invalid/i.test(error.message) ? 400 : 500;
+      // ClientError, HostError, WorktreeError, GitHubEvidenceError and TaskError carry status.
+      const status = Number.isInteger(error?.status) ? error.status
+        : /workspace|adapter/i.test(String(error?.message)) ? 400 : 500;
       const message = status === 500 ? 'internal runtime error' : String(error.message).slice(0, 200);
-      json(response, status, { error: message });
+      if (!response.headersSent) json(response, status, { error: message });
+      else response.destroy();
     }
   });
   return {
@@ -205,26 +322,43 @@ export function createRuntimeServer({
     },
     async close() {
       await host.shutdown();
-      await new Promise(resolveClose => server.close(resolveClose));
+      await new Promise(resolveClose => { server.close(resolveClose); server.closeAllConnections?.(); });
       // Close DB only after all owned ACP child processes were torn down.
       store.close();
+      releaseLock();
+    },
+    /** Synchronous last resort when the process is going away without `close()`. */
+    abandon() {
+      host.killAllSync();
+      releaseLock();
     },
   };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const roots = (process.env.AGENTDOCK_WORKSPACE_ROOTS || process.cwd()).split(',').map(x => resolve(x.trim()));
-  const runtime = createRuntimeServer({ roots });
+  const initTimeoutMs = Number(process.env.AGENTDOCK_INIT_TIMEOUT_MS);
+  let runtime;
   try {
+    runtime = createRuntimeServer({ roots, limits: Number.isFinite(initTimeoutMs) && initTimeoutMs >= 1000 ? { initTimeoutMs } : {} });
     const address = await runtime.listen();
     console.log(`AgentDock development ACP host listening on http://127.0.0.1:${address.port} (roots: ${runtime.allowedRoots.length})`);
   } catch (e) {
     console.error('Cannot start ACP host:', e.message);
-    process.exitCode = 1;
+    runtime?.abandon();
+    process.exit(1);
   }
-  const shutdown = async () => {
-    try { await runtime.close(); } finally { process.exit(0); }
+  let stopping = false;
+  const shutdown = async code => {
+    if (stopping) return;
+    stopping = true;
+    try { await runtime.close(); } finally { process.exit(code); }
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.once(signal, () => void shutdown(0));
+  // An agent must not outlive a host that dies on a programming error.
+  process.on('uncaughtException', error => {
+    console.error('ACP host stopping after an unexpected error:', error?.message);
+    void shutdown(1);
+  });
+  process.on('exit', () => runtime.abandon());
 }

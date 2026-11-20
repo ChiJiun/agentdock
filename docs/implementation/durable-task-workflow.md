@@ -7,8 +7,9 @@ This implementation adds a **local-only, human-driven SDLC state machine** to th
 - SQLite-backed `coding_tasks`, `task_transitions` and `task_evidence` tables. A task is separate from its ACP sessions.
 - A workspace must resolve to an existing directory inside an approved local root; GitHub issue metadata is optional and validated.
 - Explicit state transitions, revision-based optimistic concurrency and append-only history.
-- Evidence records for plan, local tests, independent review, PR and CI.
-- The state machine **never** runs Git/GitHub commands, merges, pushes, executes tests or claims CI passed on its own.
+- Evidence records for plan, local tests, independent review, PR and CI. Every user-submitted row is explicitly persisted with `provenance=operator_attested`, `verified_at=NULL`, `source_url=NULL`; browser-supplied provenance, source URL and verification timestamps are rejected.
+- For the final `ci → awaiting_merge` transition only, the host now reads GitHub **live** through the authenticated, GET-only `GitHubReader`. It verifies the PR is open and not draft, its exact head SHA, a latest independent `APPROVED` review bound to that commit, all Check Runs and combined legacy Commit Status, then rereads the PR head to catch changes during the request. Only successful verification inserts `provider_verified` rows, with source URL, verification timestamp and commit SHA in the **same SQLite transaction** as the transition.
+- The state machine **never** performs GitHub writes, merges, pushes, or executes tests. No endpoint marks a task `merge_ready:true`: local test evidence remains operator-attested and `humanConfirmed` is not authenticated human presence.
 - Transition to `complete` is deliberately disabled until a separate, independently verified merge/reconciliation implementation exists.
 
 ## States and transitions
@@ -48,7 +49,7 @@ A gate is checked inside the same SQLite write transaction as the state change.
 | `reviewing` | link 1 of the evidence chain |
 | `ready_for_pr` | links 1–2 |
 | `pr_open` | `humanConfirmed: true`, and links 1–3 |
-| `awaiting_merge` | links 1–4 |
+| `awaiting_merge` | links 1–4, plus **fresh provider verification** for links 2–4 (independent GitHub review, PR head, CI); manual `passed` cannot bypass this gate |
 | `complete` | always refused in this preview |
 
 Evidence chain:
@@ -60,7 +61,7 @@ Evidence chain:
 | 3 | `pull_request` (with a `https://github.com/<owner>/<repo>/pull/<n>` reference) | `reviewing` | same `commitSha` as link 2 (the PR head is the reviewed commit) |
 | 4 | `ci_checks` | `ci` | same `commitSha` as link 3 (CI ran on the PR head) |
 
-For every link the **latest** record of that kind decides: it must be `passed`. A newer `failed` or `pending` record, a record from an earlier round (for example before `ci → implementing`), or a commit mismatch anywhere upstream blocks the gate. Recording a new PR head while CI is running therefore cannot reach `awaiting_merge` without a new passing `independent_review` and `local_tests` record for that commit.
+For every link the **latest** record of that kind decides: it must be `passed`. A newer `failed` or `pending` record, a record from an earlier round (for example before `ci → implementing`), or a commit mismatch anywhere upstream blocks the gate. Recording a new PR head while CI is running therefore cannot reach `awaiting_merge` without a new passing `independent_review` and `local_tests` record for that commit. The final gate fetches provider data at transition time, then records three provider-verified rows and advances atomically. The GitHub reader never trusts the body-supplied `verifiedGithub` object; its own snapshot is passed internally by the server. Missing/expired Review on the current head, changed PR head, failed or incomplete CI, or failed GitHub GET **prevents** the transition.
 
 **Known limitation:** evidence may be recorded while the task is in *any* non-terminal state; "current round" only means "recorded after the task last entered the phase". An operator can therefore stay in `ci`, record fresh `local_tests`, `independent_review`, `pull_request` and `ci_checks` evidence for a new commit and reach `awaiting_merge` without looping back through `implementing`, and without a human confirmation for that new head. Because evidence is operator-supplied in the first place this adds no new trust, but it means the loop-back is a convention, not an enforced path. Restricting each evidence kind to the state in which it is meaningful is left for the slice that records evidence from real runs. `local_tests`, `independent_review`, `pull_request` and `ci_checks` evidence must carry a full 40-character lowercase `commitSha`; `plan` evidence must not.
 
@@ -75,7 +76,8 @@ For every link the **latest** record of that kind decides: it must be `passed`. 
 - A task has no in-flight process of its own. A runtime restart changes no task state; ACP sessions are marked `interrupted` by the session store as before, and moving a task to `interrupted` is an explicit operator transition.
 - `POST /advance` is compare-and-set on `expectedRevision`. A retried or double-submitted request gets `409 stale task revision`; the client re-reads the task instead of applying the transition twice.
 - `POST /api/tasks` and `POST /evidence` accept an optional caller-chosen UUID `id`. Repeating the request with the same `id` and the same content returns the existing row; the same `id` with different content is `409`. Without an `id`, a retry creates a second row.
-- Databases created by the first preview commit are upgraded in place (`ALTER TABLE ... ADD COLUMN`). Their old evidence has no round marker and never satisfies a gate.
+- Databases created by the first preview commit are upgraded in place (`ALTER TABLE ... ADD COLUMN`). Their old evidence has no round marker and never satisfies a gate. New evidence columns are `provenance`, `source_url`, `verified_at`; old rows migrate to `operator_attested`, never `provider_verified`.
+- The `awaiting_merge` state means **awaiting independent completion and authorization**, not safe-to-merge. All task list, create, get and advance responses expose `verification_status: "unverified"`, `merge_ready: false`, `human_approval_verified: false` (including tasks already in `awaiting_merge`). These flags are intentionally fail-closed until trusted local execution and host-side user approval are implemented.
 
 ## Development API (loopback only)
 
@@ -87,7 +89,7 @@ For every link the **latest** record of that kind decides: it must be `passed`. 
 | GET | `/api/tasks/:id/history?after=<seq>` | Append-only transition history, oldest first, 500 per page |
 | GET | `/api/tasks/:id/evidence?after=<seq>` | Evidence, oldest first, 500 per page |
 | POST | `/api/tasks/:id/evidence` | Append `{kind,result,summary,reference?,commitSha?,id?}` |
-| POST | `/api/tasks/:id/advance` | Transition with `{to,expectedRevision,reason,humanConfirmed?}` |
+| POST | `/api/tasks/:id/advance` | Transition with `{to,expectedRevision,reason,humanConfirmed?}`. Entering `awaiting_merge` performs real read-only GitHub PR/reviews/checks verification first; client-injected provider evidence is ignored |
 
 Rows use the stored column names (`issue_number`, `task_id`, `commit_sha`, `created_at`, …).
 
@@ -107,7 +109,7 @@ Example, after `npm run dev:full`:
 curl -sS http://127.0.0.1:4319/api/tasks
 ```
 
-**Important trust boundary:** `humanConfirmed` is a development API UI hint, **not** authenticated user presence. This local API has no authentication beyond binding to loopback and browser Origin checks; any local process, including an agent the runtime started, can call it. Do not expose it publicly or treat it as an authorization boundary. A future Tauri/Rust Host must verify human approval and bind it to a fingerprint and single-use operation ID. Likewise, evidence is operator-submitted: the gates check that it is current and names one commit, **not** that the tests ran, that the reviewer was independent, or that GitHub agrees with the recorded PR head and CI result. `summary`, `reference`, `reason` and `objective` are stored as untrusted text without secret redaction; a UI must not render them as links or markup without validation.
+**Important trust boundary:** `humanConfirmed` is a development API UI hint, **not** authenticated user presence. This local API has no authentication beyond binding to loopback and browser Origin checks; any local process, including an agent the runtime started, can call it. Do not expose it publicly or treat it as an authorization boundary. A future Tauri/Rust Host must verify human approval and bind it to a fingerprint and single-use operation ID. Manual evidence is operator-submitted: the earlier gates check that it is current and names one commit. **Only the last gate** verifies the current GitHub PR head, the latest independent GitHub approval tied to the head SHA, and complete CI Check Runs + legacy Commit Status. It does **not** prove that local tests actually ran, and GitHub status can change after the read. This preview never exposes a merge-ready or authenticated-human conclusion. `summary`, `reference`, `reason` and `objective` are stored as untrusted text without secret redaction; a UI must not render them as links or markup without validation.
 
 ## Differences from the proposed ADR-0003 contract
 
@@ -152,7 +154,7 @@ npm run build
 - Task UI, GitHub Issue picker, plan review and worktree binding.
 - Task/ACP session relationship and independently verified build/test evidence (recorded exit status instead of an operator summary).
 - Independent reviewer ACP session with diff/test context.
-- Evidence verified against GitHub (PR head SHA, check runs) through the read-only reader instead of operator input.
+- Production-grade validation of actual local test execution evidence, independent reviewer session identity, revocation/freshness monitoring after the last GET, and a final human-authorized merge gate. Live GitHub PR head, reviews and CI are now checked only at `ci → awaiting_merge`; no automatic polling is implemented.
 - Backend-enforced one-time approval for GitHub writes and idempotent PR creation.
 - CI status and job log reconciliation; bounded repair loops and retries (nothing here limits how often an operator loops back to `implementing`).
 - Rust/Tauri Host port, schema versioning, Windows E2E and OS sandbox.
