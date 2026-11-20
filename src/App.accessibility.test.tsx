@@ -52,6 +52,15 @@ describe('preview accessibility', () => {
     expect(document.activeElement).toBe(last);
   });
 
+  it('closes the session switcher on Escape from a result button', () => {
+    const page = renderApp();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const result = page.querySelector<HTMLButtonElement>('.switcher-result')!;
+    act(() => result.focus());
+    act(() => result.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(page.querySelector('.switcher[role="dialog"]')).toBeNull();
+  });
+
   it('renders generated session titles without leaking localization markers', () => {
     const page = renderApp();
     const newSession = page.querySelector<HTMLButtonElement>('.session-section .section-label button');
