@@ -84,7 +84,7 @@ function cursor(value) {
 function parse(row) {
   if (!row) return null;
   return { ...row, issue_number: row.issue_number == null ? null : Number(row.issue_number),
-    verification: 'operator_attested', merge_ready: false };
+    verification: 'unverified', merge_ready: false };
 }
 
 export class TaskWorkflow {
@@ -114,6 +114,8 @@ export class TaskWorkflow {
         commit_sha TEXT,
         transition_seq INTEGER,
         provenance TEXT NOT NULL DEFAULT 'operator_attested',
+        verified_at TEXT,
+        source_url TEXT,
         FOREIGN KEY(task_id) REFERENCES coding_tasks(id)
       );
       CREATE TABLE IF NOT EXISTS task_transitions (
@@ -133,6 +135,8 @@ export class TaskWorkflow {
     this.#addColumn('task_evidence', 'commit_sha', 'TEXT');
     this.#addColumn('task_evidence', 'transition_seq', 'INTEGER');
     this.#addColumn('task_evidence', 'provenance', "TEXT NOT NULL DEFAULT 'operator_attested'");
+    this.#addColumn('task_evidence', 'verified_at', 'TEXT');
+    this.#addColumn('task_evidence', 'source_url', 'TEXT');
     this.#addColumn('task_transitions', 'revision', 'INTEGER');
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS task_evidence_idx ON task_evidence(task_id,kind,created_at);
@@ -259,7 +263,12 @@ export class TaskWorkflow {
    * return the existing record instead of appending a duplicate.
    */
   addEvidence(id, input) {
-    const { id: requestedId, kind, result, summary, reference = null, commitSha = null } = body(input);
+    const { id: requestedId, kind, result, summary, reference = null, commitSha = null,
+      provenance = 'operator_attested', verifiedAt = null, sourceUrl = null } = body(input);
+    // Provider verification must originate from a trusted server-side integration,
+    // never from arbitrary JSON supplied by an agent or local HTTP client.
+    if (provenance !== 'operator_attested' || verifiedAt !== null || sourceUrl !== null)
+      throw invalid('provider verification metadata cannot be supplied by the operator');
     const evidenceId = optionalId(requestedId, 'evidence id') ?? randomUUID();
     if (!EVIDENCE_KINDS.has(kind)) throw invalid('invalid evidence kind');
     if (!EVIDENCE_RESULTS.has(result)) throw invalid('invalid evidence result');
@@ -287,8 +296,9 @@ export class TaskWorkflow {
         && reference.split('/').slice(3, 5).join('/').toLowerCase() !== task.issue_url.split('/').slice(3, 5).join('/').toLowerCase())
         throw invalid('invalid evidence reference: pull request is not in the repository of the task issue');
       const { seq } = this.db.prepare('SELECT MAX(seq) AS seq FROM task_transitions WHERE task_id=?').get(id);
-      this.db.prepare('INSERT INTO task_evidence(id,task_id,kind,result,summary,reference,created_at,commit_sha,transition_seq) VALUES(?,?,?,?,?,?,?,?,?)')
-        .run(evidenceId, id, kind, result, note, reference, new Date().toISOString(), commitSha, seq);
+      this.db.prepare('INSERT INTO task_evidence(id,task_id,kind,result,summary,reference,created_at,commit_sha,transition_seq,provenance,verified_at,source_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(evidenceId, id, kind, result, note, reference, new Date().toISOString(), commitSha, seq,
+          'operator_attested', null, null);
       return read.get(evidenceId);
     });
   }
@@ -331,6 +341,8 @@ export class TaskWorkflow {
         throw new TaskError(403, 'human confirmation required');
       if (to === 'complete') throw conflict('merge must be verified outside the preview runtime');
       this.#checkGates(id, to);
+      // The preview may record a proposed merge, but it cannot assert that
+      // operator-attested CI/review evidence was independently verified.
       const now = new Date().toISOString();
       const result = this.db.prepare('UPDATE coding_tasks SET state=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND state=?')
         .run(to, now, id, expectedRevision, task.state);
