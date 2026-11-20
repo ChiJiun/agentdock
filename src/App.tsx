@@ -116,12 +116,12 @@ function Timeline({ entries, locale }: { entries: TimelineEntry[]; locale: impor
     {entries.map(entry => entry.kind === 'message' ? (
       <div key={entry.id} className={`timeline-message timeline-${entry.author}`}>
         {entry.author === 'agent' && <div className="timeline-agent-avatar"><Sparkles size={15}/></div>}
-        <div className="message-body"><div className="message-meta"><strong>{tr(entry.author === 'user' ? 'timeline.you' : 'timeline.agent')}</strong><time>{displayDemoText(entry.time, locale)}</time></div><p>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : displayDemoText(entry.text, locale)}</p></div>
+        <div className="message-body"><div className="message-meta"><strong>{tr(entry.author === 'user' ? 'timeline.you' : 'timeline.agent')}</strong><time>{displayDemoText(entry.time, locale)}</time></div><p>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : entry.author === 'user' ? entry.text : displayDemoText(entry.text, locale)}</p></div>
       </div>
     ) : (
       <div key={entry.id} className={`timeline-event timeline-${entry.kind}`}>
         <span className="event-icon">{entry.kind === 'notice' ? <ShieldCheck size={16}/> : <TerminalSquare size={15}/>}</span>
-        <span>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : displayDemoText(entry.text, locale)}</span><time>{entry.time}</time>
+        <span>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : displayDemoText(entry.text, locale)}</span><time>{displayDemoText(entry.time, locale)}</time>
       </div>
     ))}
   </div>;
@@ -262,7 +262,7 @@ export default function App() {
     const entry: TimelineEntry = { id: nextId('event'), author: 'user', kind: 'message', text, time: demoText('now') };
     const acknowledgement: TimelineEntry = {
       id: nextId('event'), author: 'system', kind: 'notice',
-      text: demoText('notSent'), time: tr('timeline.now'),
+      text: demoText('notSent'), time: demoText('now'),
     };
     setSessions(old => old.map(s => s.id === active.id ? { ...s, entries: [...s.entries, entry, acknowledgement] } : s));
     setNotice(tr('demo.stored'));
