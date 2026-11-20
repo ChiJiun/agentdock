@@ -27,7 +27,6 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   useEffect(() => {
     before.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     input.current?.focus();
-    return () => before.current?.focus();
   }, []);
 
   useEffect(() => {
@@ -45,12 +44,13 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     return () => {
       document.removeEventListener('focusin', guard);
       siblings.forEach((element, index) => { element.inert = previous[index]!; });
+      before.current?.focus();
     };
   }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!dialog || dialog.contains(document.activeElement)) {
+    if (dialog && dialog.contains(document.activeElement)) {
       const focusedElement = document.activeElement as HTMLElement | null;
       if (focusedElement && focusedElement !== input.current &&
           !focusedElement.matches('.switcher-result') && !focusedElement.matches('.switcher-input button')) {
@@ -86,7 +86,6 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   function keys(e: KeyboardEvent<HTMLInputElement>) {
     // Keys that drive an IME composition (candidate Enter, Esc, arrows) must not act on the list.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Escape') { e.preventDefault(); onClose(); }
     if (e.key === 'ArrowDown') { e.preventDefault(); setFocused(v => Math.min(shown.length - 1, v + 1)); }
     if (e.key === 'ArrowUp') { e.preventDefault(); setFocused(v => Math.max(0, v - 1)); }
     if (e.key === 'Enter' && shown[Math.min(focused, shown.length - 1)]) {
@@ -96,7 +95,7 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   return <div className="switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} onKeyDown={trapFocus} role="dialog" aria-modal="true" aria-label={tr('switcher.title')} className="switcher">
       <div className="switcher-input"><Search size={18}/><input ref={input} placeholder={tr('switcher.placeholder')} value={query} onChange={e => { setQuery(e.target.value); setFocused(0); }} onKeyDown={keys} aria-label={tr('switcher.search')}/><button className="icon-button" onClick={onClose} aria-label={tr('switcher.close')}><X size={17}/></button></div>
-      <div className="switcher-results">{options.length ? options.slice(0, 50).map((session, index) =>
+      <div className="switcher-results">{shown.length ? shown.map((session, index) =>
         <button className={`switcher-result ${focused === index ? 'switcher-focused' : ''}`} key={session.id} onClick={() => select(session)} onMouseEnter={() => setFocused(index)}>
           <span>{session.title}</span><small>{projects.find(p => p.id === session.projectId)?.name} · {session.agent} · {tr(`status.${session.status}`)}</small>
         </button>
