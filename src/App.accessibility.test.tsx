@@ -59,13 +59,13 @@ describe('preview accessibility', () => {
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
     const dialog = page.querySelector<HTMLElement>('.switcher[role="dialog"]')!;
     const input = dialog.querySelector<HTMLInputElement>('input')!;
-    expect(page.querySelector('.sidebar')?.inert).toBe(true);
-    expect(page.querySelector('.main')?.inert).toBe(true);
+    expect(page.querySelector<HTMLElement>('.sidebar')?.inert).toBe(true);
+    expect(page.querySelector<HTMLElement>('.main')?.inert).toBe(true);
     act(() => background.focus());
     expect(document.activeElement).toBe(input);
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
-    expect(page.querySelector('.sidebar')?.inert).toBe(false);
-    expect(page.querySelector('.main')?.inert).toBe(false);
+    expect(page.querySelector<HTMLElement>('.sidebar')?.inert).toBe(false);
+    expect(page.querySelector<HTMLElement>('.main')?.inert).toBe(false);
     expect(document.activeElement).toBe(background);
   });
 
