@@ -16,6 +16,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   initTimeoutMs: 30_000,
   stdinGraceMs: 1_500,
   killGraceMs: 3_000,
+  transportGraceMs: 1_000,
   maxLiveSessions: 8,
   maxPendingApprovals: 16,
   maxMessageBytes: 16 * 1024 * 1024,
@@ -43,8 +44,9 @@ function taskkill() {
  * This is best effort; the production Rust host must use a Job Object (ADR-0002).
  */
 function signalTree(proc, signal) {
-  if (!proc.pid || hasExited(proc)) return;
+  if (!proc.pid) return;
   if (process.platform === 'win32') {
+    if (hasExited(proc)) return; // taskkill cannot traverse a parent that already exited
     execFile(taskkill(), ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 5_000 }, error => {
       if (error && !hasExited(proc)) { try { proc.kill(); } catch { /* already gone */ } }
     });
@@ -55,10 +57,10 @@ function signalTree(proc, signal) {
 }
 
 function killTreeSync(proc) {
-  if (!proc.pid || hasExited(proc)) return;
+  if (!proc.pid) return;
   try {
-    if (process.platform === 'win32') spawnSync(taskkill(), ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 5_000 });
-    else process.kill(-proc.pid, 'SIGKILL');
+    if (process.platform === 'win32' && !hasExited(proc)) spawnSync(taskkill(), ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 5_000 });
+    else if (process.platform !== 'win32') process.kill(-proc.pid, 'SIGKILL');
   } catch { /* already gone */ }
 }
 
@@ -417,6 +419,11 @@ export class AcpHost {
     });
     conn.stop?.();
     // No pid means the process never started, so there is nothing to wait for.
+    if (proc.pid) {
+      // A POSIX process group may survive its leader. Always signal the group,
+      // even after the direct agent process exited.
+      if (hasExited(proc) && process.platform !== 'win32') signalTree(proc, 'SIGKILL');
+    }
     if (proc.pid && !hasExited(proc)) {
       // Orderly first: end stdin and let the agent leave on its own.
       try { proc.stdin.end(); } catch { /* pipe already closed */ }
@@ -428,7 +435,18 @@ export class AcpHost {
         }
       }
     }
-    await conn.done?.catch(() => {});
+    // Descendants can inherit stdout/stderr after the leader exits, keeping the
+    // SDK transport open forever. Force-close the pipes after a bounded grace.
+    const settled = await Promise.race([
+      Promise.resolve(conn.done).then(() => true, () => true),
+      new Promise(resolve => setTimeout(() => resolve(false), this.limits.transportGraceMs)),
+    ]);
+    if (!settled) {
+      for (const pipe of [proc.stdin, proc.stdout, proc.stderr]) {
+        try { pipe?.destroy(); } catch { /* already closed */ }
+      }
+      if (process.platform !== 'win32' && proc.pid) signalTree(proc, 'SIGKILL');
+    }
     if (this.connections.get(id) === conn) this.connections.delete(id);
   }
 
