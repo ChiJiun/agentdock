@@ -2,7 +2,7 @@
 
 Snapshot: 2026-11-17 (source audit for [Issue #1](https://github.com/ChiJiun/agentdock/issues/1)). Module-level decisions are recorded in [ADR-0002](decisions/0002-source-reuse.md).
 
-**No third-party code has been imported.** This file is the provenance manifest that any future copy or dependency PR must cite. A directory existing does not prove independent embeddability or security; every row below states what was actually checked.
+**No upstream source files have been copied into the AgentDock UI prototype.** The Acpira UI helpers were evaluated but replaced with original implementations to respect ADR-0002. This file remains the provenance manifest for future copy or dependency PRs. A directory existing does not prove independent embeddability or security; every row below states what was actually checked.
 
 ## Source strategy
 
@@ -71,6 +71,10 @@ Decision vocabulary (from Issue #1): **dependency** (consume a published package
 | Octos `crates/octos-store/` | Apache-2.0 | 9 Rust files (~100 KB); `redb` storage | **Research only** (AgentDock uses SQLite) |
 | Aether `crates/aether-core/` (crate `aether-agent-core`) | MIT | 75 Rust files (~414 KB); internal deps `aether-auth`, `aether-llm`, `aether-mcp-utils`, `aether-utils`; `rmcp` | **Research only** |
 | Forge `crates/forge-core/`, `crates/forge-provider/` | AGPL-3.0-only | 345 + 65 Rust files (~5.39 MB + ~1.42 MB); `forge-core` depends on 12 internal `forge-*` crates | **Excluded** (no code, no line-by-line adaptation) |
+
+## Imported source files
+
+None. The prototype's tab keyboard handling, textarea ref wiring, and progress animation are original implementations in `src/App.tsx`, `src/components/Composer.tsx`, and `src/components/ProgressRail.tsx`. Acpira remains a UX reference only; the Issue #1 source audit is still tracked separately. Published npm dependencies are declared in `package.json` and require their own license inventory before distribution.
 
 ## License and notice obligations
 
