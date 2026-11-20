@@ -65,6 +65,7 @@ describe('preview accessibility', () => {
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
     expect(page.querySelector('.sidebar')?.inert).toBe(false);
     expect(page.querySelector('.main')?.inert).toBe(false);
+    expect(document.activeElement).toBe(background);
   });
 
   it('keeps focus in the dialog when filtering removes the focused result', () => {
@@ -100,6 +101,35 @@ describe('preview accessibility', () => {
     expect(page.querySelector('.session-title-row h1')?.textContent).not.toContain('__agentdock_demo:');
     expect(page.querySelector('.breadcrumbs strong')?.textContent).not.toContain('__agentdock_demo:');
     expect(page.querySelector('.session-item.session-selected strong')?.textContent).not.toContain('__agentdock_demo:');
+  });
+
+  it('updates generated session UI across locales without changing user messages', () => {
+    const page = renderApp();
+    const newSession = page.querySelector<HTMLButtonElement>('.session-section .section-label button')!;
+    act(() => newSession.click());
+    const composer = page.querySelector<HTMLTextAreaElement>('textarea')!;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(composer, 'Keep this user text unchanged');
+      composer.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const submit = page.querySelector<HTMLButtonElement>('.composer button[type="submit"]');
+    if (submit) act(() => submit.click());
+    const initialTitle = page.querySelector('.session-title-row h1')?.textContent;
+    const language = page.querySelector<HTMLButtonElement>('.language-toggle')!;
+    act(() => language.click());
+    const select = page.querySelector<HTMLSelectElement>('#ui-locale')!;
+    act(() => {
+      select.value = 'en-US';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(page.querySelector('.session-title-row h1')?.textContent).not.toBe(initialTitle);
+    expect(page.querySelector('.breadcrumbs strong')?.textContent).toBe(page.querySelector('.session-title-row h1')?.textContent);
+    expect(page.querySelector('.session-item.session-selected strong')?.textContent).toBe(page.querySelector('.session-title-row h1')?.textContent);
+    expect(page.querySelector('.timeline')?.textContent).not.toContain('__agentdock_demo:');
+    act(() => page.querySelector<HTMLButtonElement>('.language-panel-header button')!.click());
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    expect(page.querySelector('.switcher-result span')?.textContent).toBe(page.querySelector('.session-title-row h1')?.textContent);
   });
 
   it('keeps exactly one inspector tab in the keyboard tab order', () => {
