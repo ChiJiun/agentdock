@@ -17,7 +17,7 @@ The **Live ACP / 即時 ACP** sidebar includes a Session Sentinel bell. It follo
 
 - Badge count = needs reply + new results; `99+` above 99. The accessible name always states all three numbers ("1 need reply, 2 to review, 3 running in background").
 - The session on screen is not listed (UX rule 3), except for needs-reply rows.
-- Opening the inbox focuses the first row (or the popover when empty); ↑/↓/Home/End move between rows; Esc closes and returns focus to the bell; clicking outside closes without moving focus.
+- Opening the inbox focuses the first row (or the popover when empty); ↑/↓/Home/End move between rows; Tab/Shift+Tab wrap among inbox controls. When a focused result is marked reviewed and disappears, focus moves to a surviving row or the close button. Esc closes and returns focus to the bell; clicking outside closes without moving focus.
 - Activating a row opens that session; a needs-reply row opens its **Approvals** tab. The inbox never offers approve/deny — the full request is only shown in the session.
 - Rows show adapter, short session ID, a status label, the project folder name and a fixed localized template (zh-TW / en-US). Prompts, tool titles, commands, agent output and error text are never copied into attention items, so a row cannot leak a credential and its length does not depend on agent output.
 
@@ -27,7 +27,7 @@ The **Live ACP / 即時 ACP** sidebar includes a Session Sentinel bell. It follo
 
 At an ungraceful stop, the next host marks every session that was live as `interrupted` and writes a `host_restarted` event with the `previousStatus` (Live ACP runtime). That event advances the cursor, so the Sentinel decides whether the interruption is new to the user:
 
-- the session was idle (`previousStatus: ready`), it was viewed while idle or terminal, and nothing else happened after that view → the interruption stays quiet;
+- the session was idle (`previousStatus: ready`), the view was **recorded while ready** before the restart, and nothing else happened after that view → the interruption stays quiet; a stale pre-restart cursor submitted *after* restart cannot dismiss a newly interrupted session;
 - it was running or waiting (`previousStatus: running`, `awaiting_approval`, `starting`), or anything happened after the view → the interruption is listed under New results to review (work may have been lost).
 
 ### Main sessions and sub-tasks

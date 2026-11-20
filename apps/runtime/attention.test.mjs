@@ -183,6 +183,29 @@ describe('event-driven Session Sentinel (no model calls)', () => {
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
 
+  test('an old cursor marked after restart cannot erase an unseen interruption', () => {
+    mkdirSync(resolve('.local'), { recursive: true });
+    const temp = mkdtempSync(resolve('.local', 'attention-test-'));
+    try {
+      const path = join(temp, 'db.sqlite');
+      const first = new SessionStore(path);
+      first.create({ id: 'lost', adapter: 'mock', cwd });
+      first.status('lost', 'ready');
+      const cursor = first.event('lost', 'connected').seq;
+      first.close();
+      const next = new SessionStore(path);
+      assert.equal(next.get('lost').status, 'interrupted');
+      // A delayed UI POST uses a pre-restart event cursor.
+      next.markViewed('lost', cursor);
+      assert.deepEqual(deriveAttention(next).map(item => item.key), ['agent_interrupted']);
+      // Explicitly opening the latest interruption evidence does acknowledge it.
+      const latest = next.latestEvent('lost').seq;
+      next.markViewed('lost', latest);
+      assert.deepEqual(deriveAttention(next), []);
+      next.close();
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  });
+
   test('view marks never move backwards', () => withStore(store => {
     store.create({ id: 'v', adapter: 'mock', cwd });
     store.status('v', 'failed');

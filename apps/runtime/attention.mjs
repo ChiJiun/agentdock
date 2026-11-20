@@ -39,8 +39,11 @@ export function isViewed(view, event) {
   if (!view || !SETTLED_VIEW_STATES.has(view.status)) return false;
   const cursor = event?.seq ?? 0;
   if (view.cursor >= cursor) return true;
-  return event?.kind === 'host_restarted' && event.previousStatus === 'ready'
-    && view.cursor >= event.priorSeq;
+  // A late /viewed request for an older cursor must not acknowledge a restart
+  // after the process was already lost. Only a view actually recorded while
+  // the session was ready may suppress the idle-session interruption.
+  return view.status === 'ready' && event?.kind === 'host_restarted'
+    && event.previousStatus === 'ready' && view.cursor >= event.priorSeq;
 }
 
 export function deriveAttention(store, { includeViewed = false } = {}) {
@@ -68,7 +71,7 @@ export function deriveAttention(store, { includeViewed = false } = {}) {
       });
     }
     if (approvals.length) continue;
-    const key = reviewKey(session, store.latestTurn(session.id));
+    const key = reviewKey(session, session.status === 'ready' ? store.latestTurn(session.id) : null);
     if (key) {
       if (includeViewed || !isViewed(store.attentionView(session.id), event)) {
         items.push({ ...common, id: `attention:${session.id}:review:${cursor}`, type: 'review', key });

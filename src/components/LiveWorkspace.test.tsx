@@ -148,6 +148,32 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect(ui.textContent).toContain('目前沒有需要你處理的事');
   });
 
+  it('keeps keyboard focus inside the inbox after acknowledging a row and wraps Tab', async () => {
+    availableSessions = [session, other];
+    attentionItems = [reviewItem()];
+    const ui = await render();
+    act(() => bell(ui)?.click());
+    const dialog = ui.querySelector<HTMLElement>('.live-attention-inbox')!;
+    const close = dialog.querySelector<HTMLButtonElement>('header button')!;
+    const mark = dialog.querySelector<HTMLButtonElement>('.live-attention-reviewed')!;
+    const row = dialog.querySelector<HTMLButtonElement>('.live-attention-main')!;
+    act(() => {
+      mark.focus();
+      mark.dispatchEvent(new KeyboardEvent('keydown', { key:'Tab', bubbles:true }));
+    });
+    expect(document.activeElement).toBe(close);
+    act(() => {
+      close.dispatchEvent(new KeyboardEvent('keydown', { key:'Tab', shiftKey:true, bubbles:true }));
+    });
+    expect(document.activeElement).toBe(mark);
+    expect(row).toBeTruthy();
+    act(() => mark.focus());
+    await act(async () => { mark.click(); await Promise.resolve(); });
+    expect(ui.querySelector('.live-attention-reviewed')).toBeNull();
+    expect(document.activeElement).toBe(close);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
   it('the session on screen is not listed unless it needs a reply', async () => {
     attentionItems=[reviewItem(session), backgroundItem(session), replyItem(session)];
     const ui=await render();

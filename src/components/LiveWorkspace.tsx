@@ -92,6 +92,10 @@ export function LiveWorkspace({ settings, onBack }: {
   const [gitEvidence, setGitEvidence] = useState<{ status?: string; diff?: string }>({});
   const [inspectorTab, setInspectorTab] = useState<'activity' | 'git' | 'approvals'>('activity');
   const latest = useRef(0);
+  // A session switch invalidates any in-flight poll for the previous session.
+  // Without this, a slow old response can be appended to the new timeline and
+  // a stale event cursor may be marked viewed under the wrong session ID.
+  const selectedSession = useRef('');
   const active = sessions.find(item => item.id === activeId);
   // UX rule 3: the session on screen is not listed, except when it needs a reply
   // (the approval card may be scrolled away and the agent is blocked).
@@ -117,7 +121,10 @@ export function LiveWorkspace({ settings, onBack }: {
         setRoots(paths);
         if (paths.length) setCwd(paths[0].path);
         setSessions(existing);
-        if (existing.length) setActiveId(existing[0].id);
+        if (existing.length) {
+          selectedSession.current = existing[0].id;
+          setActiveId(existing[0].id);
+        }
       } catch {
         if (!cancelled) setHealth('offline');
       }
@@ -140,12 +147,17 @@ export function LiveWorkspace({ settings, onBack }: {
           setSessions(current);
           if (epoch === attentionEpoch.current) setAttention(alerts);
         }
-        if (!activeId) return;
+        if (!activeId || selectedSession.current !== activeId) return;
         const [events, pending] = await Promise.all([getEvents(activeId, latest.current), getApprovals(activeId)]);
-        if (!cancelled) {
+        if (!cancelled && selectedSession.current === activeId) {
           if (events.length) {
             latest.current = Math.max(latest.current, ...events.map(event => event.seq));
-            setHistory(old => [...old, ...events].slice(-600));
+            // Cursor pagination is authoritative; duplicate or delayed pages
+            // must not render duplicate event IDs or reorder the timeline.
+            setHistory(old => {
+              const lastSeq = old.at(-1)?.seq ?? 0;
+              return [...old, ...events.filter(event => event.seq > lastSeq)].slice(-600);
+            });
           }
           setApprovals(pending);
           // "Viewed" (UX section 4): on screen while the window has focus, up
@@ -183,6 +195,7 @@ export function LiveWorkspace({ settings, onBack }: {
   }
 
   function selectSession(id: string) {
+    selectedSession.current = id;
     setActiveId(id);
     latest.current = 0;
     setHistory([]);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { AlertTriangle, ArrowUpRight, Bell, Check, CheckCircle2, Clock3, ShieldAlert, X } from 'lucide-react';
 import { useLocale } from '../i18n/context';
 import type { LiveAttentionItem } from '../live/api';
@@ -72,6 +72,17 @@ export function LiveAttentionInbox({ items, onSelect, onMarkReviewed, onClose }:
     };
   }, []);
   function moveFocus(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Tab') {
+      // The inbox is a non-modal popover whose Tab order wraps internally.
+      const controls = [...(panel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.target === panel.current || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
+      return;
+    }
     if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
     const rows = [...(panel.current?.querySelectorAll<HTMLButtonElement>('.live-attention-main') ?? [])];
     if (!rows.length) return;
@@ -80,6 +91,17 @@ export function LiveAttentionInbox({ items, onSelect, onMarkReviewed, onClose }:
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1
       : event.key === 'ArrowDown' ? Math.min(rows.length - 1, current + 1) : Math.max(0, current - 1);
     rows[next]?.focus();
+  }
+  function markWithFocus(event: ReactMouseEvent<HTMLButtonElement>, item: LiveAttentionItem) {
+    // A successful acknowledgement removes its row. Move keyboard focus to a
+    // surviving control before the asynchronous response unmounts the button.
+    const button = event.currentTarget;
+    if (document.activeElement === button) {
+      const rows = [...(panel.current?.querySelectorAll<HTMLButtonElement>('.live-attention-main') ?? [])];
+      const index = rows.findIndex(row => row.closest('article') === button.closest('article'));
+      (rows[index + 1] ?? rows[index - 1] ?? panel.current?.querySelector<HTMLButtonElement>('header button'))?.focus();
+    }
+    onMarkReviewed(item);
   }
   const zh = locale === 'zh-TW';
   return <section ref={panel} tabIndex={-1} onKeyDown={moveFocus} className="live-attention-inbox" role="dialog" aria-label={zh ? '跨 Session 決策收件匣' : 'Cross-session decision inbox'} aria-modal="false">
@@ -108,7 +130,7 @@ export function LiveAttentionInbox({ items, onSelect, onMarkReviewed, onClose }:
                   <em>{action} <ArrowUpRight size={12}/></em>
                 </span>
               </button>
-              {item.type==='review' && <button className="live-attention-reviewed" onClick={()=>onMarkReviewed(item)} aria-label={zh?`標記為已查看：${item.adapter} · ${project}`:`Mark reviewed: ${item.adapter} · ${project}`} title={zh?'標記為已查看；有新事件時會再出現':'Mark reviewed; it returns on new events'}><Check size={13}/></button>}
+              {item.type==='review' && <button className="live-attention-reviewed" onClick={event=>markWithFocus(event,item)} aria-label={zh?`標記為已查看：${item.adapter} · ${project}`:`Mark reviewed: ${item.adapter} · ${project}`} title={zh?'標記為已查看；有新事件時會再出現':'Mark reviewed; it returns on new events'}><Check size={13}/></button>}
             </article>;
           })}
         </section>;
