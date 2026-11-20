@@ -9,7 +9,7 @@ Related research [PR #19](https://github.com/ChiJiun/agentdock/pull/19)
 
 - `zh-TW` UI by default; switch to `en-US` through the globe icon in the Desktop preview header.
 - Editable global UI / workflow / generated-prose language, plus project and session workflow / generated-prose overrides.
-- Precedence: specific task > session > project > global, implemented in `src/i18n/language.ts`.
+- Precedence: specific task > session > project > global. Generated-prose preferences and stage-specific overrides are evaluated independently before falling back to the workflow language, so a session workflow override cannot accidentally change a project's artifact language.
 - Preference persistence in browser `localStorage` with validation and safe fallback; **no secret keys or full prompts stored**.
 - Strongly typed translation dictionaries for UI and navigation, Session Sentinel statuses, decision explanations, Quick Switcher, composer and inspector.
 - Session Sentinel applies **effective session-summary language** per session, without replaying raw tool output or triggering translation/model calls.
@@ -49,4 +49,4 @@ Open the React preview and select the **globe icon**. Change **Interface languag
 
 ## Validation evidence
 
-Local UI tests verify bilingual switching and settings persistence, monitor navigation, scoped workflow language changes, vendor capability honesty, source/Skill preservation, and dictionary key parity. They **do not** certify a fully localized external Harness. GitHub Actions workflow setup remains blocked by current GH credential scope.
+Local UI tests verify bilingual switching and settings persistence, monitor navigation, scoped workflow language changes, artifact/workflow precedence, keyboard focus, vendor capability honesty, source/Skill preservation, and dictionary key parity. They **do not** certify a fully localized external Harness. The frontend workflow introduced by PR #16 runs TypeScript checks, Vitest and Vite build on GitHub Actions; it does not build a Windows Tauri binary or test a live ACP adapter.

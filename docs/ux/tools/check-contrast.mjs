@@ -43,6 +43,7 @@ const pairs = [
   ['kind-background', 'bg-surface', 4.5], ['kind-remote', 'bg-surface', 4.5],
   ['diff-add-fg', 'diff-add-bg', 4.5], ['diff-del-fg', 'diff-del-bg', 4.5], ['text-primary', 'diff-add-bg', 4.5], ['text-primary', 'diff-del-bg', 4.5],
   ['text-on-accent', 'status-attention', 4.5], // "needs reply" badge fill
+  ['text-primary', 'status-danger-soft', 4.5], // "policy not enforced" note
 ];
 
 let failures = 0;

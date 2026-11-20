@@ -81,12 +81,19 @@ describe('end-to-end language preferences (host-owned, no adapter attached)', ()
     expect(kept.s0).toBeUndefined();
   });
 
-  it('documents current cross-layer behavior: a lower-layer workflowLocale wins over a higher-layer artifactLocale', () => {
+  it('resolves artifact preferences independently of workflow language across scopes', () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.global.artifactLocale = 'en-US';
-    settings.projects.alpha = { workflowLocale: 'zh-TW' };
-    // Mirrors PR #19 layer-by-layer order; to be reconciled by the owner (see PR description).
-    expect(resolveLocale(settings, 'documentation', { projectId: 'alpha' })).toBe('zh-TW');
-    expect(resolveLocale(settings, 'documentation')).toBe('en-US');
+    settings.projects.alpha = { artifactLocale: 'zh-TW', workflowLocale: 'en-US' };
+    settings.sessions.one = { workflowLocale: 'en-US' };
+    const scope = { projectId: 'alpha', sessionId: 'one' };
+    expect(resolveLocale(settings, 'documentation', scope)).toBe('zh-TW');
+    expect(resolveLocale(settings, 'plan', scope)).toBe('en-US');
+    expect(resolveLocale(settings, 'commitMessage', scope)).toBe('zh-TW');
+    expect(resolveLocale(settings, 'commitMessage', { sessionId: 'one' })).toBe('en-US');
+    expect(resolveLocale(settings, 'documentation', { sessionId: 'one' })).toBe('en-US');
+    settings.sessions.one = { workflowLocale: 'en-US', outputs: { documentation: 'en-US' } };
+    expect(resolveLocale(settings, 'documentation', scope)).toBe('en-US');
+    expect(resolveLocale(settings, 'codeComments', scope)).toBe('preserve-original');
   });
 });

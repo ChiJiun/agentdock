@@ -144,18 +144,23 @@ export function resolveLocale(
     settings.global,
   ];
 
+  // Resolve stage-specific and artifact preferences before falling back to a
+  // workflow language. A session's workflow locale must not silently override
+  // a project's generated-prose locale or the default commit-message policy.
   for (const profile of layers) {
     if (!profile) continue;
     const explicit = profile.outputs?.[stage];
     if (explicit && explicit !== 'inherit') return explicit;
-    // Changing the default language of prose artifacts must not rewrite code comments.
-    if (stage === 'codeComments') continue;
-    if (ARTIFACT_STAGES.has(stage) && profile.artifactLocale && profile.artifactLocale !== 'inherit') {
+    if (ARTIFACT_STAGES.has(stage) && stage !== 'codeComments'
+        && profile.artifactLocale && profile.artifactLocale !== 'inherit') {
       return profile.artifactLocale;
     }
-    if (profile.workflowLocale) return profile.workflowLocale;
   }
-  return stage === 'codeComments' ? 'preserve-original' : 'en-US';
+  if (stage === 'codeComments') return 'preserve-original';
+  for (const profile of layers) {
+    if (profile?.workflowLocale) return profile.workflowLocale;
+  }
+  return 'zh-TW';
 }
 
 export function resolveUiLocale(settings: LanguageSettings): Locale {

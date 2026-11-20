@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ArrowUpRight, Bell, Bot, Check, CheckCheck, Globe2,
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, Clock3, Command, Cpu, FileCode2,
@@ -17,7 +17,6 @@ import { loadLanguageSettings, saveLanguageSettings, resolveLocale, resolveUiLoc
 import { demoProjects, demoSessions, nextId } from './demo';
 import { decisionCount, deriveMonitorItems, dismissKey, isHidden, type MonitorItem } from './monitor';
 import type { AgentName, Project, Session, SessionStatus, TimelineEntry } from './model';
-import { useRoving } from './vendor/acpira/roving';
 
 const demoEntryKeys: Record<string, MessageKey> = {
   's1-e1': 'demo.message1', 's1-e2': 'demo.event1',
@@ -132,15 +131,28 @@ function Inspector({ session, project, settings, onClose }: { session: Session; 
   const tr = useT();
   const snapshot = languageSnapshot(settings, { projectId: project.id, sessionId: session.id });
   const [tab, setTab] = useState<InspectorTab>('changes');
-  const tabs = useRoving<HTMLDivElement>({ select: true });
+  const tabOrder: InspectorTab[] = ['changes', 'checks', 'context'];
+  function handleTabKeys(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
+    const current = tabOrder.indexOf(tab);
+    let next = current;
+    if (event.key === 'ArrowRight') next = (current + 1) % tabOrder.length;
+    else if (event.key === 'ArrowLeft') next = (current + tabOrder.length - 1) % tabOrder.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabOrder.length - 1;
+    else return;
+    event.preventDefault();
+    setTab(tabOrder[next]!);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+  }
   return <aside className="inspector">
     <div className="inspector-header"><strong>{tr('inspector.workspace')}</strong><button className="icon-button" onClick={onClose} aria-label={tr('inspector.close')}><PanelRightClose size={17}/></button></div>
-    <div className="inspector-tabs" role="tablist" aria-label={tr('inspector.tabs')} ref={tabs.ref} onKeyDown={tabs.onKeyDown}>
+    <div className="inspector-tabs" role="tablist" aria-label={tr('inspector.tabs')} onKeyDown={handleTabKeys}>
       {([['changes', tr('inspector.changes')], ['checks', tr('inspector.checks')], ['context', tr('inspector.details')]] as const).map(([id, label]) => (
-        <button key={id} role="tab" aria-selected={tab === id} aria-controls="inspector-pane" onClick={() => setTab(id)}>{label}</button>
+        <button key={id} id={`inspector-tab-${id}`} role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls="inspector-pane" onClick={() => setTab(id)}>{label}</button>
       ))}
     </div>
-    <div className="inspector-body" id="inspector-pane" role="tabpanel">
+    <div className="inspector-body" id="inspector-pane" role="tabpanel" aria-labelledby={`inspector-tab-${tab}`}>
       {tab === 'changes' && <>
         <div className="evidence-callout"><FileDiff size={15}/> {tr('inspector.simulatedChanges')}</div>
         <div className="diff-summary"><span>{tr('inspector.fileCount')}</span><span><b className="added">+18</b> <b className="removed">−4</b></span></div>

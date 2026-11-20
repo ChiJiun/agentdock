@@ -96,6 +96,7 @@ Every text/UI pair is checked by [`tools/check-contrast.mjs`](tools/check-contra
 | Sidebar tree | group row, main session row, sub-task row, archived toggle, “N archived — search” row | APG tree | IA §5, a11y §2 |
 | Status glyph | 13 states | `title` + text elsewhere | states §2 |
 | Kind glyph / chip | local / background / remote | text label | states §3 |
+| Policy enforcement chip, glyph and note | not enforced / unknown (nothing shown when requests are routed) | text label, dashed outline, `role="note"` for the persistent note | [states §9](states-and-indicators.md#9-policy-enforcement-indicator-agent-bypass--full-access-modes) |
 | “N new” pill | — | text | states §6 |
 | Agent monogram | — | decorative; name as text | §6 |
 | Quick switcher | empty-query groups / results / no results / “N more” | modal combobox | a11y §2 |
