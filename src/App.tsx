@@ -15,6 +15,7 @@ import { LanguageProvider, useT } from './i18n/context';
 import { t, type MessageKey } from './i18n/messages';
 import { loadLanguageSettings, saveLanguageSettings, resolveLocale, resolveUiLocale, languageSnapshot, type LanguageSettings } from './i18n/language';
 import { demoProjects, demoSessions, nextId } from './demo';
+import { demoText, displayDemoText } from './i18n/demo-text';
 import { decisionCount, deriveMonitorItems, dismissKey, isHidden, type MonitorItem } from './monitor';
 import type { AgentName, Project, Session, SessionStatus, TimelineEntry } from './model';
 
@@ -41,7 +42,7 @@ function AgentMark({ agent }: { agent: AgentName }) {
 }
 
 function SessionSidebar({
-  projects, sessions, activeProjectId, activeSessionId, onProject, onSession, onNew, collapsed, onCollapse,
+  projects, sessions, activeProjectId, activeSessionId, onProject, onSession, onNew, collapsed, onCollapse, locale,
 }: {
   projects: Project[];
   sessions: Session[];
@@ -52,6 +53,7 @@ function SessionSidebar({
   onNew: () => void;
   collapsed: boolean;
   onCollapse: () => void;
+  locale: import('./i18n/language').Locale;
 }) {
   const tr = useT();
   return (
@@ -93,7 +95,7 @@ function SessionSidebar({
               aria-current={s.id === activeSessionId ? 'page' : undefined}
             >
               <span className={`session-icon session-icon-${s.status}`}>{s.status === 'complete' ? <Check size={14}/> : s.status === 'waiting' ? <CircleAlert size={13}/> : <Bot size={14}/>}</span>
-              <span className="session-text"><strong>{s.title}</strong><small>{s.agent} · {tr(`status.${s.status}`)}</small></span>
+              <span className="session-text"><strong>{displayDemoText(s.title, locale)}</strong><small>{s.agent} · {tr(`status.${s.status}`)}</small></span>
               {s.status === 'waiting' && <span className="waiting-indicator" />}
             </button>
           ))}
@@ -107,19 +109,19 @@ function SessionSidebar({
   );
 }
 
-function Timeline({ entries }: { entries: TimelineEntry[] }) {
+function Timeline({ entries, locale }: { entries: TimelineEntry[]; locale: import('./i18n/language').Locale }) {
   const tr = useT();
   return <div className="timeline" aria-label={tr('timeline.label')}>
     <div className="timeline-date"><span>{tr('timeline.simulated')}</span></div>
     {entries.map(entry => entry.kind === 'message' ? (
       <div key={entry.id} className={`timeline-message timeline-${entry.author}`}>
         {entry.author === 'agent' && <div className="timeline-agent-avatar"><Sparkles size={15}/></div>}
-        <div className="message-body"><div className="message-meta"><strong>{tr(entry.author === 'user' ? 'timeline.you' : 'timeline.agent')}</strong><time>{entry.time}</time></div><p>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : entry.text}</p></div>
+        <div className="message-body"><div className="message-meta"><strong>{tr(entry.author === 'user' ? 'timeline.you' : 'timeline.agent')}</strong><time>{displayDemoText(entry.time, locale)}</time></div><p>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : displayDemoText(entry.text, locale)}</p></div>
       </div>
     ) : (
       <div key={entry.id} className={`timeline-event timeline-${entry.kind}`}>
         <span className="event-icon">{entry.kind === 'notice' ? <ShieldCheck size={16}/> : <TerminalSquare size={15}/>}</span>
-        <span>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : entry.text}</span><time>{entry.time}</time>
+        <span>{demoEntryKeys[entry.id] ? tr(demoEntryKeys[entry.id]) : displayDemoText(entry.text, locale)}</span><time>{entry.time}</time>
       </div>
     ))}
   </div>;
@@ -199,7 +201,7 @@ export default function App() {
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const bellRef = useRef<HTMLButtonElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const monitorItems = useMemo(() => deriveMonitorItems(sessions, projects, session => {
+  const monitorItems = useMemo(() => deriveMonitorItems(sessions.map(session => ({ ...session, title: displayDemoText(session.title, uiLocale) })), projects, session => {
     const result = resolveLocale(settings, 'sessionSummary', { projectId: session.projectId, sessionId: session.id });
     return result === 'preserve-original' ? uiLocale : result;
   }), [sessions, projects, settings, uiLocale]);
@@ -246,9 +248,9 @@ export default function App() {
   function createSession() {
     const id = nextId('session');
     const newSession: Session = {
-      id, projectId: activeProjectId, title: tr('demo.newSession'), agent: 'Codex',
+      id, projectId: activeProjectId, title: demoText('newSession'), agent: 'Codex',
       status: 'idle', worktree: project.branch, progress: 0,
-      entries: [{ id: nextId('event'), author: 'system', kind: 'notice', text: tr('demo.sessionCreated'), time: tr('timeline.now') }],
+      entries: [{ id: nextId('event'), author: 'system', kind: 'notice', text: demoText('sessionCreated'), time: demoText('now') }],
     };
     setSessions(old => [newSession, ...old]);
     setActiveSessionId(id);
@@ -257,20 +259,20 @@ export default function App() {
   }
   function submitMessage(text: string) {
     if (!active) return;
-    const entry: TimelineEntry = { id: nextId('event'), author: 'user', kind: 'message', text, time: tr('timeline.now') };
+    const entry: TimelineEntry = { id: nextId('event'), author: 'user', kind: 'message', text, time: demoText('now') };
     const acknowledgement: TimelineEntry = {
       id: nextId('event'), author: 'system', kind: 'notice',
-      text: tr('demo.notSent'), time: tr('timeline.now'),
+      text: demoText('notSent'), time: tr('timeline.now'),
     };
     setSessions(old => old.map(s => s.id === active.id ? { ...s, entries: [...s.entries, entry, acknowledgement] } : s));
     setNotice(tr('demo.stored'));
   }
 
   return <LanguageProvider locale={uiLocale}><div className="app-shell">
-    <SessionSidebar projects={projects} sessions={filteredSessions} activeProjectId={activeProjectId} activeSessionId={active?.id ?? ''} onProject={chooseProject} onSession={setActiveSessionId} onNew={createSession} collapsed={sidebarCollapsed} onCollapse={() => setSidebarCollapsed(v => !v)}/>
+    <SessionSidebar projects={projects} sessions={filteredSessions} activeProjectId={activeProjectId} activeSessionId={active?.id ?? ''} onProject={chooseProject} onSession={setActiveSessionId} onNew={createSession} collapsed={sidebarCollapsed} locale={uiLocale} onCollapse={() => setSidebarCollapsed(v => !v)}/>
     <main className="main">
       <header className="topbar">
-        <div className="breadcrumbs"><FolderGit2 size={15}/><span>{project.name}</span><ChevronRight size={13}/><strong>{active?.title ?? tr('session.noSelected')}</strong></div>
+        <div className="breadcrumbs"><FolderGit2 size={15}/><span>{project.name}</span><ChevronRight size={13}/><strong>{active ? displayDemoText(active.title, uiLocale) : tr('session.noSelected')}</strong></div>
         <div className="topbar-actions"><span className="mode-pill"><span/> {tr('header.demo')}</span><button className="icon-button" aria-label={tr('header.switchSessions')} title={tr('header.switchSessions')} onClick={() => { setMonitorOpen(false); setLanguageOpen(false); setSwitcherOpen(true); }}><Search size={16}/></button><div className="language-anchor"><button ref={langButtonRef} className="language-toggle" onClick={() => { setMonitorOpen(false); setSwitcherOpen(false); setLanguageOpen(v => !v); }} aria-label={tr('header.language')} title={tr('header.language')} aria-expanded={languageOpen}><Globe2 size={14}/><span>{uiLocale === 'zh-TW' ? '繁中' : 'EN'}</span></button>{languageOpen && <LanguageSettingsPanel settings={settings} onChange={setSettings} projectId={project.id} sessionId={active?.id} onClose={closeLanguage}/>}</div><div className="monitor-anchor"><button ref={bellRef} className={`icon-button monitor-bell ${monitorOpen ? 'monitor-bell-active' : ''}`} aria-label={tr('header.notifications', { count: blockingCount })} title={tr('header.monitorTitle')} aria-expanded={monitorOpen} onClick={() => { setSwitcherOpen(false); setLanguageOpen(false); setMonitorOpen(v => !v); }}><Bell size={17}/>{blockingCount > 0 && <span className="bell-count">{blockingCount > 99 ? '99+' : blockingCount}</span>}</button>{monitorOpen && <MonitorInbox items={monitorItems} dismissed={dismissed} onDismiss={item => setDismissed(old => new Set([...old, dismissKey(item)]))} onSelect={jumpToMonitorItem} onClose={closeMonitor}/>}</div><button className="icon-button" onClick={() => setShowInspector(v => !v)} title={tr('header.details')} aria-label={tr('header.details')}><FileDiff size={17}/></button></div>
       </header>
       <div className="preview-banner"><CircleAlert size={15}/><span>{tr('preview.banner')}</span><a href="https://github.com/ChiJiun/agentdock/issues/6" target="_blank" rel="noreferrer">{tr('preview.acp')} <ArrowUpRight size={12}/></a></div>
@@ -278,14 +280,14 @@ export default function App() {
         <section className="session-content">
           <div className="session-title-row"><div><div className="eyebrow"><span className="eyebrow-marker"/>{project.description}</div><h1>{active.title}</h1><div className="session-summary"><Status status={active.status}/><span className="summary-divider"/><AgentMark agent={active.agent}/><span>{active.agent}</span><span className="summary-divider"/><GitBranch size={14}/><span>{active.worktree}</span></div></div><button className="icon-button more-button" disabled title={tr('session.more')} aria-label={tr('session.more')}><MoreHorizontal size={21}/></button></div>
           <div className="session-progress"><div className="progress-heading"><span>{tr('session.workflow')} <span className="progress-sub">{tr('session.demo')}</span></span><span>{Math.round(active.progress * 100)}%</span></div><ProgressRail value={active.progress}/><div className="workflow-steps"><span className="step-complete"><CheckCheck size={14}/> {tr('session.plan')}</span><span className="step-complete"><Check size={14}/> {tr('session.inspect')}</span><span className={active.status === 'complete' ? 'step-complete' : 'step-current'}><span className="step-ring"/> {tr('session.review')}</span><span className="step-muted">PR / CI</span></div></div>
-          <Timeline entries={active.entries}/>
+          <Timeline entries={active.entries} locale={uiLocale}/>
         </section>
         <div className="composer-dock"><Composer inputRef={composerRef} onSubmit={submitMessage}/><div className="compose-footnote"><span><ShieldCheck size={13}/> {tr('composer.permissions')}</span><span>{tr('composer.shiftEnter')}</span></div></div>
       </> : <section className="empty-main"><Bot size={32}/><h1>{tr('main.noSessions')}</h1><p>{tr('main.createHelp')}</p><button className="primary-button" onClick={createSession}><Plus size={16}/> {tr('main.create')}</button></section>}
       <div className="bottom-bar"><span><span className="connection-dot"/> {tr('footer.preview')}</span><span><Cpu size={13}/> {tr('footer.disconnected')} <span className="bottom-divider"/> <Command size={13}/> AgentDock 0.1</span></div>
     </main>
     {showInspector && active && <Inspector session={active} project={project} settings={settings} onClose={() => setShowInspector(false)}/>}
-    {switcherOpen && <SessionSwitcher sessions={sessions} projects={projects} onSelect={session => { setActiveProjectId(session.projectId); setActiveSessionId(session.id); setSwitcherOpen(false); }} onClose={() => setSwitcherOpen(false)}/>}
+    {switcherOpen && <SessionSwitcher sessions={sessions.map(session => ({ ...session, title: displayDemoText(session.title, uiLocale) }))} projects={projects} onSelect={session => { setActiveProjectId(session.projectId); setActiveSessionId(session.id); setSwitcherOpen(false); }} onClose={() => setSwitcherOpen(false)}/>}
     {notice && <div className="toast" role="status"><CircleCheck size={16}/>{notice}<button onClick={() => setNotice('')} aria-label={tr('toast.dismiss')}><X size={14}/></button></div>}
     <div className="visually-hidden" aria-live="polite">{active?.status ? tr(`status.${active.status}`) : tr('main.noSessions')}</div>
   </div></LanguageProvider>;
