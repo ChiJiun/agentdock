@@ -1,4 +1,6 @@
 import type { Project, Session } from './model';
+import { t } from './i18n/messages';
+import type { Locale } from './i18n/language';
 
 export type AttentionLevel = 'decision' | 'review' | 'background' | 'complete' | 'idle';
 
@@ -20,37 +22,38 @@ const order: Record<AttentionLevel, number> = {
 };
 
 /**
- * A deterministic, provider-free preview of the future event-based monitor.
- * It contains only data from in-memory simulated sessions; it does not query any agent.
+ * Deterministic monitor derived from simulated status only. UI refresh and
+ * locale changes do not call an LLM, translate raw evidence, or invent tool results.
  */
-export function deriveMonitorItems(sessions: Session[], projects: Project[]): MonitorItem[] {
+export function deriveMonitorItems(
+  sessions: Session[],
+  projects: Project[],
+  localeForSession: Locale | ((session: Session) => Locale) = 'en-US',
+): MonitorItem[] {
   const projectNames = new Map(projects.map(project => [project.id, project.name]));
   return sessions.flatMap(session => {
     const projectName = projectNames.get(session.projectId);
     if (!projectName) return []; // Never surface sessions outside the known project scope.
     const lastEvent = session.entries.at(-1);
-    const lastText = lastEvent?.text || 'No activity recorded.';
-    const action = session.status === 'waiting'
-      ? { level: 'decision' as const, summary: summarize(lastText), nextAction: 'Open the session to review the simulated approval.' }
-      : session.status === 'complete'
-        ? { level: 'complete' as const, summary: 'This demo session is marked complete.', nextAction: 'Review the sample timeline.' }
-        : session.status === 'active'
-          ? { level: 'background' as const, summary: summarize(lastText), nextAction: 'Check progress when needed.' }
-          : { level: 'idle' as const, summary: 'This preview session is idle; no agent is connected.', nextAction: 'Open the session to compose a preview message.' };
+    const locale = typeof localeForSession === 'function' ? localeForSession(session) : localeForSession;
+    const level: AttentionLevel = session.status === 'waiting' ? 'decision'
+      : session.status === 'complete' ? 'complete'
+        : session.status === 'active' ? 'background' : 'idle';
+    const summaryKey = session.status === 'waiting' ? 'monitor.summary.waiting'
+      : session.status === 'complete' ? 'monitor.summary.complete'
+        : session.status === 'active' ? 'monitor.summary.active' : 'monitor.summary.idle';
+    const actionKey = session.status === 'waiting' ? 'monitor.action.waiting'
+      : session.status === 'complete' ? 'monitor.action.complete'
+        : session.status === 'active' ? 'monitor.action.active' : 'monitor.action.idle';
+
     return [{
       id: `monitor-${session.id}`,
       sessionId: session.id, projectId: session.projectId, projectName,
       sessionTitle: session.title, agent: session.agent,
-      level: action.level, summary: action.summary,
-      nextAction: action.nextAction, sourceEventId: lastEvent?.id,
+      level, summary: t(locale, summaryKey), nextAction: t(locale, actionKey),
+      sourceEventId: lastEvent?.id,
     }];
   }).sort((a, b) => order[a.level] - order[b.level] || a.projectName.localeCompare(b.projectName) || a.sessionTitle.localeCompare(b.sessionTitle));
-}
-
-function summarize(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  if (!flat) return 'No new status details.';
-  return flat.length <= 125 ? flat : `${flat.slice(0, 122).trimEnd()}…`;
 }
 
 /**

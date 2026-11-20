@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Command, Search, X } from 'lucide-react';
 import type { Project, Session } from '../model';
+import { useT } from '../i18n/context';
 
 export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   sessions: Session[];
@@ -8,6 +9,7 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   onSelect: (session: Session) => void;
   onClose: () => void;
 }) {
+  const tr = useT();
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -41,14 +43,14 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     }
   }
   return <div className="switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label="Quick switch sessions" className="switcher">
-      <div className="switcher-input"><Search size={18}/><input ref={input} placeholder="Jump to a project or session…" value={query} onChange={e => { setQuery(e.target.value); setFocused(0); }} onKeyDown={keys} aria-label="Search sessions"/><button className="icon-button" onClick={onClose} aria-label="Close switcher"><X size={17}/></button></div>
-      <div className="switcher-results">{shown.length ? shown.map((session, index) =>
+    <section role="dialog" aria-modal="true" aria-label={tr('switcher.title')} className="switcher">
+      <div className="switcher-input"><Search size={18}/><input ref={input} placeholder={tr('switcher.placeholder')} value={query} onChange={e => { setQuery(e.target.value); setFocused(0); }} onKeyDown={keys} aria-label={tr('switcher.search')}/><button className="icon-button" onClick={onClose} aria-label={tr('switcher.close')}><X size={17}/></button></div>
+      <div className="switcher-results">{options.length ? options.slice(0, 50).map((session, index) =>
         <button className={`switcher-result ${focused === index ? 'switcher-focused' : ''}`} key={session.id} onClick={() => select(session)} onMouseEnter={() => setFocused(index)}>
-          <span>{session.title}</span><small>{projects.find(p => p.id === session.projectId)?.name} · {session.agent} · {session.status}</small>
+          <span>{session.title}</span><small>{projects.find(p => p.id === session.projectId)?.name} · {session.agent} · {tr(`status.${session.status}`)}</small>
         </button>
-      ) : <div className="switcher-empty">No matching preview sessions</div>}</div>
-      <div className="switcher-bottom"><Command size={14}/> Ctrl/Cmd+K · Switch sessions <span>↑↓ Navigate · Enter Select · Esc Close</span></div>
+      ) : <div className="switcher-empty">{tr('switcher.empty')}</div>}</div>
+      <div className="switcher-bottom"><Command size={14}/> {tr('switcher.bottom')} <span>{tr('switcher.navigation')}</span></div>
     </section>
   </div>;
 }

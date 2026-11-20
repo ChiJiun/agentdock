@@ -29,12 +29,12 @@ afterEach(() => {
 describe('preview accessibility', () => {
   it('opens the attention inbox on its first actionable row and restores focus on Escape', () => {
     const page = renderApp();
-    const bell = page.querySelector<HTMLButtonElement>('button[aria-label^="Session monitor"]')!;
+    const bell = page.querySelector<HTMLButtonElement>('button.monitor-bell')!;
     act(() => bell.click());
     const first = page.querySelector<HTMLButtonElement>('.monitor-card-main')!;
     expect(document.activeElement).toBe(first);
     act(() => first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
-    expect(page.querySelector('[role="dialog"][aria-label="Session monitor"]')).toBeNull();
+    expect(page.querySelector('[role="dialog"].monitor-panel')).toBeNull();
     expect(document.activeElement).toBe(bell);
   });
 
