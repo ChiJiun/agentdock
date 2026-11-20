@@ -325,6 +325,24 @@ describe('real ACP official SDK runtime', () => {
     } finally { await end(); }
   });
 
+  test('shutdown is bounded when an exited agent leaves a descendant holding stdio', async () => {
+    if (process.platform === 'win32') return; // Windows requires Job Object descendant tracking.
+    const { store, host, end } = newHost([hostile('orphan-stdio')], { transportGraceMs: 250 });
+    try {
+      const session = await host.start({ adapterId: 'orphan-stdio', cwd });
+      await host.prompt(session.id, 'spawn orphan');
+      const grandchild = Number(/grandchild pid (\\d+)/.exec(texts(store, session.id).join('\\n'))[1]);
+      const conn = host.connections.get(session.id);
+      await until(() => conn.proc.exitCode !== null || conn.proc.signalCode !== null);
+      await Promise.race([
+        host.shutdown(),
+        pause(4_000).then(() => { throw new Error('shutdown hung on inherited stdio'); }),
+      ]);
+      await until(() => isGone(grandchild), 4_000);
+      assert.equal(host.connections.has(session.id), false);
+    } finally { await end(); }
+  });
+
   test('localhost API rejects cross-origin mutation and exposes real live events', async () => {
     const runtime = createRuntimeServer({ roots: [cwd], dbPath: ':memory:', adapters: [DEFAULT_MOCK], limits: LIMITS });
     const address = await runtime.listen(0);
