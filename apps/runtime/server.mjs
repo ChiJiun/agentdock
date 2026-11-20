@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { AcpHost } from './acp-host.mjs';
 import { ensureInside, loadAdapters } from './adapters.mjs';
 import { SessionStore } from './store.mjs';
+import { deriveAttention } from './attention.mjs';
+
+const MAX_ATTENTION_ID = 130;
 
 // Bytes, not characters: a 12,000-character CJK prompt is about 36 KB of UTF-8.
 const MAX_BODY_BYTES = 128 * 1024;
@@ -147,6 +150,22 @@ export function createRuntimeServer({
       if (method === 'GET' && pathname === '/api/adapters') return json(response, 200, adapters.map(({ id, label }) => ({ id, label })));
       if (method === 'GET' && pathname === '/api/workspaces') return json(response, 200, allowedRoots.map(path => ({ path })));
       if (method === 'GET' && pathname === '/api/sessions') return json(response, 200, store.list());
+      if (method === 'GET' && pathname === '/api/attention') return json(response, 200, deriveAttention(store));
+      const reviewedMatch = /^\/api\/attention\/([^/]+)\/reviewed$/.exec(pathname);
+      if (method === 'POST' && reviewedMatch) {
+        await readJson(request);
+        let id;
+        try { id = decodeURIComponent(reviewedMatch[1]); } catch { throw new ClientError(400, 'invalid attention id'); }
+        if (id.length > MAX_ATTENTION_ID) throw new ClientError(404, 'attention item no longer exists');
+        // Derivation and the write run in one synchronous step: no ACP event
+        // can land between the existence check and the acknowledgement.
+        const item = deriveAttention(store, { includeViewed: true }).find(entry => entry.id === id);
+        if (!item) throw new ClientError(404, 'attention item no longer exists');
+        if (item.type !== 'review')
+          throw new ClientError(409, 'only results can be marked reviewed; answer approvals in the session');
+        store.markViewed(item.sessionId, item.evidenceCursor);
+        return json(response, 200, { ok: true });
+      }
       if (method === 'GET' && pathname === '/api/git/status') {
         const cwd = ensureInside(url.searchParams.get('cwd') || '', allowedRoots);
         const output = await git(cwd, ['status', '--short', '--branch'], 5000);
@@ -162,7 +181,7 @@ export function createRuntimeServer({
         const session = await host.start({ adapterId: payload.adapterId, cwd: payload.cwd });
         return json(response, 201, session);
       }
-      const sessionMatch = /^\/api\/sessions\/([a-f0-9-]{36})(?:\/(events|prompt|cancel|close|approvals))?$/.exec(pathname);
+      const sessionMatch = /^\/api\/sessions\/([a-f0-9-]{36})(?:\/(events|prompt|cancel|close|approvals|viewed))?$/.exec(pathname);
       if (sessionMatch) {
         const [,id,route] = sessionMatch;
         if (!store.get(id)) throw new ClientError(404, 'session not found');
@@ -173,6 +192,17 @@ export function createRuntimeServer({
           return json(response, 200, store.events(id, cursor));
         }
         if (method === 'GET' && route === 'approvals') return json(response, 200, store.pendingApprovals(id));
+        if (method === 'POST' && route === 'viewed') {
+          // The UI reports the newest event it rendered while focused. Viewing
+          // never changes session state and never answers an approval.
+          const payload = await readJson(request);
+          const latest = store.latestEvent(id)?.seq ?? 0;
+          const cursor = payload?.cursor;
+          if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > latest)
+            throw new ClientError(400, 'invalid event cursor');
+          store.markViewed(id, cursor);
+          return json(response, 200, { ok: true });
+        }
         if (method === 'POST' && route === 'prompt') {
           const payload = await readJson(request);
           if (typeof payload.text !== 'string' || !payload.text.trim() || payload.text.length > 12_000)

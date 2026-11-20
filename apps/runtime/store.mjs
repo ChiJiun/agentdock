@@ -54,6 +54,11 @@ export class SessionStore {
         status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
         selected_option TEXT, detail TEXT
       );
+      CREATE TABLE IF NOT EXISTS attention_views (
+        session_id TEXT PRIMARY KEY, cursor INTEGER NOT NULL,
+        status TEXT NOT NULL, viewed_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id)
+      );
     `);
     // Databases written by an earlier revision of this branch lack the column.
     if (!this.db.prepare('PRAGMA table_info(approvals)').all().some(c => c.name === 'detail'))
@@ -127,6 +132,50 @@ export class SessionStore {
   events(id, after = 0) {
     const rows = this.db.prepare('SELECT * FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 300').all(id, after);
     return rows.map(r => ({ seq: r.seq, sessionId: r.session_id, kind: r.kind, data: JSON.parse(r.data), createdAt: r.created_at }));
+  }
+  latestEvent(sessionId) {
+    const row = this.db.prepare('SELECT seq,kind,data,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);
+    if (!row) return null;
+    // Only the stop reason and the restart's previous status are read back,
+    // never prompt/tool/agent text.
+    let stopReason = null;
+    let previousStatus = null;
+    try {
+      const data = JSON.parse(row.data);
+      if (row.kind === 'turn_finished' && typeof data?.stopReason === 'string') stopReason = data.stopReason.slice(0, 40);
+      if (row.kind === 'host_restarted' && typeof data?.previousStatus === 'string') previousStatus = data.previousStatus.slice(0, 40);
+    } catch { /* unreadable payload: no extra fields */ }
+    // The session's own event before this one, so "nothing happened in
+    // between" can be decided without comparing global sequence numbers.
+    const prior = this.db.prepare('SELECT seq FROM events WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT 1').get(sessionId, row.seq);
+    return { seq: row.seq, kind: row.kind, stopReason, previousStatus, priorSeq: prior?.seq ?? 0, createdAt: row.created_at };
+  }
+  /** Newest finished turn and newest prompt: a turn only counts if it ended after the prompt. */
+  latestTurn(sessionId) {
+    const turn = this.db.prepare("SELECT seq,data FROM events WHERE session_id=? AND kind='turn_finished' ORDER BY seq DESC LIMIT 1").get(sessionId);
+    if (!turn) return null;
+    const prompt = this.db.prepare("SELECT seq FROM events WHERE session_id=? AND kind='user_message' ORDER BY seq DESC LIMIT 1").get(sessionId);
+    let stopReason = null;
+    try {
+      const value = JSON.parse(turn.data)?.stopReason;
+      stopReason = typeof value === 'string' ? value.slice(0, 40) : null;
+    } catch { stopReason = null; }
+    return { seq: turn.seq, stopReason, afterPrompt: !prompt || turn.seq > prompt.seq };
+  }
+  attentionView(sessionId) {
+    return this.db.prepare('SELECT cursor,status,viewed_at FROM attention_views WHERE session_id=?').get(sessionId) ?? null;
+  }
+  /**
+   * Records that the user saw the session up to `cursor` while it had its
+   * current status. Never moves backwards; it changes no session state.
+   */
+  markViewed(sessionId, cursor) {
+    const session = this.get(sessionId);
+    if (!session) throw new Error('session not found');
+    this.db.prepare(`INSERT INTO attention_views(session_id,cursor,status,viewed_at) VALUES(?,?,?,?)
+      ON CONFLICT(session_id) DO UPDATE SET cursor=excluded.cursor,status=excluded.status,viewed_at=excluded.viewed_at
+      WHERE excluded.cursor>=attention_views.cursor`)
+      .run(sessionId, cursor, session.status, new Date().toISOString());
   }
   createApproval(approval) {
     this.db.prepare('INSERT INTO approvals(id,session_id,title,choices,status,created_at,expires_at,detail) VALUES(?,?,?,?,?,?,?,?)').run(

@@ -1,18 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertTriangle, Check, CircleDot, FileDiff,
+  Activity, AlertTriangle, Bell, BellRing, Check, CircleDot, FileDiff,
   FolderGit2, Loader2, LockKeyhole, Play, ShieldCheck, Square, Terminal,
   X, XCircle,
 } from 'lucide-react';
 import {
-  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, decideRuntimeApproval,
+  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, decideRuntimeApproval, getAttention, markAttentionReviewed, markSessionViewed,
   getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces,
   gitDiff, gitStatus, sendRuntimePrompt,
   type RuntimeAdapter, type RuntimeApproval, type RuntimeEvent, type RuntimeSession,
-  type RuntimeWorkspace,
+  type RuntimeWorkspace, type LiveAttentionItem,
 } from '../live/api';
 import { compileLanguageOverlay, type LanguageSettings } from '../i18n/language';
 import { useLocale } from '../i18n/context';
+import { LiveAttentionInbox } from './LiveAttentionInbox';
 
 const REFRESH_MS = 1300;
 const RUNTIME_STATES: Record<string, { zh: string; en: string; color: string }> = {
@@ -74,13 +75,36 @@ export function LiveWorkspace({ settings, onBack }: {
   const [activeId, setActiveId] = useState('');
   const [history, setHistory] = useState<RuntimeEvent[]>([]);
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
+  const [attention, setAttention] = useState<LiveAttentionItem[]>([]);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const attentionRef = useRef<HTMLButtonElement>(null);
+  // "Mark reviewed" bumps this after the runtime confirmed it, so a poll that
+  // started before the write landed cannot put the old row back on screen.
+  const attentionEpoch = useRef(0);
+  const viewedMark = useRef('');
+  const closeAttention = useCallback((restoreFocus = true) => {
+    setAttentionOpen(false);
+    if (restoreFocus) attentionRef.current?.focus();
+  }, []);
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [gitEvidence, setGitEvidence] = useState<{ status?: string; diff?: string }>({});
   const [inspectorTab, setInspectorTab] = useState<'activity' | 'git' | 'approvals'>('activity');
   const latest = useRef(0);
+  // A session switch invalidates any in-flight poll for the previous session.
+  // Without this, a slow old response can be appended to the new timeline and
+  // a stale event cursor may be marked viewed under the wrong session ID.
+  const selectedSession = useRef('');
   const active = sessions.find(item => item.id === activeId);
+  // UX rule 3: the session on screen is not listed, except when it needs a reply
+  // (the approval card may be scrolled away and the agent is blocked).
+  const visibleAttention = attention.filter(item => item.type === 'reply' || item.sessionId !== activeId);
+  const replyCount = visibleAttention.filter(item => item.type === 'reply').length;
+  const reviewCount = visibleAttention.filter(item => item.type === 'review').length;
+  const backgroundCount = visibleAttention.filter(item => item.type === 'background').length;
+  const attentionCount = replyCount + reviewCount;
+  const badgeText = attentionCount > 99 ? '99+' : String(attentionCount);
   const effective = active
     ? compileLanguageOverlay(settings, 'conversation', { projectId: active.cwd, sessionId: active.id })
     : compileLanguageOverlay(settings, 'conversation');
@@ -97,7 +121,10 @@ export function LiveWorkspace({ settings, onBack }: {
         setRoots(paths);
         if (paths.length) setCwd(paths[0].path);
         setSessions(existing);
-        if (existing.length) setActiveId(existing[0].id);
+        if (existing.length) {
+          selectedSession.current = existing[0].id;
+          setActiveId(existing[0].id);
+        }
       } catch {
         if (!cancelled) setHealth('offline');
       }
@@ -114,16 +141,36 @@ export function LiveWorkspace({ settings, onBack }: {
       if (running || cancelled) return;
       running = true;
       try {
-        const current = await getSessions();
-        if (!cancelled) setSessions(current);
-        if (!activeId) return;
-        const [events, pending] = await Promise.all([getEvents(activeId, latest.current), getApprovals(activeId)]);
+        const epoch = attentionEpoch.current;
+        const [current, alerts] = await Promise.all([getSessions(), getAttention()]);
         if (!cancelled) {
+          setSessions(current);
+          if (epoch === attentionEpoch.current) setAttention(alerts);
+        }
+        if (!activeId || selectedSession.current !== activeId) return;
+        const [events, pending] = await Promise.all([getEvents(activeId, latest.current), getApprovals(activeId)]);
+        if (!cancelled && selectedSession.current === activeId) {
           if (events.length) {
             latest.current = Math.max(latest.current, ...events.map(event => event.seq));
-            setHistory(old => [...old, ...events].slice(-600));
+            // Cursor pagination is authoritative; duplicate or delayed pages
+            // must not render duplicate event IDs or reorder the timeline.
+            setHistory(old => {
+              const lastSeq = old.at(-1)?.seq ?? 0;
+              return [...old, ...events.filter(event => event.seq > lastSeq)].slice(-600);
+            });
           }
           setApprovals(pending);
+          // "Viewed" (UX section 4): on screen while the window has focus, up
+          // to the newest event rendered. Persisted by the runtime; it never
+          // answers an approval or changes the session.
+          const status = current.find(item => item.id === activeId)?.status ?? '';
+          const mark = `${activeId}:${latest.current}:${status}`;
+          if (latest.current > 0 && mark !== viewedMark.current
+              && document.visibilityState === 'visible' && document.hasFocus()) {
+            viewedMark.current = mark;
+            try { await markSessionViewed(activeId, latest.current); }
+            catch { viewedMark.current = ''; } // retried on the next poll
+          }
         }
       } catch {
         if (!cancelled) setError(zh ? '與本機 ACP Runtime 的連線中斷。' : 'Lost connection to the local ACP runtime.');
@@ -134,7 +181,21 @@ export function LiveWorkspace({ settings, onBack }: {
     return () => { cancelled = true; window.clearInterval(interval); };
   }, [health, activeId]);
 
+  function openAttentionSession(item: LiveAttentionItem) {
+    selectSession(item.sessionId);
+    setInspectorTab(item.type === 'reply' ? 'approvals' : 'activity');
+    closeAttention();
+  }
+  async function markReviewed(item: LiveAttentionItem) {
+    try {
+      await markAttentionReviewed(item.id);
+      attentionEpoch.current += 1;
+      setAttention(old=>old.filter(alert=>alert.id!==item.id));
+    } catch(e) { setError(String((e as Error).message)); }
+  }
+
   function selectSession(id: string) {
+    selectedSession.current = id;
     setActiveId(id);
     latest.current = 0;
     setHistory([]);
@@ -207,7 +268,11 @@ export function LiveWorkspace({ settings, onBack }: {
 
   return <div className="live-workspace">
     <aside className="live-sidebar">
-      <header><button type="button" onClick={onBack} className="live-back">← {ui("返回展示工作區", "Demo workspace")}</button><strong><Activity size={17}/> {ui("即時 ACP", "Live ACP")}</strong><span className="live-connection"><CircleDot size={12}/> {health === "online" ? ui("已連線","Online") : health === "offline" ? ui("未連線","Offline") : ui("連線中","Connecting")}</span></header>
+      <header><button type="button" onClick={onBack} className="live-back">← {ui("返回展示工作區", "Demo workspace")}</button><strong><Activity size={17}/> {ui("即時 ACP", "Live ACP")}</strong><span className="live-connection"><CircleDot size={12}/> {health === "online" ? ui("已連線","Online") : health === "offline" ? ui("未連線","Offline") : ui("連線中","Connecting")}</span>{health === "online" && <div className="live-attention-anchor"><button ref={attentionRef} className={`live-attention-bell${replyCount>0?" needs-reply":""}`} aria-label={ui(
+          `Session Sentinel：${replyCount} 項需要回覆、${reviewCount} 項待查看、${backgroundCount} 項背景執行`,
+          `Session Sentinel: ${replyCount} need reply, ${reviewCount} to review, ${backgroundCount} running in background`)} aria-expanded={attentionOpen} onClick={()=>setAttentionOpen(v=>!v)}>{replyCount>0 ? <BellRing size={17}/> : <Bell size={17}/>}{ui("決策通知","Decision inbox")}{replyCount>0
+          ? <span className="live-attention-count reply" aria-hidden="true">!{badgeText}</span>
+          : attentionCount>0 && <span className="live-attention-count" aria-hidden="true">{badgeText}</span>}</button>{attentionOpen && <LiveAttentionInbox items={visibleAttention} onSelect={openAttentionSession} onMarkReviewed={item=>void markReviewed(item)} onClose={closeAttention}/>}</div>}</header>
       {health === 'online' && <>
         <div className="live-setup">
           <div className="live-side-heading">{ui("建立工作階段","START A SESSION")}</div>

@@ -41,7 +41,7 @@ Open **http://127.0.0.1:5173/**. The original preview demonstrates the UI using 
 
 For standalone UI work: `npm run dev`. For tests: `npm run typecheck && npm run test:all && npm run build`.
 
-Full setup, adapter allowlist, storage, restart behavior and security limitations: **[Live ACP runtime implementation](docs/implementation/live-acp-runtime.md)**. The production Rust/Tauri desktop shell is tracked in Issue #4, ACP host in Issue #6, SQLite session history in Issue #7, and event-driven Session Sentinel in Issue #15.
+Full setup, adapter allowlist, storage, restart behavior and security limitations: **[Live ACP runtime implementation](docs/implementation/live-acp-runtime.md)**. The Live ACP sidebar also includes **[Session Sentinel](docs/implementation/live-session-sentinel.md)**, a real event-driven cross-session inbox with the three UX sections: needs your reply, new results to review, running in background. The production Rust/Tauri desktop shell is tracked in Issue #4, ACP host in Issue #6, SQLite session history in Issue #7, and event-driven Session Sentinel in Issue #15.
 
 ## Project documents
 
@@ -50,6 +50,7 @@ Full setup, adapter allowlist, storage, restart behavior and security limitation
 - [Upstream source inventory, migration matrix and licenses](docs/sources.md)
 - [Roadmap and release gates](docs/roadmap.md)
 - [Live ACP development runtime and verification](docs/implementation/live-acp-runtime.md)
+- [Real event-driven Session Sentinel: needs reply, results to review, background](docs/implementation/live-session-sentinel.md)
 - [Language UI and safe Skill output policy](docs/implementation/language-ui.md)
 - [Architecture decision 0001](docs/decisions/0001-independent-workbench.md)
 - [Agent contributor rules](AGENTS.md)
