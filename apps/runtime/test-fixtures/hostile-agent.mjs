@@ -51,6 +51,14 @@ createInterface({ input: process.stdin }).on('line', line => {
       send(text(`grandchild pid ${child.pid}`));
       return reply(message.id, { stopReason: 'end_turn' });
     }
+    if (mode === 'orphan-stdio') {
+      // Child keeps the parent's stdout open after the agent exits.
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'inherit'] });
+      send(text(`grandchild pid ${child.pid}`));
+      reply(message.id, { stopReason: 'end_turn' });
+      setTimeout(() => process.exit(0), 100);
+      return;
+    }
     if (mode === 'prompt-error') return send({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: 'boom' } });
     return reply(message.id, { stopReason: 'end_turn' });
   }
