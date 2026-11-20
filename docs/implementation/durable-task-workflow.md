@@ -12,6 +12,12 @@ This implementation adds a **local-only, human-driven SDLC state machine** to th
 - The state machine **never** performs GitHub writes, merges, pushes, or executes tests. No endpoint marks a task `merge_ready:true`: local test evidence remains operator-attested and `humanConfirmed` is not authenticated human presence.
 - Transition to `complete` is deliberately disabled until a separate, independently verified merge/reconciliation implementation exists.
 
+## Evidence trust boundary
+
+Every task response includes `verification: "unverified"` and `merge_ready: false`, including in the `awaiting_merge` state. This state means only **the operator submitted a complete metadata chain**; it must never be interpreted as GitHub-confirmed CI, an independent review, or permission to merge. Every evidence row persists `provenance: "operator_attested"`, `verified_at: null`, and `source_url: null`. Caller-provided `provider_verified`, `verifiedAt`, or `sourceUrl` is rejected, including through the HTTP endpoint. A future trusted provider integration must independently fetch the current PR head, completed CI checks (including legacy statuses), and reviewer identity/commit, and must revalidate against head changes before any merge-ready state can be exposed. None of those operations is implemented here.
+
+The local HTTP `humanConfirmed` boolean is **not an authenticated human approval**. Any process able to access the development server can submit it. Do not expose this runtime as an authorization or deployment gate; a production host must bind approvals to authenticated UI actions or one-time host-issued tokens.
+
 ## States and transitions
 
 ```text

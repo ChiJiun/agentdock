@@ -48,6 +48,30 @@ function evidence(f, task, kind, result = 'passed', commitSha = SHA_A, extra = {
   const reference = kind === 'pull_request' ? { reference: PR_URL } : {};
   return f.tasks.addEvidence(task.id, { kind, result, summary: `${kind} ${result}`, ...sha, ...reference, ...extra });
 }
+test('operator evidence cannot impersonate verified provider evidence or claim merge readiness', () => {
+  const f = fixture();
+  try {
+    const task = f.tasks.create({ workspace: f.folder, objective: 'Review CI evidence' });
+    assert.equal(task.verification, 'unverified');
+    assert.equal(task.merge_ready, false);
+    assert.throws(() => f.tasks.addEvidence(task.id, {
+      kind: 'ci_checks', result: 'passed', summary: 'fake', commitSha: SHA_A,
+      provenance: 'provider_verified',
+    }), /provider verification metadata cannot be supplied/);
+    assert.throws(() => f.tasks.addEvidence(task.id, {
+      kind: 'ci_checks', result: 'passed', summary: 'fake', commitSha: SHA_A,
+      verifiedAt: new Date().toISOString(),
+    }), /provider verification metadata cannot be supplied/);
+    const recorded = evidence(f, task, 'ci_checks');
+    assert.equal(recorded.provenance, 'operator_attested');
+    assert.equal(recorded.verified_at, null);
+    assert.equal(recorded.source_url, null);
+    f.reopen();
+    assert.equal(f.tasks.evidence(task.id)[0].provenance, 'operator_attested');
+    assert.equal(f.tasks.get(task.id).merge_ready, false);
+  } finally { f.close(); }
+});
+
 /** Walks a new task to `target` along the happy path, recording passing evidence for `sha`. */
 function reach(f, target, sha = SHA_A) {
   let task = f.tasks.create({ workspace: f.folder, objective: 'Improve code' });

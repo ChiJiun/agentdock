@@ -85,9 +85,10 @@ function parse(row) {
   if (!row) return null;
   return {
     ...row, issue_number: row.issue_number == null ? null : Number(row.issue_number),
-    // This Node preview accepts operator-attested metadata only. Even a fully
-    // advanced task does not constitute a provider-verified merge decision.
-    verification_status: 'unverified', merge_ready: false, human_approval_verified: false,
+    // Both legacy and current API fields explicitly deny an implicit
+    // merge-ready decision, even after provider checks.
+    verification: 'unverified', verification_status: 'unverified',
+    merge_ready: false, human_approval_verified: false,
   };
 }
 
@@ -270,8 +271,13 @@ export class TaskWorkflow {
     const submitted = body(input);
     // Provider verification is reserved for a host-owned integration. Browser
     // callers cannot smuggle a trusted provenance flag into a manual record.
-    if (['provenance','sourceUrl','source_url','verifiedAt','verified_at','verification_status','merge_ready']
-      .some(field => Object.hasOwn(submitted, field))) throw invalid('evidence provenance is host-controlled');
+    if ((Object.hasOwn(submitted, 'provenance') && submitted.provenance !== 'operator_attested')
+      || (Object.hasOwn(submitted, 'sourceUrl') && submitted.sourceUrl !== null)
+      || (Object.hasOwn(submitted, 'verifiedAt') && submitted.verifiedAt !== null)
+      || ['source_url','verified_at','verification_status','merge_ready']
+        .some(field => Object.hasOwn(submitted, field))) {
+      throw invalid('provider verification metadata cannot be supplied; evidence provenance is host-controlled');
+    }
     const { id: requestedId, kind, result, summary, reference = null, commitSha = null } = submitted;
     const evidenceId = optionalId(requestedId, 'evidence id') ?? randomUUID();
     if (!EVIDENCE_KINDS.has(kind)) throw invalid('invalid evidence kind');
