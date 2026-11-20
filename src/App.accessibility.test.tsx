@@ -38,6 +38,20 @@ describe('preview accessibility', () => {
     expect(document.activeElement).toBe(bell);
   });
 
+  it('traps Tab and Shift+Tab inside the session switcher', () => {
+    const page = renderApp();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const dialog = page.querySelector<HTMLElement>('.switcher[role="dialog"]')!;
+    const input = dialog.querySelector<HTMLInputElement>('input')!;
+    const close = dialog.querySelector<HTMLButtonElement>('button.icon-button')!;
+    expect(document.activeElement).toBe(input);
+    act(() => close.focus());
+    act(() => close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(input);
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(close);
+  });
+
   it('keeps exactly one inspector tab in the keyboard tab order', () => {
     const page = renderApp();
     const tabs = [...page.querySelectorAll<HTMLButtonElement>('.inspector-tabs [role="tab"]')];
