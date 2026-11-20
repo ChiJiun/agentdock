@@ -3,6 +3,11 @@ export interface RuntimeHealth {
 }
 export interface RuntimeAdapter { id: string; label: string; }
 export interface RuntimeWorkspace { path: string; }
+export interface RuntimeWorktree {
+  id: string; source_repo: string; path: string; branch: string; created_at: string;
+  state: 'creating' | 'ready' | 'partial' | 'orphan' | 'failed';
+  exists: boolean; available: boolean;
+}
 export type RuntimeSessionStatus =
   | 'starting' | 'ready' | 'running' | 'awaiting_approval'
   | 'interrupted' | 'failed' | 'closed';
@@ -86,6 +91,9 @@ export async function runtimeApi<T>(
 export const getHealth = (signal?: AbortSignal) => runtimeApi<RuntimeHealth>('health', { signal });
 export const getAdapters = () => runtimeApi<RuntimeAdapter[]>('adapters');
 export const getWorkspaces = () => runtimeApi<RuntimeWorkspace[]>('workspaces');
+export const getWorktrees = () => runtimeApi<RuntimeWorktree[]>('worktrees');
+export const createWorktree = (repoPath: string, idempotencyKey?: string) =>
+  runtimeApi<RuntimeWorktree>('worktrees', { method: 'POST', data: { repoPath, idempotencyKey } });
 export const getSessions = () => runtimeApi<RuntimeSession[]>('sessions');
 export const getAttention = () => runtimeApi<LiveAttentionItem[]>('attention');
 /** Marks one result row reviewed. The runtime refuses it for approvals (409). */

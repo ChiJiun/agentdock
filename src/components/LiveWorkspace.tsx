@@ -5,11 +5,11 @@ import {
   X, XCircle,
 } from 'lucide-react';
 import {
-  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, decideRuntimeApproval, getAttention, markAttentionReviewed, markSessionViewed,
-  getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces,
+  cancelRuntimePrompt, closeRuntimeSession, createRuntimeSession, createWorktree, decideRuntimeApproval, getAttention, markAttentionReviewed, markSessionViewed,
+  getAdapters, getApprovals, getEvents, getHealth, getSessions, getWorkspaces, getWorktrees,
   gitDiff, gitStatus, sendRuntimePrompt,
   type RuntimeAdapter, type RuntimeApproval, type RuntimeEvent, type RuntimeSession,
-  type RuntimeWorkspace, type LiveAttentionItem,
+  type RuntimeWorkspace, type RuntimeWorktree, type LiveAttentionItem,
 } from '../live/api';
 import { compileLanguageOverlay, type LanguageSettings } from '../i18n/language';
 import { useLocale } from '../i18n/context';
@@ -70,6 +70,11 @@ export function LiveWorkspace({ settings, onBack }: {
   const [sessions, setSessions] = useState<RuntimeSession[]>([]);
   const [adapters, setAdapters] = useState<RuntimeAdapter[]>([]);
   const [roots, setRoots] = useState<RuntimeWorkspace[]>([]);
+  const [worktrees, setWorktrees] = useState<RuntimeWorktree[]>([]);
+  const [worktreeNotice, setWorktreeNotice] = useState('');
+  // Retain one key across a network/DB error so retry cannot create a second
+  // branch when the first checkout succeeded but its response was lost.
+  const worktreeAttempt = useRef<{ repoPath: string; key: string } | null>(null);
   const [adapter, setAdapter] = useState('mock');
   const [cwd, setCwd] = useState('');
   const [activeId, setActiveId] = useState('');
@@ -114,11 +119,12 @@ export function LiveWorkspace({ settings, onBack }: {
     const initialize = async () => {
       try {
         await getHealth();
-        const [available, paths, existing] = await Promise.all([getAdapters(), getWorkspaces(), getSessions()]);
+        const [available, paths, existing, isolated] = await Promise.all([getAdapters(), getWorkspaces(), getSessions(), getWorktrees()]);
         if (cancelled) return;
         setHealth('online');
         setAdapters(available);
         setRoots(paths);
+        setWorktrees(isolated);
         if (paths.length) setCwd(paths[0].path);
         setSessions(existing);
         if (existing.length) {
@@ -204,6 +210,38 @@ export function LiveWorkspace({ settings, onBack }: {
     setError('');
   }
 
+  async function newWorktree() {
+    // Only an explicit click creates a Git branch/worktree. No cleanup or push.
+    if (!cwd || submitting || worktrees.some(w => w.path === cwd)) return;
+    setSubmitting(true);
+    setError('');
+    setWorktreeNotice('');
+    try {
+      if (!worktreeAttempt.current || worktreeAttempt.current.repoPath !== cwd)
+        worktreeAttempt.current = { repoPath: cwd, key: crypto.randomUUID() };
+      const item = await createWorktree(cwd, worktreeAttempt.current.key);
+      const [paths, isolated] = await Promise.all([getWorkspaces(), getWorktrees()]);
+      setRoots(paths);
+      setWorktrees(isolated);
+      if (item.state === 'ready' && item.available) {
+        worktreeAttempt.current = null;
+        setCwd(item.path);
+        setWorktreeNotice(ui(`已建立獨立 Worktree：${item.branch}，原始分支未修改。`,`New isolated worktree: ${item.branch}. Source branch unchanged.`));
+      } else {
+        setWorktreeNotice(ui(
+          `Worktree ${item.branch} 狀態：${item.state}。未重新執行 Git 建立；請檢查紀錄並用原請求重試對帳。`,
+          `Worktree ${item.branch}: ${item.state}. No new Git operation; inspect and retry the same request to reconcile.`,
+        ));
+      }
+    } catch (e) {
+      setError(String((e as Error).message));
+      // The persisted row is still discoverable even if Git succeeded and the
+      // final DB transition failed. Never silently retry with another key.
+      try { setWorktrees(await getWorktrees()); } catch { /* offline */ }
+    }
+    finally { setSubmitting(false); }
+  }
+
   async function startSession() {
     if (!cwd || !adapter || submitting) return;
     setSubmitting(true);setError('');
@@ -277,7 +315,13 @@ export function LiveWorkspace({ settings, onBack }: {
         <div className="live-setup">
           <div className="live-side-heading">{ui("建立工作階段","START A SESSION")}</div>
           <label htmlFor="live-root">{ui("已核准的工作目錄","Approved workspace")}</label>
-          <select id="live-root" value={cwd} onChange={e=>setCwd(e.target.value)}>{roots.map(item=><option key={item.path} value={item.path}>{item.path}</option>)}</select>
+          <select id="live-root" value={cwd} onChange={e=>{setCwd(e.target.value);setWorktreeNotice("");worktreeAttempt.current=null;}}>{roots.map(item=><option key={item.path} value={item.path}>{worktrees.some(w=>w.path===item.path) ? `[Worktree] ${item.path}` : item.path}</option>)}</select>
+          <button className="live-worktree-create" type="button" onClick={()=>void newWorktree()} disabled={!cwd || submitting || worktrees.some(w => w.path === cwd)}><FolderGit2 size={14}/>{ui("建立獨立 Git Worktree（新分支）","Create isolated Git worktree (new branch)")}</button>
+          {worktreeNotice && <div className="live-worktree-notice" role="status">{worktreeNotice}</div>}
+          {worktrees.filter(item => item.state !== 'ready').map(item =>
+            <div className="live-worktree-notice" role="status" key={item.id}>
+              {ui('待檢查','Needs inspection')}: {item.branch} · {item.state}
+            </div>)}
           <label htmlFor="live-adapter">{ui("已設定的 ACP Agent","Configured ACP agent")}</label>
           <select id="live-adapter" value={adapter} onChange={e=>setAdapter(e.target.value)}>{adapters.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select>
           <button onClick={()=>void startSession()} disabled={!cwd || submitting} className="live-primary"><Play size={14}/> {ui("啟動 ACP 工作階段","Start ACP session")}</button>

@@ -59,10 +59,24 @@ export class SessionStore {
         status TEXT NOT NULL, viewed_at TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(id)
       );
+      CREATE TABLE IF NOT EXISTS worktrees (
+        id TEXT PRIMARY KEY, source_repo TEXT NOT NULL, path TEXT NOT NULL UNIQUE,
+        branch TEXT NOT NULL, created_at TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'ready', head TEXT,
+        idempotency_key TEXT, updated_at TEXT
+      );
     `);
     // Databases written by an earlier revision of this branch lack the column.
     if (!this.db.prepare('PRAGMA table_info(approvals)').all().some(c => c.name === 'detail'))
       this.db.exec('ALTER TABLE approvals ADD COLUMN detail TEXT');
+    // Existing development databases already have ready worktrees. Adding
+    // nullable intent fields preserves them without a destructive migration.
+    const columns = new Set(this.db.prepare('PRAGMA table_info(worktrees)').all().map(c => c.name));
+    if (!columns.has('state')) this.db.exec("ALTER TABLE worktrees ADD COLUMN state TEXT NOT NULL DEFAULT 'ready'");
+    if (!columns.has('head')) this.db.exec('ALTER TABLE worktrees ADD COLUMN head TEXT');
+    if (!columns.has('idempotency_key')) this.db.exec('ALTER TABLE worktrees ADD COLUMN idempotency_key TEXT');
+    if (!columns.has('updated_at')) this.db.exec('ALTER TABLE worktrees ADD COLUMN updated_at TEXT');
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS worktrees_idempotency ON worktrees(idempotency_key) WHERE idempotency_key IS NOT NULL');
     this.depth = 0;
     this.recovered = this.recover();
   }
@@ -132,6 +146,23 @@ export class SessionStore {
   events(id, after = 0) {
     const rows = this.db.prepare('SELECT * FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 300').all(id, after);
     return rows.map(r => ({ seq: r.seq, sessionId: r.session_id, kind: r.kind, data: JSON.parse(r.data), createdAt: r.created_at }));
+  }
+  /** Persist creation intent before ANY Git branch/worktree operation. */
+  createWorktree({ id, sourceRepo, path, branch, head = null, idempotencyKey = null, state = 'ready' }) {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`INSERT INTO worktrees(id,source_repo,path,branch,head,idempotency_key,state,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(id, sourceRepo, path, branch, head, idempotencyKey, state, createdAt, createdAt);
+  }
+  setWorktreeState(id, state) {
+    if (!['creating', 'ready', 'partial', 'orphan', 'failed'].includes(state)) throw new Error('invalid worktree state');
+    this.db.prepare('UPDATE worktrees SET state=?,updated_at=? WHERE id=?').run(state, new Date().toISOString(), id);
+  }
+  worktreeByKey(key) {
+    return this.db.prepare('SELECT * FROM worktrees WHERE idempotency_key=?').get(key) ?? null;
+  }
+  listWorktrees() {
+    return this.db.prepare('SELECT * FROM worktrees ORDER BY created_at DESC LIMIT 200').all();
   }
   latestEvent(sessionId) {
     const row = this.db.prepare('SELECT seq,kind,data,created_at FROM events WHERE session_id=? ORDER BY seq DESC LIMIT 1').get(sessionId);

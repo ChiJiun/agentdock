@@ -37,6 +37,8 @@ function mockedFetch(path: string | URL | Request, options?: RequestInit): Promi
     return Promise.resolve(returnJson({ok:true}));
   }
   if (uri.endsWith('/api/workspaces')) return Promise.resolve(returnJson([{path:'/mock/project'}]));
+  if (uri.endsWith('/api/worktrees') && method === 'GET') return Promise.resolve(returnJson([]));
+  if (uri.endsWith('/api/worktrees') && method === 'POST') return Promise.resolve(returnJson({id:'wt1',source_repo:'/mock/project',path:'/mock/project/.local/worktrees/wt1',branch:'agentdock/task-123456789abc',created_at:new Date().toISOString(),exists:true,state:'ready',available:true},201));
   if (uri === '/api/sessions' && method === 'GET') return Promise.resolve(returnJson(availableSessions));
   if (uri.includes('/events')) return Promise.resolve(returnJson(events));
   if (uri.includes('/approvals') && method === 'GET') return Promise.resolve(returnJson(approvals));
@@ -146,6 +148,21 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect(requests.some(r=>r.path===`/api/attention/${encodeURIComponent(reviewItem().id)}/reviewed`&&r.method==='POST')).toBe(true);
     expect(requests.some(r=>r.path.includes('/approvals/')&&r.method==='POST')).toBe(false);
     expect(ui.textContent).toContain('目前沒有需要你處理的事');
+  });
+
+  it('creates a worktree only after explicit user click, then permits starting ACP in that path', async () => {
+    const ui=await render();
+    expect(requests.some(r=>r.path==='/api/worktrees' && r.method==='POST')).toBe(false);
+    const button=[...ui.querySelectorAll<HTMLButtonElement>('button')]
+      .find(b=>b.textContent?.includes('建立獨立 Git Worktree'));
+    expect(button).not.toBeNull();
+    await act(async()=>button?.click());
+    const creation=requests.find(r=>r.path==='/api/worktrees' && r.method==='POST');
+    expect(creation).toBeDefined();
+    expect(creation?.data).toEqual({repoPath:'/mock/project', idempotencyKey: expect.stringMatching(/^[a-f0-9-]{36}$/)});
+    expect(ui.textContent).toContain('已建立獨立 Worktree');
+    // Creating a worktree must not automatically execute an agent prompt.
+    expect(requests.some(r=>r.path.includes('/prompt')&&r.method==='POST')).toBe(false);
   });
 
   it('keeps keyboard focus inside the inbox after acknowledging a row and wraps Tab', async () => {
