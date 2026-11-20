@@ -43,13 +43,13 @@ describe('preview accessibility', () => {
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
     const dialog = page.querySelector<HTMLElement>('.switcher[role="dialog"]')!;
     const input = dialog.querySelector<HTMLInputElement>('input')!;
-    const close = dialog.querySelector<HTMLButtonElement>('button.icon-button')!;
+    const last = [...dialog.querySelectorAll<HTMLButtonElement>('button')].at(-1)!;
     expect(document.activeElement).toBe(input);
-    act(() => close.focus());
-    act(() => close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
+    act(() => last.focus());
+    act(() => last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
     expect(document.activeElement).toBe(input);
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })));
-    expect(document.activeElement).toBe(close);
+    expect(document.activeElement).toBe(last);
   });
 
   it('keeps exactly one inspector tab in the keyboard tab order', () => {
