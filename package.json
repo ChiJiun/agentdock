@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AgentDock UI foundation – no agent runtime connected yet",
+  "description": "AgentDock UI preview and interim local ACP development runtime",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "runtime:dev": "node apps/runtime/server.mjs",

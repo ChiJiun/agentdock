@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { railStep } from '../vendor/acpira/railStep';
 
 export function ProgressRail({ value }: { value: number }) {
   const bounded = Math.max(0, Math.min(1, value));
@@ -11,13 +10,13 @@ export function ProgressRail({ value }: { value: number }) {
       return;
     }
     let raf = 0;
-    let previous = performance.now();
-    let current = display;
+    const started = performance.now();
+    const initial = display;
     const tick = (now: number) => {
-      current = railStep(current * 100, bounded * 100, now - previous, 160) / 100;
-      previous = now;
-      setDisplay(current);
-      if (Math.abs(current - bounded) > 0.0025) raf = requestAnimationFrame(tick);
+      const t = Math.min(1, Math.max(0, (now - started) / 160));
+      const eased = t * t * (3 - 2 * t);
+      setDisplay(initial + (bounded - initial) * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);

@@ -372,7 +372,16 @@ export class AcpHost {
     if (!conn || conn.closed) throw new HostError(409, 'agent process is not connected');
     if (!conn.busy) return { ok: true, active: false };
     this.store.event(id, 'cancel_requested', { by: 'user' });
-    await conn.ctx.notify(acp.methods.agent.session.cancel, { sessionId: conn.agentSessionId });
+    try {
+      await conn.ctx.notify(acp.methods.agent.session.cancel, { sessionId: conn.agentSessionId });
+    } catch {
+      // Transport failure must not leave an approval pending for its full TTL.
+      // The agent's cancellation cannot be confirmed: fail closed and tear it down.
+      this.#releasePending(conn, 'cancel_transport_failed');
+      this.#markFailed(conn, 'cancel_failed', 'ACP cancellation transport failed');
+      void this.close(id).catch(() => {});
+      throw new HostError(502, 'ACP cancellation failed; session is closing', 'cancel_failed');
+    }
     // ACP: after session/cancel the client answers every pending permission request with `cancelled`.
     this.#releasePending(conn, 'turn_cancelled');
     this.#safely(() => this.#afterApproval(conn));
