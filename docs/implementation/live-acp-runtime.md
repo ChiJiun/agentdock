@@ -145,6 +145,10 @@ These are direction questions that this PR does not settle:
 2. **New dependencies.** `@agentclientprotocol/sdk@2.7.0` (Apache-2.0, runtime dependency) and `concurrently@9.2.1` (MIT, dev dependency) are added without a row in `docs/sources.md`. No third-party source file was copied. Whether ADR-0002's migration PR template applies to npm dependencies of a development host is for the owner (or the stack-level review) to decide.
 3. **Contract alignment.** Either this store is migrated to the PR #22 contract once that is accepted, or it is discarded with the Node host. PRs stacked on this one inherit the format above until then.
 
+## Verification in CI
+
+The GitHub Actions `Frontend` workflow now runs `npm run typecheck`, the React/Vitest suite, `npm run test:runtime` and `npm run build` on every PR. The runtime integration suite launches actual local mock/hostile ACP subprocesses on Ubuntu; it checks denial, approval expiry, cancellation (including transport failure), host recovery and process cleanup. This is not evidence of Windows Job Object support, real paid agents, or Tauri packaging.
+
 ## Next production work
 
 - Native Tauri command IPC over an official Rust SDK ACP facade (#4, #6).

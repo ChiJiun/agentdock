@@ -216,6 +216,26 @@ describe('real ACP official SDK runtime', () => {
     } finally { await end(); }
   });
 
+  test('failed cancellation transport invalidates approvals and terminates the agent', async () => {
+    const { store, host, end } = newHost([DEFAULT_MOCK]);
+    try {
+      const session = await host.start({ adapterId: 'mock', cwd });
+      const waiting = host.prompt(session.id, 'approval request').catch(() => undefined);
+      const approval = await until(() => store.pendingApprovals(session.id)[0]);
+      const conn = host.connections.get(session.id);
+      const originalNotify = conn.ctx.notify;
+      conn.ctx.notify = async () => { throw new Error('simulated broken cancellation pipe'); };
+      await assert.rejects(host.cancel(session.id), /cancellation failed/);
+      assert.equal(store.getApproval(approval.id).status, 'cancelled');
+      assert.equal(store.pendingApprovals(session.id).length, 0);
+      assert.throws(() => host.approve(session.id, approval.id, 'allow_once'), /not pending/);
+      await until(() => store.get(session.id).status === 'failed');
+      await until(() => !host.connections.has(session.id));
+      await waiting;
+      conn.ctx.notify = originalNotify;
+    } finally { await end(); }
+  });
+
   test('closing a session with a pending approval never leaves it approvable', async () => {
     const { store, host, end } = newHost([DEFAULT_MOCK]);
     try {

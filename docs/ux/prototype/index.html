@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDock UX prototype</title>
+  <meta name="description" content="Static, dependency-free interaction prototype for AgentDock issue #2. Fictional data.">
+  <link rel="stylesheet" href="../tokens/tokens.css">
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to session</a>
+
+  <div class="app" id="app">
+    <header class="topbar" id="topbar" aria-label="Top bar" data-region="topbar">
+      <button class="icon-btn" id="btn-sidebar" type="button" aria-controls="sidebar" aria-expanded="true" title="Toggle sidebar (Ctrl+B)">
+        <span data-icon="menu"></span><span class="sr-only">Toggle sidebar</span>
+      </button>
+      <button class="brand" id="btn-home" type="button" title="Home">
+        <span class="brand-mark" aria-hidden="true"></span><span class="brand-name">AgentDock</span>
+        <span class="sr-only">, go to Home</span>
+      </button>
+      <span class="proto-tag" title="This page is a design prototype with fictional data">Prototype</span>
+
+      <button class="switch-trigger" id="btn-switcher" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+K">
+        <span data-icon="search"></span>
+        <span class="switch-trigger-text">Switch session or search…</span>
+        <kbd>Ctrl</kbd><kbd>K</kbd>
+      </button>
+
+      <div class="topbar-right">
+        <button class="top-btn" id="btn-usage" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="usage-pop">
+          <span data-icon="gauge"></span><span class="top-btn-label">Usage</span><span class="usage-flag" id="usage-flag" hidden></span>
+        </button>
+        <button class="icon-btn inbox-btn" id="btn-inbox" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="inbox-pop" aria-keyshortcuts="Control+Shift+J">
+          <span id="inbox-icon"></span>
+          <span class="inbox-badge" id="inbox-badge" aria-hidden="true" hidden></span>
+          <span class="inbox-bg" id="inbox-bg" aria-hidden="true" hidden></span>
+          <span class="sr-only" id="inbox-label">Inbox</span>
+        </button>
+        <button class="icon-btn" id="btn-theme" type="button" title="Theme">
+          <span id="theme-icon"></span><span class="sr-only" id="theme-label">Theme: system</span>
+        </button>
+        <button class="icon-btn" id="btn-help" type="button" title="Keyboard shortcuts (Ctrl+/)" aria-haspopup="dialog">
+          <span data-icon="keyboard"></span><span class="sr-only">Keyboard shortcuts</span>
+        </button>
+        <button class="icon-btn" id="btn-settings" type="button" title="Settings">
+          <span data-icon="gear"></span><span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </header>
+
+    <nav class="sidebar" id="sidebar" aria-label="Sessions" data-region="sidebar">
+      <div class="sidebar-head">
+        <button class="btn btn-primary btn-block" id="btn-new" type="button" aria-keyshortcuts="Alt+N">
+          <span data-icon="plus"></span> New task <kbd class="kbd-inline">Alt N</kbd>
+        </button>
+      </div>
+      <div class="tree" id="tree" role="tree" aria-label="Projects and sessions"></div>
+    </nav>
+
+    <main class="main" id="main" tabindex="-1" data-region="main"></main>
+
+    <aside class="review" id="review" aria-label="Review changes" data-region="review" hidden></aside>
+    <div class="scrim" id="scrim" hidden></div>
+  </div>
+
+  <!-- Popovers -->
+  <section class="popover inbox-pop" id="inbox-pop" role="dialog" aria-labelledby="inbox-title" tabindex="-1" hidden></section>
+  <section class="popover usage-pop" id="usage-pop" role="dialog" aria-labelledby="usage-title" tabindex="-1" hidden></section>
+
+  <!-- Quick switcher -->
+  <div class="overlay" id="switcher-overlay" hidden>
+    <div class="switcher" id="switcher" role="dialog" aria-modal="true" aria-label="Switch session">
+      <div class="switcher-input-row">
+        <span data-icon="search"></span>
+        <input id="switcher-input" type="text" role="combobox" aria-expanded="true" aria-controls="switcher-list"
+               aria-autocomplete="list" autocomplete="off" spellcheck="false"
+               placeholder="Type a session or project name…" aria-describedby="switcher-hint">
+        <kbd>Esc</kbd>
+      </div>
+      <div class="switcher-list" id="switcher-list" role="listbox" aria-label="Sessions"></div>
+      <div class="switcher-foot" id="switcher-hint">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>PgUp</kbd><kbd>PgDn</kbd> jump</span><span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard help -->
+  <div class="overlay" id="help-overlay" hidden>
+    <div class="dialog" id="help" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="dialog-head">
+        <h2 id="help-title">Keyboard shortcuts</h2>
+        <button class="icon-btn" type="button" data-close="help"><span data-icon="x"></span><span class="sr-only">Close</span></button>
+      </div>
+      <div class="dialog-body" id="help-body"></div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <div class="sr-only" id="live-polite" aria-live="polite" aria-atomic="true"></div>
+  <div class="sr-only" id="live-assertive" aria-live="assertive" aria-atomic="true"></div>
+
+  <script src="icons.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

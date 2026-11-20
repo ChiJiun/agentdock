@@ -1,6 +1,5 @@
-import { useRef, useState, type Ref, type FormEvent } from 'react';
+import { useCallback, useRef, useState, type Ref, type FormEvent } from 'react';
 import { ArrowUp, Paperclip, Zap } from 'lucide-react';
-import { useMergedRefs } from '../vendor/acpira/mergeRefs';
 import { useT } from '../i18n/context';
 
 export function Composer({ onSubmit, inputRef }: {
@@ -10,7 +9,11 @@ export function Composer({ onSubmit, inputRef }: {
   const tr = useT();
   const [draft, setDraft] = useState('');
   const internalRef = useRef<HTMLTextAreaElement>(null);
-  const ref = useMergedRefs(internalRef, inputRef);
+  const setInputRef = useCallback((node: HTMLTextAreaElement | null) => {
+    internalRef.current = node;
+    if (typeof inputRef === 'function') inputRef(node);
+    else if (inputRef) inputRef.current = node;
+  }, [inputRef]);
 
   function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -26,7 +29,7 @@ export function Composer({ onSubmit, inputRef }: {
       <label className="visually-hidden" htmlFor="message-input">{tr('composer.label')}</label>
       <textarea
         id="message-input"
-        ref={ref}
+        ref={setInputRef}
         placeholder={tr('composer.placeholder')}
         rows={2}
         value={draft}
