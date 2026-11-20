@@ -33,7 +33,12 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     onSelect(session);
   };
   function trapFocus(e: KeyboardEvent<HTMLElement>) {
-    if (e.key === 'Escape' && !e.nativeEvent.isComposing && e.keyCode !== 229) {\n      e.preventDefault();\n      onClose();\n      return;\n    }\n    if (e.key !== 'Tab') return;
+    if (e.key === 'Escape' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+    if (e.key !== 'Tab') return;
     const dialog = e.currentTarget;
     const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
     if (!focusable.length) { e.preventDefault(); return; }
