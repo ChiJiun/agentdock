@@ -32,6 +32,19 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   const select = (session: Session) => {
     onSelect(session);
   };
+  function trapFocus(e: KeyboardEvent<HTMLElement>) {
+    if (e.key !== 'Tab') return;
+    const dialog = e.currentTarget;
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) { e.preventDefault(); return; }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+      e.preventDefault(); first.focus();
+    }
+  }
   function keys(e: KeyboardEvent<HTMLInputElement>) {
     // Keys that drive an IME composition (candidate Enter, Esc, arrows) must not act on the list.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -43,7 +56,7 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     }
   }
   return <div className="switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label={tr('switcher.title')} className="switcher">
+    <section onKeyDown={trapFocus} role="dialog" aria-modal="true" aria-label={tr('switcher.title')} className="switcher">
       <div className="switcher-input"><Search size={18}/><input ref={input} placeholder={tr('switcher.placeholder')} value={query} onChange={e => { setQuery(e.target.value); setFocused(0); }} onKeyDown={keys} aria-label={tr('switcher.search')}/><button className="icon-button" onClick={onClose} aria-label={tr('switcher.close')}><X size={17}/></button></div>
       <div className="switcher-results">{options.length ? options.slice(0, 50).map((session, index) =>
         <button className={`switcher-result ${focused === index ? 'switcher-focused' : ''}`} key={session.id} onClick={() => select(session)} onMouseEnter={() => setFocused(index)}>
