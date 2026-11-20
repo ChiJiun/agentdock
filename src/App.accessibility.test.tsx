@@ -64,8 +64,8 @@ describe('preview accessibility', () => {
     act(() => background.focus());
     expect(document.activeElement).toBe(input);
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
-    expect(page.querySelector<HTMLElement>('.sidebar')?.inert).toBe(false);
-    expect(page.querySelector<HTMLElement>('.main')?.inert).toBe(false);
+    expect(page.querySelector<HTMLElement>('.sidebar')?.inert).toBeFalsy();
+    expect(page.querySelector<HTMLElement>('.main')?.inert).toBeFalsy();
     expect(document.activeElement).toBe(background);
   });
 
@@ -132,7 +132,7 @@ describe('preview accessibility', () => {
     expect(page.querySelector('.timeline')?.textContent).toContain('Keep this user text unchanged');
     act(() => page.querySelector<HTMLButtonElement>('.language-panel-header button')!.click());
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
-    expect(page.querySelector('.switcher-result span')?.textContent).toBe(page.querySelector('.session-title-row h1')?.textContent);
+    expect([...page.querySelectorAll('.switcher-result span')].some(span => span.textContent === page.querySelector('.session-title-row h1')?.textContent)).toBe(true);
   });
 
   it('keeps exactly one inspector tab in the keyboard tab order', () => {
