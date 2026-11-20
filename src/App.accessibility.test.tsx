@@ -54,8 +54,7 @@ describe('preview accessibility', () => {
 
   it('renders generated session titles without leaking localization markers', () => {
     const page = renderApp();
-    const newSession = [...page.querySelectorAll<HTMLButtonElement>('button')]
-      .find(button => button.getAttribute('aria-label') === '新增工作階段' || button.getAttribute('aria-label') === 'New session');
+    const newSession = page.querySelector<HTMLButtonElement>('.session-section .section-label button');
     expect(newSession).toBeDefined();
     act(() => newSession!.click());
     expect(page.querySelector('.session-title-row h1')?.textContent).not.toContain('__agentdock_demo:');
