@@ -13,6 +13,7 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const before = useRef<HTMLElement | null>(null);
   const options = useMemo(() => {
     const q = query.normalize('NFC').toLocaleLowerCase().trim();
@@ -29,6 +30,38 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     return () => before.current?.focus();
   }, []);
 
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const shell = dialog?.closest('.app-shell');
+    if (!dialog || !shell) return;
+    // Keep the preview's background out of both pointer and keyboard interaction.
+    const siblings = [...shell.children].filter(child => !child.contains(dialog)) as HTMLElement[];
+    const previous = siblings.map(element => element.inert);
+    siblings.forEach(element => { element.inert = true; });
+    const guard = (event: FocusEvent) => {
+      if (!dialog.contains(event.target as Node)) input.current?.focus();
+    };
+    document.addEventListener('focusin', guard);
+    return () => {
+      document.removeEventListener('focusin', guard);
+      siblings.forEach((element, index) => { element.inert = previous[index]!; });
+    };
+  }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.contains(document.activeElement)) {
+      const focusedElement = document.activeElement as HTMLElement | null;
+      if (focusedElement && focusedElement !== input.current &&
+          !focusedElement.matches('.switcher-result') && !focusedElement.matches('.switcher-input button')) {
+        input.current?.focus();
+      }
+      if (focusedElement?.matches('.switcher-result') && ![...dialog.querySelectorAll('.switcher-result')].includes(focusedElement)) {
+        input.current?.focus();
+      }
+    }
+  }, [shown]);
+
   const select = (session: Session) => {
     onSelect(session);
   };
@@ -40,7 +73,7 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     }
     if (e.key !== 'Tab') return;
     const dialog = e.currentTarget;
-    const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(element => element.getClientRects().length > 0 || element.closest('.switcher-results') !== null || element === input.current);
     if (!focusable.length) { e.preventDefault(); return; }
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
@@ -61,7 +94,7 @@ export function SessionSwitcher({ sessions, projects, onSelect, onClose }: {
     }
   }
   return <div className="switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <section onKeyDown={trapFocus} role="dialog" aria-modal="true" aria-label={tr('switcher.title')} className="switcher">
+    <section ref={dialogRef} onKeyDown={trapFocus} role="dialog" aria-modal="true" aria-label={tr('switcher.title')} className="switcher">
       <div className="switcher-input"><Search size={18}/><input ref={input} placeholder={tr('switcher.placeholder')} value={query} onChange={e => { setQuery(e.target.value); setFocused(0); }} onKeyDown={keys} aria-label={tr('switcher.search')}/><button className="icon-button" onClick={onClose} aria-label={tr('switcher.close')}><X size={17}/></button></div>
       <div className="switcher-results">{options.length ? options.slice(0, 50).map((session, index) =>
         <button className={`switcher-result ${focused === index ? 'switcher-focused' : ''}`} key={session.id} onClick={() => select(session)} onMouseEnter={() => setFocused(index)}>
