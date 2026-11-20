@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ArrowUpRight, Bell, Bot, Check, CheckCheck,
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, Clock3, Command, Cpu, FileCode2,
@@ -13,7 +13,6 @@ import { SessionSwitcher } from './components/SessionSwitcher';
 import { demoProjects, demoSessions, nextId } from './demo';
 import { decisionCount, deriveMonitorItems, dismissKey, isHidden, type MonitorItem } from './monitor';
 import type { AgentName, Project, Session, SessionStatus, TimelineEntry } from './model';
-import { useRoving } from './vendor/acpira/roving';
 
 const statusLabel: Record<SessionStatus, string> = {
   idle: 'Idle', active: 'In progress', waiting: 'Needs review', complete: 'Completed',
@@ -120,15 +119,28 @@ type InspectorTab = 'changes' | 'checks' | 'context';
 
 function Inspector({ session, project, onClose }: { session: Session; project: Project; onClose: () => void }) {
   const [tab, setTab] = useState<InspectorTab>('changes');
-  const tabs = useRoving<HTMLDivElement>({ select: true });
+  const tabOrder: InspectorTab[] = ['changes', 'checks', 'context'];
+  function handleTabKeys(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
+    const current = tabOrder.indexOf(tab);
+    let next = current;
+    if (event.key === 'ArrowRight') next = (current + 1) % tabOrder.length;
+    else if (event.key === 'ArrowLeft') next = (current + tabOrder.length - 1) % tabOrder.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabOrder.length - 1;
+    else return;
+    event.preventDefault();
+    setTab(tabOrder[next]!);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+  }
   return <aside className="inspector">
     <div className="inspector-header"><strong>Workspace</strong><button className="icon-button" onClick={onClose} aria-label="Close details"><PanelRightClose size={17}/></button></div>
-    <div className="inspector-tabs" role="tablist" aria-label="Workspace details" ref={tabs.ref} onKeyDown={tabs.onKeyDown}>
+    <div className="inspector-tabs" role="tablist" aria-label="Workspace details" onKeyDown={handleTabKeys}>
       {([['changes', 'Changes'], ['checks', 'Checks'], ['context', 'Details']] as const).map(([id, label]) => (
-        <button key={id} role="tab" aria-selected={tab === id} aria-controls="inspector-pane" onClick={() => setTab(id)}>{label}</button>
+        <button key={id} id={`inspector-tab-${id}`} role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls="inspector-pane" onClick={() => setTab(id)}>{label}</button>
       ))}
     </div>
-    <div className="inspector-body" id="inspector-pane" role="tabpanel">
+    <div className="inspector-body" id="inspector-pane" role="tabpanel" aria-labelledby={`inspector-tab-${tab}`}>
       {tab === 'changes' && <>
         <div className="evidence-callout"><FileDiff size={15}/> Simulated file changes · not from Git</div>
         <div className="diff-summary"><span>2 files changed</span><span><b className="added">+18</b> <b className="removed">−4</b></span></div>

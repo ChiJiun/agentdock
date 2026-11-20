@@ -17,22 +17,18 @@ export function MonitorInbox({ items, dismissed, onDismiss, onSelect, onClose }:
   onSelect: (item: MonitorItem) => void;
   onClose: () => void;
 }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const firstRowRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    closeRef.current?.focus();
-    const handle = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  }, [onClose]);
+    (firstRowRef.current ?? panelRef.current)?.focus();
+  }, []);
 
   const visible = items.filter(item => !isHidden(item, dismissed));
   return (
-    <section className="monitor-panel" role="dialog" aria-label="Session monitor" aria-modal="false">
+    <section ref={panelRef} tabIndex={-1} className="monitor-panel" role="dialog" aria-label="Session monitor" aria-modal="false" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(); } }}>
       <header className="monitor-header">
         <div><div className="monitor-overline"><BellRing size={13} /> SESSION SENTINEL</div><h2>Decision inbox</h2><p>Short status updates across demo sessions</p></div>
-        <button ref={closeRef} className="icon-button" onClick={onClose} aria-label="Close monitor"><X size={17}/></button>
+        <button className="icon-button" onClick={onClose} aria-label="Close monitor"><X size={17}/></button>
       </header>
       <div className="monitor-explainer">Preview data only · No real monitoring, notifications or approvals are active.</div>
       <div className="monitor-scroll">
@@ -43,7 +39,7 @@ export function MonitorInbox({ items, dismissed, onDismiss, onSelect, onClose }:
           return <div key={section.level} className="monitor-group">
             <div className="monitor-group-title"><span>{section.title}</span><b>{list.length}</b></div>
             {list.map(item => <article className={`monitor-card monitor-${item.level}`} key={item.id}>
-              <button className="monitor-card-main" onClick={() => onSelect(item)} aria-label={`Open ${item.sessionTitle}: ${item.summary}`}>
+              <button ref={item === visible[0] ? firstRowRef : undefined} className="monitor-card-main" onClick={() => onSelect(item)} aria-label={`Open ${item.sessionTitle}: ${item.summary}`}>
                 <span className="monitor-card-icon">{item.level === 'decision' ? <AlertCircle size={17}/> : item.level === 'complete' ? <CheckCircle2 size={17}/> : item.level === 'background' ? <Clock3 size={17}/> : <Bot size={17}/>}</span>
                 <span className="monitor-card-content">
                   <strong>{item.sessionTitle}</strong><small>{item.projectName} · {item.agent}</small>

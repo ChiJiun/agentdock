@@ -2,7 +2,7 @@
 
 Snapshot: 2026-11-17 (source audit for [Issue #1](https://github.com/ChiJiun/agentdock/issues/1)). Module-level decisions are recorded in [ADR-0002](decisions/0002-source-reuse.md).
 
-**Imported third-party source: three small MIT files only** (see [Imported source files](#imported-source-files)); no other third-party code has been imported. This file is the provenance manifest that any future copy or dependency PR must cite. A directory existing does not prove independent embeddability or security; every row below states what was actually checked.
+**No upstream source files have been copied into the AgentDock UI prototype.** The Acpira UI helpers were evaluated but replaced with original implementations to respect ADR-0002. This file remains the provenance manifest for future copy or dependency PRs. A directory existing does not prove independent embeddability or security; every row below states what was actually checked.
 
 ## Source strategy
 
@@ -74,15 +74,7 @@ Decision vocabulary (from Issue #1): **dependency** (consume a published package
 
 ## Imported source files
 
-Proposed exception to ADR-0002 section 2 (`packages/ui` = Reimplement); the owner has **not** accepted it yet. See [ADR-0004](decisions/0004-port-small-acpira-ui-helpers.md) for the reasoning and the recommended alternative (write the helpers in AgentDock).
-
-| Upstream path @ `0481995e3a55abcd707f6808df9d7f396483c3e1` | AgentDock path | License / copyright | Changes | Tests |
-| --- | --- | --- | --- | --- |
-| `packages/ui/ui/roving.ts` | `src/vendor/acpira/roving.ts` | MIT, Copyright (c) 2026 hotic | two header comment lines | none direct |
-| `packages/ui/ui/mergeRefs.ts` | `src/vendor/acpira/mergeRefs.ts` | MIT, Copyright (c) 2026 hotic | two header comment lines | none direct |
-| `packages/ui/ui/railStep.ts` | `src/vendor/acpira/railStep.ts` | MIT, Copyright (c) 2026 hotic | two header comment lines | `railStep.test.ts` (AgentDock-written; upstream tests not copied or run) |
-
-License text: `third_party/acpira-LICENSE` (byte-identical to upstream `LICENSE`). Notice file: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md). Dependencies added by these files: none beyond `react`. This is **not** completion of the source audit in Issue #1.
+None. The prototype's tab keyboard handling, textarea ref wiring, and progress animation are original implementations in `src/App.tsx`, `src/components/Composer.tsx`, and `src/components/ProgressRail.tsx`. Acpira remains a UX reference only; the Issue #1 source audit is still tracked separately. Published npm dependencies are declared in `package.json` and require their own license inventory before distribution.
 
 ## License and notice obligations
 
