@@ -66,8 +66,8 @@ Full setup, adapter allowlist, storage, restart behavior and security limitation
 
 ## Working policy
 
-Initial implementation selectively imports a few **MIT-licensed utility functions** from Acpira, with provenance in [ADR-0002](docs/decisions/0002-port-small-acpira-ui-helpers.md) and license in `third_party/acpira-LICENSE`. External runtimes should be integrated over public protocols first. A migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
+The UI preview uses original AgentDock components and helpers, following the **reimplement** decision in [ADR-0002](docs/decisions/0002-source-reuse.md). No Acpira source files are vendored. External runtimes should be integrated over public protocols first. A future migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
 
 ## Licensing
 
-**To be decided before publishing copied third-party implementation.** Third-party repositories have different obligations, especially AGPL-3.0. The initial repository is private while architecture and provenance are being evaluated. See [sources.md](docs/sources.md).
+AgentDock's distribution license remains to be decided. The UI preview depends on published npm packages, whose notices must be included in release artifacts. Third-party repositories have different obligations, especially AGPL-3.0. See [sources.md](docs/sources.md).

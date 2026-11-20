@@ -3,7 +3,11 @@ export interface RuntimeHealth {
 }
 export interface RuntimeAdapter { id: string; label: string; }
 export interface RuntimeWorkspace { path: string; }
-export interface RuntimeWorktree { id: string; source_repo: string; path: string; branch: string; created_at: string; exists: boolean; }
+export interface RuntimeWorktree {
+  id: string; source_repo: string; path: string; branch: string; created_at: string;
+  state: 'creating' | 'ready' | 'partial' | 'orphan' | 'failed';
+  exists: boolean; available: boolean;
+}
 export type RuntimeSessionStatus =
   | 'starting' | 'ready' | 'running' | 'awaiting_approval'
   | 'interrupted' | 'failed' | 'closed';
@@ -30,6 +34,7 @@ export interface RuntimeEvent {
     approvalId?: string;
     title?: string;
     decision?: string;
+    reason?: string;
     message?: string;
   };
   createdAt: string;
@@ -44,7 +49,7 @@ export interface LiveAttentionItem {
   updatedAt: string;
   /** The three inbox sections of docs/ux/states-and-indicators.md section 4. */
   type: 'reply' | 'review' | 'background';
-  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished';
+  key: 'approval_pending' | 'agent_failed' | 'agent_interrupted' | 'agent_running' | 'turn_finished' | 'turn_cancelled';
   approvalId?: string;
 }
 export interface RuntimeApproval {
@@ -52,6 +57,8 @@ export interface RuntimeApproval {
   session_id: string;
   title: string;
   choices: { id: string; kind: string; name: string }[];
+  /** What the agent asked to do, redacted and bounded by the host. */
+  detail?: { kind?: string | null; input?: unknown; locations?: string[] };
   status: string;
   created_at: string;
   expires_at: string;
@@ -85,7 +92,8 @@ export const getHealth = (signal?: AbortSignal) => runtimeApi<RuntimeHealth>('he
 export const getAdapters = () => runtimeApi<RuntimeAdapter[]>('adapters');
 export const getWorkspaces = () => runtimeApi<RuntimeWorkspace[]>('workspaces');
 export const getWorktrees = () => runtimeApi<RuntimeWorktree[]>('worktrees');
-export const createWorktree = (repoPath: string) => runtimeApi<RuntimeWorktree>('worktrees', { method: 'POST', data: { repoPath } });
+export const createWorktree = (repoPath: string, idempotencyKey?: string) =>
+  runtimeApi<RuntimeWorktree>('worktrees', { method: 'POST', data: { repoPath, idempotencyKey } });
 export const getSessions = () => runtimeApi<RuntimeSession[]>('sessions');
 export const getAttention = () => runtimeApi<LiveAttentionItem[]>('attention');
 /** Marks one result row reviewed. The runtime refuses it for approvals (409). */

@@ -1425,6 +1425,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
 .live-approval h3{display:flex;align-items:center;gap:9px;margin:0 0 9px;font-size:14px}
 .live-approval p{font-size:12px;line-height:1.6}.live-approval small{color:#cfba9e}.live-approval>div{display:flex;gap:9px;margin-top:17px}
 .live-approval .live-allow{background:#c9dfae;color:#1f3021}
+.live-approval .live-approval-kind{display:block;margin-bottom:4px}
+.live-approval .live-approval-input{margin:8px 0 10px;max-height:180px;background:#2b2520;border-color:#5d4a37}
 .live-error{display:flex;align-items:center;gap:9px;color:#ffe7df;background:#4a2d2a;border-top:1px solid #a35b4f;padding:11px;font-size:11px}
 .live-error button{margin-left:auto;border:0;background:transparent;color:#fff}
 @media(max-width:760px){.live-sidebar{flex-basis:185px}.live-setup{padding:10px 8px}.live-main-header{padding:10px}.live-main-header h2{font-size:14px}.live-cwd{display:none}.live-notice{padding:9px 10px}.live-history{padding:12px}.live-composer{padding:12px}}

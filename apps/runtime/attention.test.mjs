@@ -37,13 +37,30 @@ describe('event-driven Session Sentinel (no model calls)', () => {
     assert.deepEqual(attentionCounts(items), { reply: 0, review: 1, background: 0 });
   }));
 
-  test('a turn the user cancelled produces no item; an idle session with no turn produces none', () => withStore(store => {
+  test('a cancelled turn is a result to review (UX section 2); an idle session with no turn produces none', () => withStore(store => {
     store.create({ id: 'c', adapter: 'mock', cwd });
     store.status('c', 'ready');
     store.event('c', 'connected');
     assert.equal(deriveAttention(store).length, 0);
+    store.event('c', 'user_message', { text: 'x' });
     store.event('c', 'turn_finished', { stopReason: 'cancelled' });
+    const items = deriveAttention(store);
+    assert.deepEqual(items.map(i => [i.type, i.key]), [['review', 'turn_cancelled']]);
+    store.markViewed('c', items[0].evidenceCursor);
     assert.equal(deriveAttention(store).length, 0);
+  }));
+
+  test('a finished turn stays listed when a later bookkeeping event (cancel_requested) is written', () => withStore(store => {
+    store.create({ id: 'late', adapter: 'mock', cwd });
+    store.status('late', 'ready');
+    store.event('late', 'user_message', { text: 'x' });
+    store.event('late', 'turn_finished', { stopReason: 'end_turn' });
+    store.event('late', 'cancel_requested', { by: 'user' });
+    assert.deepEqual(deriveAttention(store).map(i => i.key), ['turn_finished']);
+    // A new prompt without a finished turn is no result.
+    store.status('late', 'running');
+    store.event('late', 'user_message', { text: 'again' });
+    assert.deepEqual(deriveAttention(store).map(i => i.type), ['background']);
   }));
 
   test('pending permission needs a reply and cannot be hidden by "mark reviewed"', async () => {
@@ -136,7 +153,7 @@ describe('event-driven Session Sentinel (no model calls)', () => {
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
 
-  test('restart interruption: idle-and-viewed stays quiet, running-when-viewed is surfaced', () => {
+  test('restart interruption: idle-and-viewed stays quiet; running-when-viewed or changed-after-view is surfaced', () => {
     mkdirSync(resolve('.local'), { recursive: true });
     const temp = mkdtempSync(resolve('.local', 'attention-test-'));
     try {
@@ -146,15 +163,45 @@ describe('event-driven Session Sentinel (no model calls)', () => {
       first.status('idle', 'ready');
       first.event('idle', 'turn_finished', { stopReason: 'end_turn' });
       first.markViewed('idle', 1);
+      first.create({ id: 'late', adapter: 'mock', cwd });
+      first.status('late', 'ready');
+      const turn = first.event('late', 'turn_finished', { stopReason: 'end_turn' }).seq;
+      first.markViewed('late', turn);
+      first.event('late', 'cancel_requested', { by: 'user' }); // something new after the view
       first.create({ id: 'busy', adapter: 'mock', cwd });
       first.status('busy', 'running');
       const seq = first.event('busy', 'user_message', { text: 'x' }).seq;
       first.markViewed('busy', seq);
       first.close();
-      // Ungraceful stop: the constructor marks both interrupted without an event.
+      // Ungraceful stop: the next host marks live sessions interrupted and
+      // records `host_restarted` with the previous status.
       const next = new SessionStore(path);
       const items = deriveAttention(next);
-      assert.deepEqual(items.map(i => [i.sessionId, i.key]), [['busy', 'agent_interrupted']]);
+      assert.deepEqual(items.map(i => [i.sessionId, i.key]).sort(),
+        [['busy', 'agent_interrupted'], ['late', 'agent_interrupted']]);
+      next.close();
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  });
+
+  test('an old cursor marked after restart cannot erase an unseen interruption', () => {
+    mkdirSync(resolve('.local'), { recursive: true });
+    const temp = mkdtempSync(resolve('.local', 'attention-test-'));
+    try {
+      const path = join(temp, 'db.sqlite');
+      const first = new SessionStore(path);
+      first.create({ id: 'lost', adapter: 'mock', cwd });
+      first.status('lost', 'ready');
+      const cursor = first.event('lost', 'connected').seq;
+      first.close();
+      const next = new SessionStore(path);
+      assert.equal(next.get('lost').status, 'interrupted');
+      // A delayed UI POST uses a pre-restart event cursor.
+      next.markViewed('lost', cursor);
+      assert.deepEqual(deriveAttention(next).map(item => item.key), ['agent_interrupted']);
+      // Explicitly opening the latest interruption evidence does acknowledge it.
+      const latest = next.latestEvent('lost').seq;
+      next.markViewed('lost', latest);
+      assert.deepEqual(deriveAttention(next), []);
       next.close();
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });

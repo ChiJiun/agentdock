@@ -38,7 +38,7 @@ function mockedFetch(path: string | URL | Request, options?: RequestInit): Promi
   }
   if (uri.endsWith('/api/workspaces')) return Promise.resolve(returnJson([{path:'/mock/project'}]));
   if (uri.endsWith('/api/worktrees') && method === 'GET') return Promise.resolve(returnJson([]));
-  if (uri.endsWith('/api/worktrees') && method === 'POST') return Promise.resolve(returnJson({id:'wt1',source_repo:'/mock/project',path:'/mock/project/.local/worktrees/wt1',branch:'agentdock/task-123456789abc',created_at:new Date().toISOString(),exists:true},201));
+  if (uri.endsWith('/api/worktrees') && method === 'POST') return Promise.resolve(returnJson({id:'wt1',source_repo:'/mock/project',path:'/mock/project/.local/worktrees/wt1',branch:'agentdock/task-123456789abc',created_at:new Date().toISOString(),exists:true,state:'ready',available:true},201));
   if (uri === '/api/sessions' && method === 'GET') return Promise.resolve(returnJson(availableSessions));
   if (uri.includes('/events')) return Promise.resolve(returnJson(events));
   if (uri.includes('/approvals') && method === 'GET') return Promise.resolve(returnJson(approvals));
@@ -159,10 +159,36 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     await act(async()=>button?.click());
     const creation=requests.find(r=>r.path==='/api/worktrees' && r.method==='POST');
     expect(creation).toBeDefined();
-    expect(creation?.data).toEqual({repoPath:'/mock/project'});
+    expect(creation?.data).toEqual({repoPath:'/mock/project', idempotencyKey: expect.stringMatching(/^[a-f0-9-]{36}$/)});
     expect(ui.textContent).toContain('已建立獨立 Worktree');
     // Creating a worktree must not automatically execute an agent prompt.
     expect(requests.some(r=>r.path.includes('/prompt')&&r.method==='POST')).toBe(false);
+  });
+
+  it('keeps keyboard focus inside the inbox after acknowledging a row and wraps Tab', async () => {
+    availableSessions = [session, other];
+    attentionItems = [reviewItem()];
+    const ui = await render();
+    act(() => bell(ui)?.click());
+    const dialog = ui.querySelector<HTMLElement>('.live-attention-inbox')!;
+    const close = dialog.querySelector<HTMLButtonElement>('header button')!;
+    const mark = dialog.querySelector<HTMLButtonElement>('.live-attention-reviewed')!;
+    const row = dialog.querySelector<HTMLButtonElement>('.live-attention-main')!;
+    act(() => {
+      mark.focus();
+      mark.dispatchEvent(new KeyboardEvent('keydown', { key:'Tab', bubbles:true }));
+    });
+    expect(document.activeElement).toBe(close);
+    act(() => {
+      close.dispatchEvent(new KeyboardEvent('keydown', { key:'Tab', shiftKey:true, bubbles:true }));
+    });
+    expect(document.activeElement).toBe(mark);
+    expect(row).toBeTruthy();
+    act(() => mark.focus());
+    await act(async () => { mark.click(); await Promise.resolve(); });
+    expect(ui.querySelector('.live-attention-reviewed')).toBeNull();
+    expect(document.activeElement).toBe(close);
+    expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
   it('the session on screen is not listed unless it needs a reply', async () => {
@@ -199,5 +225,32 @@ describe('real ACP frontend integration (API contract mocked)', () => {
     expect(requests.some(r=>r.path.includes('/approvals'))).toBe(true);
     // Rendered approvals may arrive after the first sync, but no approval API call may happen without a click.
     expect(requests.some(r=>r.method==='POST'&&r.path.includes('/approvals/'))).toBe(false);
+  });
+
+  it('shows what is being approved and sends only the decision the user clicked', async () => {
+    approvals=[{id:approvalId,session_id:sessionId,title:'Run a command',status:'pending',
+      detail:{kind:'execute',input:{command:'git push origin main',api_key:'[REDACTED]'},locations:['/mock/project']},
+      choices:[{id:'allow-once',kind:'allow_once',name:'Allow Once'},{id:'always',kind:'allow_always',name:'Always'}],
+      expires_at:new Date(Date.now()+60000).toISOString()}];
+    const ui=await render();
+    const tab=[...ui.querySelectorAll<HTMLButtonElement>('.live-tabs button')].find(b=>b.textContent?.includes('待批准事項'))!;
+    expect(tab).toBeDefined();
+    await act(async()=>{tab.click();await Promise.resolve();});
+    const card=ui.querySelector('.live-approval')!;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain('Run a command');
+    expect(card.textContent).toContain('execute');
+    expect(card.textContent).toContain('git push origin main');
+    expect(card.textContent).toContain('/mock/project');
+    // Only deny and allow-once exist: the page offers no way to pick allow_always.
+    const labels=[...card.querySelectorAll('button')].map(b=>b.textContent?.trim());
+    expect(labels).toEqual(['拒絕','僅允許一次']);
+    expect(requests.some(r=>r.method==='POST'&&r.path.includes('/approvals/'))).toBe(false);
+    const deny=[...card.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes('拒絕'))!;
+    await act(async()=>{deny.click();await Promise.resolve();});
+    const sent=requests.filter(r=>r.method==='POST'&&r.path.includes('/approvals/'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].path).toContain(`/sessions/${sessionId}/approvals/${approvalId}`);
+    expect(sent[0].data).toEqual({decision:'deny'});
   });
 });

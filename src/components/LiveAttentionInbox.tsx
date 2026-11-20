@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { AlertTriangle, ArrowUpRight, Bell, Check, CheckCircle2, Clock3, ShieldAlert, X } from 'lucide-react';
 import { useLocale } from '../i18n/context';
 import type { LiveAttentionItem } from '../live/api';
@@ -18,23 +18,26 @@ const summaries = {
     agent_interrupted: ['Agent 程序中斷；歷史紀錄仍可查看，但沒有自動重新接上模型。', '查看工作階段，決定要不要建立新 Session。'],
     agent_running: ['Agent 正在處理 Prompt，目前不需要額外決策。', '需要時開啟工作階段查看進度。'],
     turn_finished: ['Agent 已完成上一個回合；尚未代表程式碼通過驗證。', '查看實際回覆、Git 差異與測試證據。'],
+    turn_cancelled: ['上一個回合已被取消，Agent 沒有完成它。', '查看已產生的部分輸出，決定要不要重新送出。'],
   },
   'en-US': {
     approval_pending: ['The Agent is paused, waiting for you to decide on an ACP tool permission.', 'Open the session to see the full request, then approve or deny.'],
     agent_failed: ['The Agent failed; the session still contains error evidence.', 'Inspect the error and Git diff before deciding whether to retry.'],
-    agent_interrupted: ['The Agent process was interrupted. History is saved, but model context was not reattached.', 'Inspect the session before starting a new one.'],
+    agent_interrupted: ['The Agent process was interrupted; history is saved but not reattached.', 'Inspect the session before starting a new one.'],
     agent_running: ['The Agent is processing a prompt; no action is required now.', 'Open the session to check progress when needed.'],
-    turn_finished: ['The Agent finished its last turn. This does not certify the code.', 'Review output, Git changes and test evidence.'],
+    turn_finished: ['The Agent finished its last turn; the code is not certified.', 'Review output, Git changes and test evidence.'],
+    turn_cancelled: ['The last turn was cancelled; the Agent did not finish it.', 'Check the partial output and decide whether to resend.'],
   },
 };
 const statusText = {
-  'zh-TW': { approval_pending:'需要批准', agent_failed:'失敗', agent_interrupted:'已中斷', agent_running:'執行中', turn_finished:'完成 · 新' },
-  'en-US': { approval_pending:'Needs approval', agent_failed:'Failed', agent_interrupted:'Interrupted', agent_running:'Running', turn_finished:'Done · new' },
+  'zh-TW': { approval_pending:'需要批准', agent_failed:'失敗', agent_interrupted:'已中斷', agent_running:'執行中', turn_finished:'完成 · 新', turn_cancelled:'已取消' },
+  'en-US': { approval_pending:'Needs approval', agent_failed:'Failed', agent_interrupted:'Interrupted', agent_running:'Running', turn_finished:'Done · new', turn_cancelled:'Cancelled' },
 };
 
 function Glyph({ item }: { item: LiveAttentionItem }) {
   if (item.type === 'reply') return <ShieldAlert size={16}/>;
   if (item.key === 'turn_finished') return <CheckCircle2 size={16}/>;
+  if (item.key === 'turn_cancelled') return <Clock3 size={16}/>;
   if (item.type === 'review') return <AlertTriangle size={16}/>;
   return <Clock3 size={16}/>;
 }
@@ -69,6 +72,17 @@ export function LiveAttentionInbox({ items, onSelect, onMarkReviewed, onClose }:
     };
   }, []);
   function moveFocus(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Tab') {
+      // The inbox is a non-modal popover whose Tab order wraps internally.
+      const controls = [...(panel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.target === panel.current || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
+      return;
+    }
     if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
     const rows = [...(panel.current?.querySelectorAll<HTMLButtonElement>('.live-attention-main') ?? [])];
     if (!rows.length) return;
@@ -77,6 +91,17 @@ export function LiveAttentionInbox({ items, onSelect, onMarkReviewed, onClose }:
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1
       : event.key === 'ArrowDown' ? Math.min(rows.length - 1, current + 1) : Math.max(0, current - 1);
     rows[next]?.focus();
+  }
+  function markWithFocus(event: ReactMouseEvent<HTMLButtonElement>, item: LiveAttentionItem) {
+    // A successful acknowledgement removes its row. Move keyboard focus to a
+    // surviving control before the asynchronous response unmounts the button.
+    const button = event.currentTarget;
+    if (document.activeElement === button) {
+      const rows = [...(panel.current?.querySelectorAll<HTMLButtonElement>('.live-attention-main') ?? [])];
+      const index = rows.findIndex(row => row.closest('article') === button.closest('article'));
+      (rows[index + 1] ?? rows[index - 1] ?? panel.current?.querySelector<HTMLButtonElement>('header button'))?.focus();
+    }
+    onMarkReviewed(item);
   }
   const zh = locale === 'zh-TW';
   return <section ref={panel} tabIndex={-1} onKeyDown={moveFocus} className="live-attention-inbox" role="dialog" aria-label={zh ? '跨 Session 決策收件匣' : 'Cross-session decision inbox'} aria-modal="false">
@@ -105,7 +130,7 @@ export function LiveAttentionInbox({ items, onSelect, onMarkReviewed, onClose }:
                   <em>{action} <ArrowUpRight size={12}/></em>
                 </span>
               </button>
-              {item.type==='review' && <button className="live-attention-reviewed" onClick={()=>onMarkReviewed(item)} aria-label={zh?`標記為已查看：${item.adapter} · ${project}`:`Mark reviewed: ${item.adapter} · ${project}`} title={zh?'標記為已查看；有新事件時會再出現':'Mark reviewed; it returns on new events'}><Check size={13}/></button>}
+              {item.type==='review' && <button className="live-attention-reviewed" onClick={event=>markWithFocus(event,item)} aria-label={zh?`標記為已查看：${item.adapter} · ${project}`:`Mark reviewed: ${item.adapter} · ${project}`} title={zh?'標記為已查看；有新事件時會再出現':'Mark reviewed; it returns on new events'}><Check size={13}/></button>}
             </article>;
           })}
         </section>;
