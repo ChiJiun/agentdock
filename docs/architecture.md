@@ -112,3 +112,7 @@ Security: path traversal, symlink escapes, env leaks, replay of non-idempotent o
 Performance: event-stream latency, memory, CPU, long transcripts; compared to fixed baseline.
 
 References in [sources.md](sources.md).
+
+## Agent-driven verification and evidence boundary (proposed)
+
+See [source-backed verification workflow](research/agent-verification-workflow.md) and [Issue #66](https://github.com/ChiJiun/agentdock/issues/66). AgentDock owns verification policy, project-local feature maps, process-safe launch/doctor/drive/cleanup, immutable evidence and independent review. ACP agents own their internal harness. A passing agent statement, model checker, mock, or UI screenshot alone never authorizes merge. Native runtime side effects and integration-tree SHA must be verified where relevant. Guardrails are derived from reproducible failures, with negative regression fixtures. Formal verification is conditional on risk and must map assumptions to implementation.
