@@ -31,6 +31,8 @@ The [source manifest](../sources.md#upstream-source-retention) and [#53](https:/
 
 ## Validation and decisions
 
+The follow-up issues under #52 define independent acceptance for [code indexing](https://github.com/ChiJiun/agentdock/issues/59), [handoff](https://github.com/ChiJiun/agentdock/issues/60), [cross-repo recovery](https://github.com/ChiJiun/agentdock/issues/61), [OS isolation](https://github.com/ChiJiun/agentdock/issues/62), [release provenance](https://github.com/ChiJiun/agentdock/issues/63) and [local data portability](https://github.com/ChiJiun/agentdock/issues/64). The existing UI and accessibility design continues under #56. Routing and budget controls continue under #13 and #43.
+
 The Alpha evidence comes from #51 and #14. For V1, run the same revision and test set in isolated worktrees with cold/warm cache and queue disabled/enabled. Include a failed test, stale base and an unknown project fixture. Compare wall time, CI minutes, false passes and interventions. Treat changes in tested scope as invalid comparisons.
 
 The table records planning decisions. Detailed estimates and candidate dependency closures are open and should be assigned in #52 before implementation. Record unresolved integration choices as ADRs with an owner and a verification fixture.

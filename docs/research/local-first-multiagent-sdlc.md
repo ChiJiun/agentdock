@@ -127,4 +127,4 @@ artifactDigests, logRef, cacheMode, invalidationReason?
 5. **#14/#41**：固定 fixture 做多 Agent baseline 對照，確認 GitHub remote required checks 與本地證據邊界。
 6. Jujutsu、遠端共享快取、Scion 式專屬 Source Control Server 屬後續探索，沒有前述量測需要就不做。
 
-本文件僅完成來源和設計盤點：**沒有 fork、沒有移植或執行任何上游程式碼、沒有驗證本地整合或多 Agent 端到端功能**。
+本文件記錄來源和設計盤點。四個 GitHub Fork 及每週同步驗收由 #53 追蹤。程式碼整合、本地驗證及多 Agent 端到端功能各有獨立的實作與驗收項目。
