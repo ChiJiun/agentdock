@@ -112,3 +112,7 @@ Security: path traversal, symlink escapes, env leaks, replay of non-idempotent o
 Performance: event-stream latency, memory, CPU, long transcripts; compared to fixed baseline.
 
 References in [sources.md](sources.md).
+
+## Repository enforcement boundary
+
+Local validators and integration queues produce evidence bound to the task, head SHA, base SHA and validated tree. Operations that change those inputs invalidate the evidence. GitHub independently enforces the main rules tracked in [#55](https://github.com/ChiJiun/agentdock/issues/55). The [four weekly-synced forks](sources.md#upstream-source-retention) are isolated from the product dependency and release path.

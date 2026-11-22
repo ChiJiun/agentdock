@@ -59,3 +59,9 @@ Run identical representative tasks on: (A) single strong model, (B) role routing
 ## Delivery caution
 
 For one developer working around classes and internship, optimize for vertical slices: a real agent finishes a safe task in a real repo, with visible evidence, before building an Agent OS. Multi-month estimates are dependent on available engineering time, not a fixed release commitment.
+
+## M2.5 · Self-hosting Alpha
+
+[#51](https://github.com/ChiJiun/agentdock/issues/51) requires a reproducible Windows install and smoke test, real Claude Code and Codex tasks, persistent events, two isolated worktrees, host-controlled approvals and authenticated test evidence. Release after ten real tasks meet the gate and publish checksums and known limitations. Measure 20–30 tasks before replacing the existing workflow.
+
+V1 expands Local CI, caching and the integration queue via #47–#49. V2 and Later decisions are in the [capability plan](research/agentdock-capability-map.md). Repository protection is tracked in [#55](https://github.com/ChiJiun/agentdock/issues/55) and the [four weekly-synced forks](sources.md#upstream-source-retention) in [#53](https://github.com/ChiJiun/agentdock/issues/53).

@@ -116,3 +116,20 @@ Any PR that copies third-party source, adds a direct dependency on one of the mo
 - [Tauri 2 Capabilities](https://v2.tauri.app/security/capabilities/)
 - [Tauri 2 Permissions](https://v2.tauri.app/security/permissions/)
 - [Acpira Harness research issue](https://github.com/ChiJiun/acpira/issues/10)
+
+## Upstream source retention
+
+AgentDock retains four GitHub forks under ChiJiun. The tracking branches are scheduled for safe weekly synchronization on Sundays at 03:00 Asia/Taipei under [#53](https://github.com/ChiJiun/agentdock/issues/53). A sync may advance only the mapped upstream tracking branch by fast-forward. Divergence blocks the update and is reported with the source, time and commit IDs. The audit also records changes to LICENSE and NOTICE files.
+
+Nx and Jujutsu remain pinned research references. Updating a fork does not change an AgentDock dependency, source pin or release. An integration requires a separate reviewed PR with exact provenance, license and dependency review, and tests.
+
+| Research upstream | Fixed commit | License | Retention |
+| --- | --- | --- | --- |
+| [Worktrunk](https://github.com/max-sixty/worktrunk/tree/abe78b3be719b9caff4efc155ad83e697c2202f7) | `abe78b3be719b9caff4efc155ad83e697c2202f7` | MIT / Apache-2.0 | [Fork](https://github.com/ChiJiun/worktrunk) |
+| [Orca](https://github.com/stablyai/orca/tree/35eed0a05314feae84a855c8a5a8b7773b719a66) | `35eed0a05314feae84a855c8a5a8b7773b719a66` | MIT | [Fork](https://github.com/ChiJiun/orca) |
+| [AgentBridge](https://github.com/yoonjae26/AgentBridge/tree/c37a3c904785d7f84090fd98cf364577e4caf90f) | `c37a3c904785d7f84090fd98cf364577e4caf90f` | MIT | [Fork](https://github.com/ChiJiun/AgentBridge) |
+| [Orkestra](https://github.com/andyyaro/orkestra/tree/68ef18b939d62b703334746ea94e5ecb7bc3cae0) | `68ef18b939d62b703334746ea94e5ecb7bc3cae0` | Apache-2.0 | [Fork](https://github.com/ChiJiun/orkestra) |
+| [Nx](https://github.com/nrwl/nx/tree/341530f8a798dcfa071bb975100f41c214543427/packages/nx/src) | `341530f8a798dcfa071bb975100f41c214543427` | MIT | Research pin |
+| [Jujutsu](https://github.com/jj-vcs/jj/tree/0f7f4ced8c1a24bef5a7fd8b9be64fbc63ddb3e0) | `0f7f4ced8c1a24bef5a7fd8b9be64fbc63ddb3e0` | Apache-2.0 | Research pin |
+
+See #53 for file-level links and the [capability plan](research/agentdock-capability-map.md) for integration decisions.
