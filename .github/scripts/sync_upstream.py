@@ -72,16 +72,12 @@ def sync(upstream, record):
             if re.match(r"^(licen[cs]es?|notice)(?:$|[._ -])",
                         Path(path).name, re.IGNORECASE)
         ]
-        current = run("git", "ls-remote", "--exit-code", fork_url, TRACKING_REF,
-                      cwd=directory).split()[0]
+        current = tracking_sha(fork)
         if current != old:
             raise ValueError("Blocked: fork tracking ref changed during validation")
-        run("git", "-c", "credential.helper=",
-            "-c", "credential.helper=!gh auth git-credential", "push", "--no-follow-tags",
-            fork_url, f"{candidate}:{TRACKING_REF}", cwd=directory)
-        record["new_sha"] = run(
-            "git", "ls-remote", "--exit-code", fork_url, TRACKING_REF, cwd=directory,
-        ).split()[0]
+        run("gh", "api", "--method", "PATCH", f"repos/{fork}/git/refs/heads/main",
+            "-f", f"sha={candidate}", "-F", "force=false", "--jq", ".object.sha")
+        record["new_sha"] = tracking_sha(fork)
         if record["new_sha"] != candidate:
             raise ValueError("Tracking ref changed after push")
         return "fast-forwarded"
