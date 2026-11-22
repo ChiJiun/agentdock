@@ -105,7 +105,7 @@ pub fn parse_porcelain_z(stdout: &[u8]) -> Vec<Registered>;
    6. Verify: canonical(path) == path, parent == root, porcelain has a `path + refs/heads/<branch>` record; any mismatch → `GitFailed { undo: "worktree left in place for inspection" }` (no deletion).
 5. `undo_failed_create(repo, branch, base_sha, path, created_branch_this_attempt)`:
    - Re-read porcelain; if that fails → report "could not re-read state; branch and folder kept for manual inspection".
-   - Any worktree using the branch or located at the path → report "partially created worktree kept at <path>".
+   - Any worktree using the branch or located at the path → report "partially created worktree kept at <path>" and **return** (do not touch the branch).
    - Only if `created_branch_this_attempt` → `git update-ref -d refs/heads/<branch> <base_sha>` (compare-and-delete; if the branch moved, it fails and is kept).
    - If the folder exists → report "branch deleted; unregistered folder <path> kept for manual inspection".
    - **Never call** `remove_dir_all`, `git worktree remove`, `git worktree prune`, or `git branch -D`.
@@ -146,7 +146,7 @@ pub fn parse_porcelain_z(stdout: &[u8]) -> Vec<Registered>;
 | `root_link_rejected` | root is a symlink (`cfg(unix)`) / junction (`cfg(windows)`) → `RootIsLink` |
 | `concurrent_creations_get_distinct_folders` | three tasks `create` concurrently (`tokio::join!`) → three distinct branches and folders, all succeed |
 | `concurrent_same_task_creates_once` | same plan twice concurrently → one `already_existed: false`, one `true`; exactly one branch |
-| `failed_checkout_removes_only_new_branch` | make `worktree add` fail after the branch exists. Cross-platform: pre-create a **file** (not folder) at `<root>/task-<slug>`'s parent path component so checkout cannot create the directory — e.g. make `worktree_root` writable-protected (`cfg(unix)`: `chmod 0o555` on root after `create_dir_all`; skip when running as root). `cfg(windows)` variant: commit a reserved filename via `git update-index --add --cacheinfo 100644,<blob>,aux.txt` then commit. Expected: `GitFailed`; branch deleted; `undo` text explains; any leftover folder still exists |
+| `failed_checkout_removes_only_new_branch` | make `worktree add` fail after the branch exists. `cfg(unix)` variant: `create_dir_all(root)` then `chmod 0o555` on root so Git cannot create the task folder (detect running as root and skip with a printed reason, since root ignores the mode). `cfg(windows)` variant: commit a reserved filename via `git update-index --add --cacheinfo 100644,<blob>,aux.txt` then commit. Expected: `GitFailed`; branch deleted; `undo` text explains; any leftover folder still exists |
 
 ## 7. Acceptance commands and expected results
 

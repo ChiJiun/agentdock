@@ -19,7 +19,7 @@ Non-goals: typed payloads (P2-2), state machines (P2-3), SQLite (P2-4).
 ## 2. Prerequisites and parallel work
 
 - Prerequisites: P1-1. The ADR-0003 contracts are on main (squash commit `c9e33cf`, 2026-11-22) under `docs/contracts/`. If your branch lacks that directory, merge the latest main into it; never copy contract files by hand.
-- Parallel: P1-2, P1-3, P3-1, P4-1, P5-1.
+- Parallel: P1-2, P1-3, P3-1, P3-2, P3-3, P4-1.
 
 ## 3. Files
 

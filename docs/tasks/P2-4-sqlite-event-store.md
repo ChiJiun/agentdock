@@ -127,7 +127,7 @@ CREATE TABLE approvals (...); CREATE TABLE operations (...); CREATE TABLE checks
 
 Projection columns follow `docs/architecture.md` lines 51–61 and the schema definitions `Project`, `Task`, `Session`, `Approval`, `Operation`, `Check`. `operations` gets a partial unique index:
 `CREATE UNIQUE INDEX operations_live_key ON operations(idempotency_key) WHERE state IN ('recorded','started','succeeded','reconciled_applied');`
-(ADR-0003 §9: "unique key enforced in the append transaction, including concurrent writers".)
+(ADR-0003 §9: "unique key enforced in the append transaction, including concurrent writers".) The index is only a concurrency backstop for the states where a second attempt is never allowed; the full Rule 5 check (which also rejects a new op next to an `outcome_unknown` one unless it is a legal supersede) is in the P2-5 projector, inside the same transaction.
 
 ## 5. Implementation steps
 

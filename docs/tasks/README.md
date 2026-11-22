@@ -140,10 +140,10 @@ Waves of packets that can be worked on at the same time once the previous wave i
 | --- | --- | --- |
 | 1 | P1-1 | everything depends on the workspace |
 | 2 | P1-2, P1-3, P2-1, P3-1, P3-2, P3-3, P4-1 | seven independent tracks |
-| 3 | P2-2, P2-3, P2-7, P3-4 (after P3-1..3), P4-2, P5-1 | |
-| 4 | P2-4, P3-5a, P5-2, P6-1a, P7-3 | |
-| 5 | P2-5, P5-3, P3-6 | P2-5 is the bottleneck for the store side |
-| 6 | P2-6, P3-5b | |
+| 3 | P2-2, P2-3, P2-7, P3-4 (after P3-1..3), P4-2 | |
+| 4 | P2-4, P3-5a, P3-6, P5-1 | P5-1 needs P2-7 |
+| 5 | P2-5, P5-2, P6-1a, P7-3 | P2-5 is the bottleneck for the store side |
+| 6 | P2-6, P3-5b, P5-3 | |
 | 7 | P3-7 | joins store, recovery and runtime in the desktop app |
 | 8 | P4-3a, P6-1b, P7-1a, P8-1 | |
 | 9 | P4-3b, P4-4, P6-2, P7-1b | |
@@ -192,7 +192,7 @@ Gate numbering used in every packet header. "Proven by" lists the packets whose 
 Packets pick a default so work is not blocked; each needs confirmation.
 
 1. **ACP permission TTL**: packets default to 10 minutes (P4-3); PR #25 used 90 s.
-2. **Permission while the task is not `running`** (e.g. reviewer session in `review`): the contract has no task transition; P4-3 writes only session-level S10/S14. Confirm or add a contract transition.
+2. **Crash during recovery** (bracket left open): the contract does not define it; P2-6 continues inside the open bracket and writes one `system.recovery_completed` covering both runs.
 3. **Disabling repo hooks** for AgentDock's own Git commands (P5-1 `core.hooksPath` → empty dir): safer, but the user's pre-commit hooks do not run on AgentDock commits.
 4. **Approvals after restart**: the contract invalidates pending approvals (`checkpoint-and-replay.md` crash recovery step 3); UX-62 and F2 Rules say they are restored as pending. Packets follow the contract (P2-6, P4-4).
 5. **UX F5 step 4** ("pending approvals are restored as pending", `docs/ux/flows.md` lines 55–61) conflicts with the same contract rule.
@@ -203,6 +203,8 @@ Packets pick a default so work is not blocked; each needs confirmation.
 10. **Quota-name deny-list** in payloads (P2-2) — confirm the word list (`remaining`, `_left`, `balance`, `allowance`, `percent`, `pct`, `quota` …).
 11. **ADR-0004 open questions** 1–3: keep `validate_fixtures.py` in CI; ADR-0003's 12 states vs PR #29's 16; frontend/backend type sync approach.
 12. **Unix PDEATHSIG gap** (see "Not yet covered"): accept for alpha or add a packet.
+13. **ADR-0003 open questions the packets assume**: Q3 `auto_resume_policy` both off (P8-3 never arms auto-resume); Q7 policy may approve `pr_create`/`pr_update`/`pr_comment`/`external_write`, and `git_push` only through a user-created rule (P4-3); Q8/Q14 one pending permission per task/session, later requests are held in a FIFO (P4-3).
+14. **Node reference PRs are not drafts**: #25, #27, #28, #29, #33 are open and not marked draft on GitHub (checked 2026-11-22). ADR-0004 treats them as "open, never merged, reference only"; converting them to draft is the owner's call.
 
 ## Existing document issues
 
@@ -212,6 +214,7 @@ Found while writing the packets; not fixed here (ADRs and contracts are not edit
 - UX-62 / F2 Rules / F5 step 4 vs `checkpoint-and-replay.md` crash recovery step 3 on pending approvals (see open questions 4–5).
 - ADR-0002 lines 52 and 99 pin `agent-client-protocol =5.3.0` pending #504; crates.io has `5.5.1` and `v5.4.0+` contain #504 (checked 2026-11-22; see ADR-0004). The pin is chosen in P3-1.
 - PR #29's 16-state workflow doc differs from ADR-0003's 12 states (ADR-0004 open question 2).
+- `operation.failed{effect: unknown}` is a dead end in the contract: it can be neither reconciled (`validate_fixtures.py` line 1063 accepts only `outcome_unknown`) nor superseded (lines 969–971). Packets therefore never write it: every effect with an unknown result is `outcome_unknown{cause: killed}` (P4-3b `EffectOutcome::Unknown`, P7-2).
 
 ## V1 packets still to write (after alpha)
 

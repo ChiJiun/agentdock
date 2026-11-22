@@ -4,7 +4,7 @@ Date: 2026-11-22
 Status: Proposed (becomes Accepted when the owner approves the PR that adds it)
 Related: [ADR-0001](0001-independent-workbench.md), [ADR-0002](0002-source-reuse.md), [ADR-0003](0003-task-session-event-contracts.md); issues #4, #6, #7, #8, #9, #10, #15, #51; PRs #25, #27, #28, #29, #33
 
-> **繁中摘要**：後端（Tauri host 與 `crates/*`）全部用 Rust，React/TS 只做前端。Node PR #25、#27、#28、#29、#33 保留為 draft 參考、不合併，任務包以「PR 編號＋分支＋檔案路徑＋SHA」引用其行為與測試情境，用 Rust 重新實作。實作通常在擁有者的 Linux VM 上進行；只能在 Windows 驗證的項目交給 GitHub Actions `windows-latest` 或擁有者的 Windows 本機。需要其他語言的地方列入待擁有者討論。
+> **繁中摘要**：後端（Tauri host 與 `crates/*`）全部用 Rust，React/TS 只做前端。Node PR #25、#27、#28、#29、#33 保持開啟、不合併，只當參考（GitHub 上目前不是 draft 狀態，是否轉成 draft 由擁有者決定），任務包以「PR 編號＋分支＋檔案路徑＋SHA」引用其行為與測試情境，用 Rust 重新實作。實作通常在擁有者的 Linux VM 上進行；只能在 Windows 驗證的項目交給 GitHub Actions `windows-latest` 或擁有者的 Windows 本機。需要其他語言的地方列入待擁有者討論。
 
 ## Context
 
@@ -24,13 +24,13 @@ The owner's decision on 2026-11-22 (verbatim):
 
 > 我希望有良好的記憶體管理，應以Rust作為主要開發，若有你覺得需要用其他語言的可以提出討論。若是因為參考來源程式碼使用其它語言那可以改以Rust重構
 
-Follow-up decisions relayed the same day: implementation is usually done by a model working on the owner's Linux VM; the Node PRs stay as draft references; task packets live in `docs/tasks/` with an English body and a Traditional Chinese summary.
+Follow-up decisions relayed the same day: implementation is usually done by a model working on the owner's Linux VM; the Node PRs stay open as never-merged references (they are not marked draft on GitHub as of 2026-11-22; converting them is the owner's call); task packets live in `docs/tasks/` with an English body and a Traditional Chinese summary.
 
 ## Decision
 
 1. **All backend code that ships with AgentDock is Rust** (Tauri 2 host and `crates/*`): ACP host, process supervision, storage, policy, worktrees, controlled check runner, Git/GitHub, Session Sentinel classification, durable workflow.
 2. **React/TypeScript is the frontend only** (the existing Vite project at the repo root). The frontend does not spawn processes or touch the user's repositories; it calls typed Tauri commands (`docs/architecture.md` line 28).
-3. **Node/TS PRs #25, #27, #28, #29, #33 are not merged; they stay open as draft references.** Their `docs/implementation/*.md`, test names and scenarios are behaviour and test specifications. Task packets cite them as "PR number + branch + file path + SHA" (the heads in the table above) and port the behaviour into Rust tests. No Node code moves into `main`.
+3. **Node/TS PRs #25, #27, #28, #29, #33 are not merged; they stay open as never-merged references** (not marked draft on GitHub as of 2026-11-22). Their `docs/implementation/*.md`, test names and scenarios are behaviour and test specifications. Task packets cite them as "PR number + branch + file path + SHA" (the heads in the table above) and port the behaviour into Rust tests. No Node code moves into `main`.
 4. **When a reference is in another language, it is rewritten in Rust** (owner's words). This does not relax ADR-0002: a rewrite reimplements behaviour and tests; it is not a line-by-line translation of third-party code. Porting third-party code still follows ADR-0002 "Acceptance rules for future copy PRs".
 5. **Any need for a non-Rust language goes to "Open questions for the owner"**; implementers do not decide it themselves.
 6. **Verification is split by platform.** Every crate builds and runs its cross-platform tests on Linux (`cfg(unix)`/`cfg(windows)` split). Windows-only behaviour (Job Objects, `.cmd` shims, junctions, WebView2, the installer) is verified by the `windows-latest` GitHub Actions job (task packet P1-3) or on the owner's Windows machine, and packets mark those items **Windows-only**. A skipped Windows job is not a pass.

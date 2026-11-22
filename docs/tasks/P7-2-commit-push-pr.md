@@ -140,17 +140,19 @@ impl PublishService {
 5. `PublishService::push`:
    1. State must be `pr`.
    2. `task_scope`; `status_counts`: any staged/unstaged/untracked → `Dirty`; `upstream == NoRemote` → `NoRemote`.
-   3. **Tested commit**: from the projection, find the `task.checkpoint_recorded` written right after the latest `→ verifying` transition (P8-3 writes it on entering verifying); its `head_sha` must equal the current HEAD, and the `local_checks` fact must be `{started ≥ 1, all_passed}` → else `UntestedCommit`.
+   3. **Tested commit**: from the projection, find the `task.checkpoint_recorded` written right after the latest `→ verifying` transition (P8-3 writes it on entering verifying); it must have `worktree.dirty == false` and its `head_sha` must equal the current HEAD, and the `local_checks` fact must be `{started ≥ 1, all_passed}` → else `UntestedCommit`.
    4. Idempotency (Rule 5) by the previous operation with the same `idempotency_key`:
       - `succeeded` or `reconciled_applied` → return `AlreadyDone { remote_sha }` with no new events (documented choice; the Tauri command maps it to success).
-      - `outcome_unknown` or `failed{effect: unknown}` → `NeedsReconcile`.
+      - `outcome_unknown` → `NeedsReconcile`. (`failed{effect: unknown}` is never written by this packet; if one exists it is a dead end in the contract — it can be neither reconciled nor superseded — so return `NeedsReconcile` and surface it to the user; listed in README "Existing document issues".)
       - `abandoned` / `failed{none}` / `reconciled_not_applied` / `reconciled_undeterminable` → set `supersedes_operation_id` to it.
    5. Write a new checkpoint (`phase: pr`, `dirty: false`, `head_sha`) — Rule 9 checks "the latest checkpoint", so write one before every push.
-   6. `execute_guarded(OperationRequest { kind: git_push, target: {description: "push <branch> to <remote>", remote, ref: "refs/heads/<branch>", expected_sha: head}, reconcile_strategy: remote_ref_compare, return_state: pr, supersedes_operation_id })`.
+   6. `execute_guarded(OperationRequest { kind: git_push, target: {description: "push <branch> to <remote>", remote, ref: "refs/heads/<branch>", expected_sha: head}, reconcile_strategy: remote_ref_compare, return_state: Some(pr), supersedes_operation_id })`.
    7. effect: `push_ref` →
       - `Ok` → `Succeeded { result: {"remote_sha": head} }`.
-      - `Err` → `remote_ref_sha`: equals `head` → `Succeeded` (the push actually landed); different or absent → `Failed { effect: None, error }`; the query itself fails → `Failed { effect: Unknown, error }`. Redact `error` and cut it to 240 chars.
-6. `reconcile` (kind `git_push`): `remote_ref_sha == expected_sha` → `applied`; readable and different or absent → `not_applied`; read failure → `undeterminable`. Write `operation.reconciled{finding, evidence: "remote ref = <sha or absent>"}`, actor `integration`. Only for operations in `outcome_unknown` or `failed{effect: unknown}`; other states → `NotReconcilable`. **Reconciliation never re-runs the push.**
+      - `Err(Rejected)` (porcelain `!` line: the remote refused the update), or the process could not be spawned → `Failed { effect: None, error }`. These are the **only** cases that may claim "nothing happened" (Rule 5, `checkpoint-and-replay.md` line 104).
+      - Any other `Err` (timeout, kill, network error, unparseable output) → `remote_ref_sha`: equals `head` → `Succeeded` (the push landed); anything else (different, absent, or the query fails) → `EffectOutcome::Unknown { error }` → `operation.outcome_unknown{cause: killed}`. Do **not** write `failed` here: a killed push may still land later.
+      - Redact `error` and cut it to 240 chars.
+6. `reconcile` (kind `git_push`): `remote_ref_sha == expected_sha` → `applied`; readable and different or absent → `not_applied`; read failure → `undeterminable`. Write `operation.reconciled{finding, evidence: "remote ref = <sha or absent>"}`, actor `integration`. Only for operations in `outcome_unknown` (validator line 1063); other states → `NotReconcilable`. **Reconciliation never re-runs the push.**
 
 ### P7-2b
 
@@ -161,12 +163,12 @@ impl PublishService {
    3. Title and body: if `Redactor::redact_text` changes either → `SecretInText`; length limits per `PrRequest`. A title with a newline or NUL is rejected by `GhRequest::argv` validation and surfaces as `Gh(BadArgument)`; check it before `execute_guarded` so no operation is recorded.
    4. `base`: if not given, P7-3 `default_branch(gh, cwd, repo, env)`.
    5. Previous operation with the same key: same rules as push step 4 (`succeeded`/`reconciled_applied` → return the recorded PR; unknown → `NeedsReconcile`).
-   6. `execute_guarded(kind: pr_create, target: {description: "create PR \"<first 80 chars of title>\" <branch> → <base>", ref: <branch>, base}, reconcile_strategy: pr_lookup_by_head, return_state: pr)`.
+   6. `execute_guarded(kind: pr_create, target: {description: "create PR \"<first 80 chars of title>\" <branch> → <base>", ref: <branch>, base}, reconcile_strategy: pr_lookup_by_head, return_state: Some(pr))`.
    7. effect:
       1. `pr_lookup_by_head(gh, cwd, repo, branch, env)`; an `Open`/`Draft` PR → `Succeeded { result: {pr_number, url, reused_existing: true} }`.
       2. Otherwise write the body to a temp file under app data (`tempfile::NamedTempFile`, deleted after the call; **never on the command line**) and call `gh.request(cwd, &GhRequest::PrCreate { repo, head: branch, base, title, body_file, draft }, env)`.
       3. `Ok(stdout)` → `parse_created_pr_url(stdout, repo)` → `Some((number, url))` → `Succeeded`; `None` → treat as failure and go to 4.
-      4. `Err` → lookup again: found → `Succeeded`; definitely none → `Failed { effect: None }`; lookup fails → `Failed { effect: Unknown }`.
+      4. `Err(GhError::Timeout)` → `Unknown` (never `Failed`; a timed-out create may still land). Other `Err` or unparseable output → lookup again: found → `Succeeded`; definitely none (gh exited non-zero and the lookup succeeded with no PR for this head) → `Failed { effect: None }`; lookup fails → `Unknown`.
 3. `reconcile` (kind `pr_create`): lookup finds a PR (any state) with that head in this repo → `applied` (evidence = PR URL); definitely none → `not_applied`; gh failure → `undeterminable`.
 
 ## 6. Tests to write first
@@ -201,6 +203,7 @@ impl PublishService {
 | `crash_before_push_reconcile_not_applied` | crash after `operation.started`, before push → `reconcile` → `not_applied`; no automatic re-push |
 | `new_push_blocked_while_outcome_unknown` | `push` while a push is `outcome_unknown` → `NeedsReconcile` |
 | `superseding_push_after_not_applied` | `push` after `not_applied` → new `operation.recorded` with `supersedes_operation_id`, and a new approval is required |
+| `push_timeout_is_outcome_unknown` | push to the local bare origin with a 1 ms push timeout (test-only constructor on `PublishService`) so git is killed → `operation.outcome_unknown{killed}`, never `operation.failed`; a later `reconcile` decides |
 | `push_error_text_redacted` | origin URL `https://user:ghp_000…@127.0.0.1:1/x.git`, push fails → `operation.failed.error` has no token |
 
 `crates/agentdock-orchestrator/tests/publish_pr.rs` (P7-3's fake `gh` binary and script, installed with `fake_gh::install`; origin URL set to `https://github.com/o/r.git` via `git remote set-url` — no real push happens in these tests: seed the store with a `git_push` operation that `succeeded` in this round):
@@ -215,14 +218,15 @@ impl PublishService {
 | `secret_in_body_refused` | body contains `ghp_` + 36 `0`s → `SecretInText`, no events |
 | `unsupported_remote_refused` | origin `https://gitlab.example/x.git` → `UnsupportedRemote` |
 | `denied_pr_never_created` | user denies → no `pr create` in `fake-gh.log` |
+| `gh_timeout_is_outcome_unknown` | fake gh sleeps past the timeout on `pr create` → `operation.outcome_unknown{killed}` |
 | `gh_failure_then_lookup_empty_is_failed_none` | `pr create` exits non-zero, lookup empty → `operation.failed{effect: none}` |
 
 ## 7. Acceptance commands and expected results
 
 ```bash
 cargo test -p agentdock-integrations --test git_write -- --test-threads=1        # 10 pass
-cargo test -p agentdock-orchestrator --test publish_push -- --test-threads=1     # 12 pass
-cargo test -p agentdock-orchestrator --test publish_pr -- --test-threads=1       # 9 pass (P7-2b)
+cargo test -p agentdock-orchestrator --test publish_push -- --test-threads=1     # 13 pass
+cargo test -p agentdock-orchestrator --test publish_pr -- --test-threads=1       # 10 pass (P7-2b)
 ```
 
 Windows-only (CI `rust-windows`): the same three suites pass on `windows-latest` (fake gh copied with `.exe`).
@@ -255,7 +259,8 @@ Strong model implements and reviews. This is AgentDock's first feature with irre
 
 - `git push origin HEAD`: the agent may move HEAD before the push; always push `<expected_sha>:refs/heads/<branch>`.
 - Adding `--force-with-lease` "for safety": it still rewrites remote history, a `destructive_command`; not in this packet.
-- Marking push failure as `failed{effect: none}` immediately: after a network drop the push may have landed; `ls-remote` first.
+- Marking push failure as `failed{effect: none}`: after a timeout or network drop the push may have landed (or land later). Only a remote rejection or a spawn failure is `none`; everything else is `outcome_unknown` and goes through reconciliation.
+- Committing during `pr` (allowed by `commit`) makes the next push fail with `UntestedCommit` by design: new content must go back through verifying.
 - "Pushing again to be safe" after a crash: violates Rule 4; only reconcile. A second push needs a new operation and a new approval.
 - PR body on the command line: Windows caps the command line at 32,767 chars and the text shows in process listings; use `--body-file`.
 - Sending the PR body after redaction changed it: the user approved the original; sending a rewrite means sending unapproved content. Refuse instead.
@@ -267,6 +272,6 @@ Strong model implements and reviews. This is AgentDock's first feature with irre
 - [ ] Is the pushed refspec always `<expected_sha>:refs/heads/agentdock/task-<12 hex>`, never forced, never another ref?
 - [ ] Is "only the tested commit" enforced from projection facts, not from the frontend?
 - [ ] Does every push/PR go through `execute_guarded`, with the effect only after `operation.started`?
-- [ ] On push error, is `ls-remote` consulted before deciding `none` vs `unknown`?
+- [ ] Is `failed{effect: none}` written only for a remote rejection (`!`) or a spawn failure, and every timeout/kill written as `outcome_unknown`?
 - [ ] Is reconciliation read-only, and are repeat requests idempotent (`AlreadyDone`, `NeedsReconcile`, `supersedes_operation_id`)?
 - [ ] Does P7-2b use only `GhRequest::PrCreate` (closed enum), pass the body by file, and refuse redaction-altered text?

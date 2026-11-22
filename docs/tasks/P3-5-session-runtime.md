@@ -21,7 +21,7 @@ Goals:
 - `session/request_permission` goes to the `PermissionHandler` trait (P4-3 implements it); this packet neither classifies nor approves.
 - Sessions carry a `role` (`agent` or `review`) and an optional `parent_session_id`; `session.created` requires `role` (schema `SessionCreatedPayload`), and P8-3's reviewer sub-session uses `role: review` with the coding session as parent.
 
-Non-goals: approval events and S10 / S14 / S15 / S16 / S23 (P4-3), task transitions (P8-3), transcript compaction and retention (not in alpha; README "not covered"), reattach (S20, not in alpha).
+Non-goals: approval events and S10 / S14 / S16 / S23 (P4-3), task transitions (P8-3), transcript compaction and retention (not in alpha; README "not covered"), reattach (S20, not in alpha).
 
 ## 2. Prerequisites and parallel work
 
@@ -106,7 +106,8 @@ pub trait PermissionHandler: Send + Sync {
     /// later persists approval.resolved + S14/S15, and only then calls AcpConnection::respond_permission.
     fn on_permission(&self, ctx: PermissionContext) -> BoxFut<'_>;
     /// Called once when the connection closed while the session may hold a pending approval.
-    /// P4-3 invalidates open approvals of this session and writes S16/S23 as needed.
+    /// Called only when the session is awaiting_permission. P4-3 writes S16 → invalidated → T20 (process exit)
+    /// or cancelled → S23 → T20 (protocol error / line too long), per the P4-3 §5 step 4 table.
     fn on_session_closed(&self, session_id: SessionId, reason: agentdock_acp::CloseReason) -> BoxFut<'_>;
 }
 pub struct PermissionContext {
@@ -178,7 +179,8 @@ impl SessionRuntime {
 5. Event loop:
    - `SessionUpdate` → `acp_map`; text goes through `governor.push_chunk`; other updates call `governor.before_other_event` first, then write their own event. Tool call raw I/O: `redactor.redact_json` → `serde_json::to_vec` → `artifacts.put(.., "json")` → `raw_io: ArtifactRef`. `title` passes `redact_text` and `bound_text`.
    - `PermissionRequested` → `before_other_event`, then `tokio::spawn(handler.on_permission(ctx))` (never await it in the loop, or the session's later updates stall).
-   - `Closed{ProcessExited}` → write `S08` (from idle) or `S12` (from active); if the session is `awaiting_permission`, write no state here and call `handler.on_session_closed`, so P4-3 invalidates the approval first and then writes `S16`. `Closed{ProtocolError|LineTooLong}` → `S13` / `S22` (from active / idle); `S23` is written by P4-3 after handling the approval.
+   - `Closed{ProcessExited}` → write `S08` (from idle) or `S12` (from active); if the session is `awaiting_permission`, write no state here and call `handler.on_session_closed` (P4-3 writes `S16` first, then invalidates the approval, then moves the task to `interrupted`). `Closed{ProtocolError|LineTooLong}` → `S13` / `S22` (from active / idle); from `awaiting_permission`, call `handler.on_session_closed` (P4-3 cancels the approval, then writes `S23`). Task transitions for the non-permission cases (T14 `interrupted{adapter_disconnected}`, fixture 12 events 30–31) belong to P8-3.
+   - Turn ended (`StopReason` returned) while the session is `awaiting_permission` (the user cancelled the turn and P4-3 already cancelled the approval): write `S15 awaiting_permission → idle (turn_ended)` (actor adapter) instead of S09.
    - Governor outputs: `Delta` → `session.message_delta` with `redaction.applied_rules` = `applied`; `Limited` → `session.output_limited`; the first time `cancel_requested()` is true → `connection.cancel()`.
 6. `prompt`: one transaction writes `session.prompt_submitted` (new `turn_id`, redacted `content.text`) and `S05 idle → active`; after commit call `connection.prompt` on another task (the event loop keeps consuming); when `StopReason` returns, `governor.end_turn`, write remaining deltas, then `S09 active → idle (turn_ended, stop_reason, turn_id)`.
 7. All writes use P2-4 `Store::transact` on a blocking thread (`spawn_blocking`); the store assigns `seq`.
@@ -277,7 +279,7 @@ All line numbers refer to main `c9e33cf`.
 
 - `docs/contracts/events.md` lines 87–104 (subscriptions and backpressure; line 100 coalescing, line 101 limits, line 102 pipe backpressure), line 113 (artifact location), lines 115–124 (redaction; line 119 drop `_meta`, line 121 raw I/O only as artifacts).
 - `docs/contracts/acp-capabilities.md` lines 80–98 (ACP → AgentDock mapping; line 92 usage, line 95 updates outside the contract).
-- `docs/contracts/transitions.json` session transitions S01–S25 (this packet writes S01, S02, S03, S05, S08, S09, S12, S13, S22; P4-3 writes S10, S14, S15, S16, S23).
+- `docs/contracts/transitions.json` session transitions S01–S25 (this packet writes S01, S02, S03, S05, S08, S09, S12, S13, S15, S22; P4-3 writes S10, S14, S16, S23).
 - Schema `$defs`: `SessionMessageDeltaPayload`, `SessionToolCallPayload`, `SessionOutputLimitedPayload`, `SessionStateChangedPayload`, `SessionCreatedPayload` (lines 821–837; `role` required), `SessionPlanUpdatedPayload`, `Usage`, `TextOrRef`, `RedactedText` (maxLength 65,536), `ArtifactRef`.
 - ADR-0003 open question 6 (8 MiB / 20,000 event defaults await owner confirmation).
 - Behavior references (Node draft, ideas only, do not port code): PR #25, SHA `7d41c9f1`, `apps/runtime/store.mjs` line 10 `protect()` (truncation markers), `runtime.test.mjs` line 72 (large output truncated and marked), line 116 (streamed replies stored as evidence).
@@ -314,4 +316,4 @@ P3-5a standard model (pure functions, full tests). P3-5b strong model implements
 - [ ] Is cross-chunk redaction (carry + private key state) tested and correct?
 - [ ] Is raw I/O stored only as artifacts outside any repo, and are `_meta` keys dropped?
 - [ ] Does `session.created` carry `role` and `parent_session_id` from `SessionConfig`?
-- [ ] Are the transitions written here exactly the ones listed (no S10/S14/S15/S16/S23)?
+- [ ] Are the transitions written here exactly the ones listed (no S10/S14/S16/S23)?
