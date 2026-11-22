@@ -9,6 +9,7 @@ Status: proposal; not a promise of completion dates.
 | M0 — Sources and decisions | Identify sources, licenses, ACP SDK choice, UX reference, threat model | ADR, provenance inventory, clear exclusions |
 | M1 — Desktop skeleton | Rust workspace/Tauri 2 + React, Windows dev build, CI | App starts, smoke test, lint/build CI |
 | M2 — Usable sessions | Project management, typed ACP host, 2 adapters, streaming, persistence, approvals | Same test task works through 2 agents and safe cancel |
+| M2.5 — Self-hosting Alpha | Windows 可安裝的真實 Agent 工作台、兩個獨立 Worktree、Diff/測試/PR、受控核准、持久化 | [#51](https://github.com/ChiJiun/agentdock/issues/51) 的 v0.1.0-alpha Gate：10 個真實任務無資料遺失；可用 AgentDock 開發 AgentDock |
 | M3 — Coding workflow | Git diff/worktree and tests; GitHub Issue→PR review→CI | Isolated parallel worktree test + PR demonstration |
 | M4 — Reliable remote | SSH worker, durable event log, reconnect, bounded concurrency | Disconnect/reconnect and no duplicate side effects |
 | M5 — Cost/Advisor | Role routing, manual advisor, budgets, benchmarks | Cost and quality evaluated against baseline |
@@ -59,3 +60,25 @@ Run identical representative tasks on: (A) single strong model, (B) role routing
 ## Delivery caution
 
 For one developer working around classes and internship, optimize for vertical slices: a real agent finishes a safe task in a real repo, with visible evidence, before building an Agent OS. Multi-month estimates are dependent on available engineering time, not a fixed release commitment.
+
+## Self-hosting Alpha / v0.1.0-alpha
+
+- **目的**：優先讓 AgentDock 成為自身開發的主要工作台，保留既有桌面工具作備援；不必先完成通用 Cache、Integration Queue 或遠端 Worker。
+- **Release Gate**：[Issue #51](https://github.com/ChiJiun/agentdock/issues/51) 定義 Windows build、真實 Claude Code/Codex、Worktree、Diff、受控 Git、測試結果、持久化、10 個真實任務及安全負向測試。只在全部通過後標示 Alpha release。
+- **逐步切換**：用 AgentDock 完成 10 個自身 repo 任務後開始主要使用；持續觀察 20–30 個任務的完成時間、失敗率、人工介入與恢復成功率。此為可驗證目標，並非已實測的加速承諾。
+- **V1 之後**：[#47](https://github.com/ChiJiun/agentdock/issues/47) 通用 Local CI、[#48](https://github.com/ChiJiun/agentdock/issues/48) Cache/Evidence、[#49](https://github.com/ChiJiun/agentdock/issues/49) Integration/Policy；新功能不能重寫已進行中的 #9/#10 Task/Worktree。
+
+## 候選能力與決策邊界
+
+[#52](https://github.com/ChiJiun/agentdock/issues/52) 負責研究以下五項：跨專案程式碼理解與重用、版本化 Project Memory、Cross-repo Orchestration、OS-level Sandbox、持續效率 Benchmark。每項先決定 **V1 / V2 / Defer** 與 **build / buy / integrate**，並列出可衡量的驗收；研究 Issue 不代表已核准全部實作。對早期使用效益優先評估程式碼重用、交接與 Benchmark；Sandbox 的風險邊界不可延後到允許執行不可信命令之後才處理。
+
+## 上游原始碼保存
+
+[#53](https://github.com/ChiJiun/agentdock/issues/53) 追蹤重要上游的 Fork + 不同平台/儲存空間的 Git Mirror、每日安全同步、不可變備份與還原演練。Fork 用於開發與提交上游 PR；Mirror 保存 Git refs/history，不能代替 Issue/PR/Release asset 備份。不得自動覆寫 Fork 上的自有分支或以 force mirror 覆寫唯一備份。候選來源與 SHA 參見 [Local-first Multi-Agent SDLC 設計 PR #50](https://github.com/ChiJiun/agentdock/pull/50)。
+
+## Repository Protection
+
+- 在 `main` 使用 GitHub server-side Ruleset / Branch Protection：Require PR、block force push/deletion、review resolution、穩定 Required Checks；Local Hooks/AgentDock Policy 只能保護受控操作，不能取代伺服器保護。
+- **先盤點實際 CI Check 名稱與觸發條件**，確認 Required Check 對所有相關 PR 都會產生；Rust/Tauri Windows CI 存在並穩定後才列入 Required。
+- 對單人維護者，要求人類 Approving Review 可能造成無法合併；需先確認可用審查者與 Ruleset 可執行性。
+- GitHub Ruleset 修改需 Repository Administration 權限；不可因為建立文件 PR 成功就推定擁有該權限。
