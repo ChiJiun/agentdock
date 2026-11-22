@@ -1,0 +1,32 @@
+{
+  "fixture": "13-crash-archived-sessions.jsonl",
+  "description": "Host crash while main sessions are archived: a cleanup operation of a cancelled task is left outcome_unknown, and a resumed task loses its agent. In both cases a recovery event makes the archived main session wait, so the recovery actor unarchives it in the same transaction. The first task also shows one session asking for permission twice in a turn and a review sub-task.",
+  "final_task_states": {
+    "tsk_01JDQ013000000000000000001": "cancelled",
+    "tsk_01JDQ013000000000000000002": "interrupted"
+  },
+  "final_session_states": {
+    "ses_01JDQ013000000000000000001": "closed",
+    "ses_01JDQ013000000000000000002": "closed",
+    "ses_01JDQ013000000000000000003": "disconnected"
+  },
+  "attention": [
+    {
+      "kind": "needs_reply",
+      "reason": "reconcile_needed",
+      "task_id": "tsk_01JDQ013000000000000000001",
+      "ref_id": "op_01JDQ013000000000000000001"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "child_result_unviewed",
+      "task_id": "tsk_01JDQ013000000000000000001",
+      "session_id": "ses_01JDQ013000000000000000002"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "interruption_needs_decision",
+      "task_id": "tsk_01JDQ013000000000000000002"
+    }
+  ]
+}
