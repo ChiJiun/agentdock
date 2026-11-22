@@ -17,7 +17,7 @@ Status: proposal; not a promise of completion dates.
 
 1. License/provenance / precise upstream migration decision.
 2. Define UX states + design tokens and screen map.
-3. Rust & Tauri scaffold with typed front/back boundary.
+3. Rust & Tauri scaffold with typed front/back boundary. The separate UI-foundation branch prototypes Session Sentinel and keyboard navigation with in-memory data; real backend monitoring is tracked in [Issue #15](https://github.com/ChiJiun/agentdock/issues/15).
 4. ACP mock first and supported real adapter compatibility matrix.
 5. Storage and approval gates before unrestricted real-agent tools.
 6. Worktree and change review.
