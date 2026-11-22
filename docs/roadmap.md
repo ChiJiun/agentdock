@@ -72,9 +72,9 @@ For one developer working around classes and internship, optimize for vertical s
 
 [#52](https://github.com/ChiJiun/agentdock/issues/52) 負責研究以下五項：跨專案程式碼理解與重用、版本化 Project Memory、Cross-repo Orchestration、OS-level Sandbox、持續效率 Benchmark。每項先決定 **V1 / V2 / Defer** 與 **build / buy / integrate**，並列出可衡量的驗收；研究 Issue 不代表已核准全部實作。對早期使用效益優先評估程式碼重用、交接與 Benchmark；Sandbox 的風險邊界不可延後到允許執行不可信命令之後才處理。
 
-## 上游原始碼保存
+## 上游 GitHub Fork（每週同步）
 
-[#53](https://github.com/ChiJiun/agentdock/issues/53) 追蹤重要上游的 Fork + 不同平台/儲存空間的 Git Mirror、每日安全同步、不可變備份與還原演練。Fork 用於開發與提交上游 PR；Mirror 保存 Git refs/history，不能代替 Issue/PR/Release asset 備份。不得自動覆寫 Fork 上的自有分支或以 force mirror 覆寫唯一備份。候選來源與 SHA 參見 [Local-first Multi-Agent SDLC 設計 PR #50](https://github.com/ChiJiun/agentdock/pull/50)。
+[#53](https://github.com/ChiJiun/agentdock/issues/53) 追蹤重要上游的 四個重要上游 GitHub Fork、每週安全同步與分歧保護。Fork 用於開發與提交上游 PR；只同步追蹤分支，不覆寫自有分支。不建立 Git Mirror、git bundle 或異地備份；Fork 不包含 Issue/PR/Release asset 備份。候選來源與 SHA 參見 [Local-first Multi-Agent SDLC 設計 PR #50](https://github.com/ChiJiun/agentdock/pull/50)。
 
 ## Repository Protection
 
