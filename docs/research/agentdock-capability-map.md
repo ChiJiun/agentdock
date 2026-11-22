@@ -1,6 +1,6 @@
 # AgentDock 通用開發能力地圖與分期決策
 
-> 2026-11-22 · **規劃文件，非已實作功能**。完整工作項目與驗收：[Issue #52](https://github.com/ChiJiun/agentdock/issues/52)；[M2.5 Self-hosting #51](https://github.com/ChiJiun/agentdock/issues/51)；[上游 Fork/Mirror #53](https://github.com/ChiJiun/agentdock/issues/53)；[main Protection #55](https://github.com/ChiJiun/agentdock/issues/55)。
+> 2026-11-22 · **規劃文件，非已實作功能**。完整工作項目與驗收：[Issue #52](https://github.com/ChiJiun/agentdock/issues/52)；[M2.5 Self-hosting #51](https://github.com/ChiJiun/agentdock/issues/51)；[上游 Fork 週同步 #53](https://github.com/ChiJiun/agentdock/issues/53)；[main Protection #55](https://github.com/ChiJiun/agentdock/issues/55)。
 
 ## 產品目標
 以 AgentDock 作為跨專案、多 Agent 的 Windows-first、Local-first 開發工作台；重用現有 Claude Code/Codex/ACP、Git、CI、建置快取與開源模組，降低多 Agent 重複建置、測試、審查與上下文交接成本。每項能力應能單獨測試、漸進推出，不依賴一個巨大的新框架。
@@ -30,14 +30,13 @@
 
 [#51](https://github.com/ChiJiun/agentdock/issues/51) 是唯一完整 Alpha Gate：Windows 可安裝、真實 Claude Code/Codex、兩個 Worktree、Session 事件保存、可驗證測試、Git Diff/PR、權限核准、10 個真實任務無資料遺失。允許逐步以 AgentDock 開發 AgentDock；20–30 個任務的基準比較後才考慮取代既有工具。**不以 Local CI Cache、完整 Integration Queue、Remote Worker 阻擋 v0.1.0-alpha。**
 
-## 上游保留：Fork、Mirror 與每週同步
+## 上游保留：GitHub Fork 與每週同步
 
 - **Fork**：GitHub 上的獨立開發副本，可保留自己的 feature branches、送 upstream PR；同步 upstream 時不得 force push 或覆寫自己的修改。
-- **Git Mirror**：獨立的 bare Git repository，保存 refs 與 objects；可以存放在 GitLab、NAS、外部硬碟或物件儲存，並不依賴 GitHub。
-- **週同步**：預設每週日 03:00 Asia/Taipei，保留上游 SHA、同步狀態、授權摘要；GitHub Actions 排程可能延遲。
-- **歷史快照**：Mirror 每週留不可變的 git bundle/備份版本，避免 upstream 刪除 refs 時備份同步刪除。
-- **還原測試**：每月以乾淨環境還原固定 SHA，檢查 Git 物件與 LICENSE。Git Mirror 不含 GitHub Issues/PR/Release Assets，必要時另備份。
-- **執行界線**：建立 Fork、寫入備份儲存、排程授權與帳號可見性需先取得對應權限；工作細節與完整 Gate 見 #53。
+- **每週同步**：只對 Worktrunk、Orca、AgentBridge、Orkestra 建立公開 GitHub Fork；預設每週日 03:00 Asia/Taipei，使用 fast-forward-only，保留自有開發分支，失敗時通知；不得 force push。
+- **不建立 Mirror**：使用者明確排除 Git Mirror、git bundle、NAS、外部平台與異地快照。Fork 不是跨平台備份，也不保存上游 Issue/PR/Release Assets。
+- **版本與授權**：保留 pinned SHA、LICENSE/NOTICE 來源；上游變更不會自動更新 AgentDock 的正式依賴。
+- **執行界線**：Fork 與排程需要具備對應 GitHub 權限；完整 Gate 見 #53。
 
 ## GitHub 保護與權威
 
