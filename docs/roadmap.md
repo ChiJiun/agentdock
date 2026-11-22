@@ -59,3 +59,16 @@ Run identical representative tasks on: (A) single strong model, (B) role routing
 ## Delivery caution
 
 For one developer working around classes and internship, optimize for vertical slices: a real agent finishes a safe task in a real repo, with visible evidence, before building an Agent OS. Multi-month estimates are dependent on available engineering time, not a fixed release commitment.
+
+## Source-backed agent verification rollout
+
+Specification: [Agent verification workflow](research/agent-verification-workflow.md), [#66](https://github.com/ChiJiun/agentdock/issues/66). This is a phased extension, not a prerequisite for the first usable desktop Alpha.
+
+| Stage | Deliverable | Acceptance |
+| --- | --- | --- |
+| P0 | Three reproducible failure-to-guardrail conversions | Negative fixtures fail before guardrail and pass after; measure false positives and overhead |
+| P1 | One real user-path verification skill and 3–5 feature maps | Launch/doctor/drive/evidence/cleanup succeeds; evidence survives cleanup; native vs mock explicitly distinguished |
+| P2 | One TLA+ concurrency model and one small Lean policy pilot | Record counterexample, assumptions and runtime conformance tests; no ungrounded production-proof claim |
+| P3 | Comparative verified-completion benchmark | Median/p90 duration, human interventions, escaped defects, CI time and token cost compared with baseline |
+
+Re-use #65, #49, #48, #6 and existing CI/approval gates rather than building a second controller.
