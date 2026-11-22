@@ -20,7 +20,12 @@ TRACKING_REF = "refs/heads/main"
 
 def run(*args, cwd=None):
     return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=True,
-                          encoding="utf-8", errors="replace").stdout.strip()
+                          timeout=180, encoding="utf-8", errors="replace").stdout.strip()
+
+
+def tracking_sha(repository):
+    return run("gh", "api", f"repos/{repository}/git/ref/heads/main",
+               "--jq", ".object.sha")
 
 
 def sync(upstream, record):
@@ -35,19 +40,23 @@ def sync(upstream, record):
 
     source_url = record["upstream"]
     fork_url = f"https://github.com/{fork}.git"
+    old = tracking_sha(fork)
+    record["old_sha"] = old
+    record["new_sha"] = old
+    candidate = tracking_sha(upstream)
+    record["upstream_sha"] = candidate
+    if old == candidate:
+        return "up-to-date"
+
     with tempfile.TemporaryDirectory() as directory:
         run("git", "init", "--bare", directory)
         run("git", "fetch", "--no-tags", fork_url,
             f"{TRACKING_REF}:refs/sync/fork", cwd=directory)
-        old = run("git", "rev-parse", "refs/sync/fork", cwd=directory)
-        record["old_sha"] = old
-        record["new_sha"] = old
         run("git", "fetch", "--no-tags", source_url,
             f"{TRACKING_REF}:refs/sync/upstream", cwd=directory)
-        candidate = run("git", "rev-parse", "refs/sync/upstream", cwd=directory)
-        record["upstream_sha"] = candidate
-        if old == candidate:
-            return "up-to-date"
+        if (run("git", "rev-parse", "refs/sync/fork", cwd=directory) != old
+                or run("git", "rev-parse", "refs/sync/upstream", cwd=directory) != candidate):
+            raise ValueError("Blocked: a tracking ref moved during fetch")
 
         ancestry = subprocess.run(
             ["git", "merge-base", "--is-ancestor", old, candidate],
@@ -91,11 +100,13 @@ def main():
         }
         try:
             record["result"] = sync(upstream, record)
-        except (ValueError, subprocess.CalledProcessError, OSError) as error:
+        except (ValueError, subprocess.SubprocessError, OSError) as error:
             failed = True
             record["result"] = "blocked"
             if isinstance(error, subprocess.CalledProcessError):
                 record["reason"] = f"{error.cmd[0]} {error.cmd[1]} exited {error.returncode}"
+            elif isinstance(error, subprocess.TimeoutExpired):
+                record["reason"] = f"{error.cmd[0]} {error.cmd[1]} timed out"
             else:
                 record["reason"] = str(error)
             print(f"::error::{upstream} sync blocked. See the synchronization record.")
