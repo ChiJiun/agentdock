@@ -72,6 +72,13 @@ Decision vocabulary (from Issue #1): **dependency** (consume a published package
 | Aether `crates/aether-core/` (crate `aether-agent-core`) | MIT | 75 Rust files (~414 KB); internal deps `aether-auth`, `aether-llm`, `aether-mcp-utils`, `aether-utils`; `rmcp` | **Research only** |
 | Forge `crates/forge-core/`, `crates/forge-provider/` | AGPL-3.0-only | 345 + 65 Rust files (~5.39 MB + ~1.42 MB); `forge-core` depends on 12 internal `forge-*` crates | **Excluded** (no code, no line-by-line adaptation) |
 
+## Development runtime npm dependencies (PR #25)
+
+- [`@agentclientprotocol/sdk` 2.7.0](https://github.com/agentclientprotocol/typescript-sdk) — Apache-2.0, published runtime dependency. Used for an **interim Node.js ACP v1 development host and mock agent**, not the planned Rust production host. Verified package `license` and version in installed npm manifest; lockfile pins its integrity.
+- [`concurrently` 9.2.1](https://github.com/open-cli-tools/concurrently) — MIT, published development dependency. Starts the Vite preview and local ACP server together. Verified package `license` and version in installed npm manifest.
+
+These are npm package dependencies; no upstream implementation files were copied into the repository. Their direct and transitive notices still need inclusion in future release artifacts.
+
 ## Imported source files
 
 None. The prototype's tab keyboard handling, textarea ref wiring, and progress animation are original implementations in `src/App.tsx`, `src/components/Composer.tsx`, and `src/components/ProgressRail.tsx`. Acpira remains a UX reference only; the Issue #1 source audit is still tracked separately. Published npm dependencies are declared in `package.json` and require their own license inventory before distribution.

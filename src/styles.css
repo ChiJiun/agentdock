@@ -1366,3 +1366,68 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible 
   .language-panel { right: -68px; }
   .language-toggle { padding: 6px; }
 }
+
+/* Live ACP workspace: actual process-backed events, separate from the sample UI. */
+.live-nav-button,.live-back,.live-actions button,.live-composer button,.live-empty button,.live-approval button {
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid #4e6550;
+  border-radius:8px;background:#304137;color:#d9ebd2;padding:8px 11px;font-size:11px;
+}
+.live-nav-button:hover,.live-actions button:hover,.live-composer button:hover {background:#3e5543}
+.live-workspace{display:flex;width:100vw;height:100vh;min-height:440px;background:#151b1b;color:#e5ece4}
+.live-sidebar{display:flex;flex-direction:column;flex:0 0 270px;border-right:1px solid #35453b;background:#1e2824;min-width:0}
+.live-sidebar>header{display:flex;align-items:flex-start;flex-direction:column;gap:14px;padding:19px 16px;border-bottom:1px solid #3b4b40}
+.live-sidebar>header strong{display:flex;align-items:center;gap:9px;font-size:17px;letter-spacing:-.5px}
+.live-back{padding:6px 9px;background:transparent;color:#b9c8ba}
+.live-connection{font-size:11px;display:flex;gap:6px;align-items:center;color:#b8d0ab}
+.live-setup{padding:18px 14px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid #39473b}
+.live-side-heading{color:#8ca594;font-size:10px;font-weight:800;letter-spacing:1.3px}
+.live-setup label{font-size:11px;color:#c9d6c7}
+.live-setup select{max-width:100%;min-width:0;padding:8px;background:#283831;color:#e7eee1;border:1px solid #475c4c;border-radius:7px;font-size:11px}
+.live-setup .live-primary{display:flex;align-items:center;gap:7px;justify-content:center;border:0;border-radius:8px;background:#b8d1a9;color:#1c2b1e;padding:11px;margin-top:7px;font-weight:700;font-size:11px}
+.live-primary:disabled{opacity:.5}
+.live-session-heading{margin:17px 15px 8px}
+.live-session-list{display:flex;flex-direction:column;overflow:auto;flex:1;padding:0 8px}
+.live-session{border:1px solid transparent;border-radius:9px;background:transparent;color:#d9e5d7;padding:12px;text-align:left;display:flex;flex-direction:column;gap:5px}
+.live-session:hover,.live-session.selected{background:#324338;border-color:#4d6350}
+.live-session span{font-size:12px;font-weight:700}.live-session small{font-size:10px;color:#9db1a1}
+.live-sidebar>footer{font-size:10px;color:#88a092;border-top:1px solid #3a463e;padding:13px 15px}
+.live-main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.live-empty{display:flex;flex:1;align-items:center;justify-content:center;flex-direction:column;text-align:center;gap:12px;padding:30px;color:#b6c8b8}
+.live-empty h2{margin:7px 0 0;font-size:21px;color:#e3eee0;letter-spacing:-.5px}
+.live-empty p{font-size:12px;max-width:540px;line-height:1.8;margin:0}
+.live-empty code{padding:3px 7px;border-radius:5px;background:#324037;color:#daecce}
+.live-main-header{padding:18px 23px;border-bottom:1px solid #344139;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.live-main-header h2{font-size:18px;display:flex;gap:9px;align-items:center;margin:0 0 10px}
+.live-agent-badge{border-radius:15px;background:#29382d;padding:4px 8px;font-size:10px}
+.live-cwd{color:#99af9f;font-size:10px;margin-left:10px;overflow-wrap:anywhere}
+.live-actions{display:flex;gap:8px}.live-actions button:disabled{opacity:.4}
+.live-notice{font-size:11px;line-height:1.6;padding:10px 22px;display:flex;align-items:flex-start;gap:9px;color:#c4d6bc;background:#2c3930;border-bottom:1px solid #3f5144}
+.live-notice svg{flex-shrink:0;margin-top:2px}
+.live-tabs{padding:9px 17px 0;border-bottom:1px solid #38463c;display:flex;gap:3px}
+.live-tabs button{border:0;border-bottom:2px solid transparent;padding:9px 13px;background:transparent;color:#a4b5a7;font-size:11px}
+.live-tabs button.active{border-color:#a5cc9b;color:#e2eddc}
+.live-history{flex:1;overflow:auto;padding:20px clamp(20px,4vw,48px);min-height:80px}
+.live-event{padding:14px 18px;margin-bottom:11px;background:#202b26;border:1px solid #324337;border-radius:9px;overflow-wrap:anywhere}
+.live-event-user_message{background:#2a342f;border-color:#4b6050}
+.live-event-error{border-color:#7e4d49;background:#392b2a}
+.live-event-approval_requested{border-color:#826949;background:#3a3329}
+.live-event small{color:#a5b5a5;font-size:10px;letter-spacing:.2px}
+.live-event p{color:#e0eae0;white-space:pre-wrap;line-height:1.65;font-size:12px;margin:8px 0 0}
+.live-no-events{color:#9dae9f;font-size:12px;text-align:center;padding:28px}
+.live-composer{border-top:1px solid #35463b;background:#202b25;padding:13px 22px}
+.live-composer textarea{resize:vertical;width:100%;min-height:64px;max-height:210px;background:#29382e;color:#e6ece3;border:1px solid #58705d;border-radius:8px;padding:12px;font-size:12px;line-height:1.6}
+.live-compose-footer{margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.live-compose-footer small{font-size:10px;color:#9db3a3;line-height:1.5}
+.live-composer button{background:#b8d2ad;color:#1e2a1d;font-weight:700;border:0}
+.live-code-title{font-size:12px;display:flex;align-items:center;gap:9px;margin:6px 0 12px;color:#c4d7bd}
+.live-history pre{font-size:11px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #3b4b40;padding:14px;background:#1a231e;border-radius:8px;max-height:310px;overflow:auto}
+.live-approval{border:1px solid #775c42;background:#393028;border-radius:10px;padding:18px;margin-bottom:13px}
+.live-approval h3{display:flex;align-items:center;gap:9px;margin:0 0 9px;font-size:14px}
+.live-approval p{font-size:12px;line-height:1.6}.live-approval small{color:#cfba9e}.live-approval>div{display:flex;gap:9px;margin-top:17px}
+.live-approval .live-allow{background:#c9dfae;color:#1f3021}
+.live-approval .live-approval-kind{display:block;margin-bottom:4px}
+.live-approval .live-approval-input{margin:8px 0 10px;max-height:180px;background:#2b2520;border-color:#5d4a37}
+.live-error{display:flex;align-items:center;gap:9px;color:#ffe7df;background:#4a2d2a;border-top:1px solid #a35b4f;padding:11px;font-size:11px}
+.live-error button{margin-left:auto;border:0;background:transparent;color:#fff}
+@media(max-width:760px){.live-sidebar{flex-basis:185px}.live-setup{padding:10px 8px}.live-main-header{padding:10px}.live-main-header h2{font-size:14px}.live-cwd{display:none}.live-notice{padding:9px 10px}.live-history{padding:12px}.live-composer{padding:12px}}
+@media(max-width:480px){.live-sidebar{flex-basis:140px}.live-setup select{font-size:10px}.live-actions button{padding:6px}.live-main-header{flex-wrap:wrap}.live-tabs{padding:0 3px}.live-tabs button{padding:10px 6px;font-size:10px}.live-compose-footer small{display:none}}

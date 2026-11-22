@@ -1,0 +1,9 @@
+[
+  {
+    "id": "custom-acp",
+    "label": "Install and configure your own ACP executable",
+    "bin": "/absolute/path/to/your-acp-executable",
+    "args": [],
+    "authEnv": []
+  }
+]
