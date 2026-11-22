@@ -22,7 +22,7 @@ Non-goals: approval UI (P4-4), real Git/GitHub execution (P5, P7 call `execute_g
 
 - P4-3a prerequisites: P4-2, P3-5b, P2-5 (approval/operation projections and rules), P2-6 (recovery invalidates pending approvals), P3-7 (Tauri commands get the store and services from `AppState::ready()`; add `ApprovalService` to `Ready`).
 - P4-3b prerequisites: P4-3a.
-- Parallel: P5-*, P6-1. P4-4, P5-2, P7-2, P8-4 use this packet.
+- Parallel: P5-*, P6-1. P4-4, P7-2, P8-3, P8-4 use this packet (P5-2 does not: worktree creation is not a guarded operation).
 
 ## 3. Files
 
@@ -89,7 +89,10 @@ impl ApprovalService {
         decision: UserDecision, shown_fingerprint: &Sha256Hex) -> Result<(), ApprovalError>;
     /// Background loop: every 1 s, expire pending approvals whose expires_at <= now (approval.resolved{expired}, actor policy).
     pub async fn run_expiry_loop(self: Arc<Self>);
-    /// User cancelled the current turn while a permission is pending (called by SessionRuntime::cancel, P3-5).
+    /// User cancelled the current turn (called through PermissionHandler::on_turn_cancel BEFORE SessionRuntime::cancel
+    /// sends session/cancel, P3-5). If the session has a pending approval: persist the "user cancels the turn" row,
+    /// then answer the agent `cancelled`. Requests of this session still waiting in the per-task FIFO (never recorded)
+    /// are answered `cancelled` and dropped without writing anything. No pending approval → Ok(()) and nothing written.
     pub async fn cancel_for_session(&self, session_id: &SessionId) -> Result<(), ApprovalError>;
     /// Before the user cancels or pauses a task (P8-3): pending → cancelled (actor user), host-policy operations of
     /// those approvals → abandoned, approved-but-unused host-policy grants → invalidated (actor orchestrator).
@@ -97,7 +100,8 @@ impl ApprovalService {
     pub async fn cancel_open_for_task(&self, task_id: &TaskId) -> Result<Vec<ApprovalId>, ApprovalError>;
 }
 impl agentdock_orchestrator::session_runtime::PermissionHandler for ApprovalService {
-    /* on_permission(ctx), on_session_closed(session_id, agentdock_acp::CloseReason) — P3-5 trait; see §5 step 6.
+    /* on_permission(ctx), on_turn_cancel(session_id) = cancel_for_session,
+       on_session_closed(session_id, agentdock_acp::CloseReason) — P3-5 trait; see §5 step 6.
        CloseReason::ProcessExited → "agent process exited" row; ProtocolError / LineTooLong → "protocol error" row. */
 }
 
@@ -132,7 +136,8 @@ impl ApprovalService {
     ///      return_state when blocking; actor policy) + if blocking T12/T33/T40 (actor policy, return_state).
     /// Then the resolution follows the §5 step 4 table (host_policy rows); denied/expired/cancelled → Err.
     /// Then 1 tx: operation.started (actor orchestrator; projector checks rules 3, 9, 10). Only after commit: run `effect`.
-    /// Then 1 tx: operation.succeeded / operation.failed / operation.outcome_unknown{killed} (actor integration).
+    /// Then 1 tx: operation.succeeded / operation.failed (actor integration) or operation.outcome_unknown{killed}
+    /// (actor **orchestrator** — validate_fixtures.py lines 1030–1033, checkpoint-and-replay.md line 107).
     pub async fn execute_guarded<F, Fut>(&self, req: OperationRequest, effect: F) -> Result<serde_json::Value, GuardError>
     where F: FnOnce() -> Fut + Send + 'static, Fut: std::future::Future<Output = EffectOutcome> + Send + 'static;
 }
@@ -168,11 +173,11 @@ impl ApprovalService {
    | host_policy approved by user or policy | `approval.resolved{approved, policy_rule_id?}` (user\|policy) → T-back (same actor). **Never S14** (no session) | — |
    | host_policy denied (user\|policy) / expired (**policy**) | `approval.resolved{denied\|expired}` → `operation.abandoned{approval_denied\|approval_expired}` (orchestrator) → T-back (same actor as the resolution) — fixture 11 events 21–23 and 65–67 | — |
    | host_policy, task cancel / pause | `approval.resolved{cancelled}` (user) → `operation.abandoned{approval_cancelled}` (orchestrator); caller then writes T21 / T20 | — |
-   | host_policy grant approved but not yet started, task leaves the phase | `approval.resolved{invalidated}` (orchestrator) → `operation.abandoned` (orchestrator) | — |
+   | host_policy grant approved but not yet started, task leaves the phase | `approval.resolved{invalidated}` (orchestrator) → `operation.abandoned{reason: approval_invalidated}` (orchestrator) | — |
 
    Option choice for `acp_outcome`: `approved` → first `allow_once`; if only `allow_always` exists use it but record `scope: once` (`acp-capabilities.md` line 102); no allow-type option → treat as `denied`. `denied` / `expired` → first `reject_once`, else `reject_always`; if the agent offered no reject option, write the decision as `cancelled` with `acp_outcome: cancelled` instead (the validator requires `expired`/`denied` to select a `reject_*` option). Restart (pending at crash) is handled by P2-6 recovery, not here.
 5. `resolve_by_user`: check order `NotFound` → `WrongTask` (approval's task ≠ parameter) → `NotPending` → `Expired` (`now >= expires_at`) → `FingerprintMismatch` → resolve per the table (actor user). The projector also rejects illegal events (second line of defense); map store errors to `Rejected`.
-6. `on_session_closed(session_id, reason)`: only acts when the session is `awaiting_permission` with a pending approval; applies the matching table row. P3-5 calls it instead of writing S16/S23 itself. When the session was not awaiting permission, P3-5 writes S08/S12/S13/S22 and P8-3 handles the task (T14 `interrupted{adapter_disconnected}`, fixture 12 events 30–31).
+6. `on_session_closed(session_id, reason)`: only acts when the session is `awaiting_permission` with a pending approval; applies the matching table row. P3-5 calls it instead of writing S16/S23 itself. When the session was not awaiting permission, P3-5 writes S08/S12/S13/S22 and P8-3 handles the task (T14 `interrupted{adapter_disconnected}` for process exit, fixture 12 events 30–31; `interrupted{session_unavailable}` for protocol errors).
 7. `cancel_open_for_task`: applies the "task cancel / pause" and "grant not yet started" rows for every open approval of the task; returns the ids. P8-3 writes the task transition in the next transaction (its conditions `approval_not_pending_after` and `no_open_operations` now hold).
 8. Tauri commands: `approvals_pending(task_id) -> Vec<ApprovalView>` (`approval_id`, `classified_kind`, `title`, `operation_fingerprint`, `expires_at`, `user_only`, `policy_hint`) and `approval_resolve(task_id, approval_id, decision, fingerprint)`. The frontend sends only ids, the decision and the fingerprint it showed; the backend fixes the actor to `user`.
 
@@ -211,7 +216,7 @@ impl ApprovalService {
 | `fingerprint_mismatch_is_rejected` | send another fingerprint | `Err(FingerprintMismatch)` |
 | `policy_cannot_approve_merge_class` | rule file Allows `pr_merge`; agent requests `gh pr merge 1` | approval stays `pending` until the user decides (contract mutation `b3a_policy_approves_acp_merge`) |
 | `title_spoofing_does_not_change_class` | `title: "Read README"`, `rawInput.command: "git push --force"` | `classified_kind == force_push`; an Allow rule for `read_only` has no effect |
-| `cancel_turn_cancels_approval` | `SessionRuntime::cancel` while waiting | `approval.resolved{cancelled}` (user), `acp_outcome.outcome == "cancelled"`, then `T17` (user) in the same transaction; **no** `S14`; after the mock ends the turn, `S15` (adapter); later `resolve_by_user` → `NotPending` |
+| `cancel_turn_cancels_approval` | `SessionRuntime::cancel` while waiting | `approval.resolved{cancelled}` (user), `acp_outcome.outcome == "cancelled"`, then `T17` (user) in the same transaction, committed **before** the mock receives `session/cancel` and before it gets the `cancelled` answer; a second request of the same session waiting in the FIFO is answered `cancelled` with **no** `approval.*` event; **no** `S14`; after the mock ends the turn, `S15` (adapter); later `resolve_by_user` → `NotPending` |
 | `task_cancel_during_approval_matches_fixture_03` | `cancel_open_for_task`, then the test writes `T21` (user) | event order equals fixture 03 events 13–15; projector accepts every event |
 | `restart_invalidates_pending` | simulate restart while waiting: drop everything, `Store::open` + `recover` | approval `invalidated`; a new `ApprovalService`'s `resolve_by_user` → `NotPending`; **no** `approved` anywhere |
 | `agent_exit_invalidates_pending` | kill the mock while waiting | event order `S16` (adapter) → `approval.resolved{invalidated}` (orchestrator) → `T20` (adapter, `interruption.reason == adapter_disconnected`); task ends `interrupted`; session `disconnected` |
@@ -224,15 +229,15 @@ impl ApprovalService {
 
 | Test | Expected |
 | --- | --- |
-| `approved_operation_runs_once` | marker written once; event order recorded → requested → awaiting_approval → resolved → back → started → succeeded (as fixture 01 events 38–44) |
+| `approved_operation_runs_once` | marker written once; event order recorded → requested → awaiting_approval → resolved → back → started (orchestrator) → succeeded (integration) (as fixture 01 events 38–44) |
 | `denied_operation_never_runs` | no marker; `operation.abandoned`; `Err(Denied)` |
 | `expired_operation_never_runs` | same, `Err(Expired)`; order `approval.resolved{expired}` (policy) → `operation.abandoned{approval_expired}` → `T18` (policy), as fixture 11 events 65–67 |
 | `denied_returns_task_to_phase` | user denies a blocking `git_push` in `pr` | order `approval.resolved{denied}` (user) → `operation.abandoned` → `T18` (user) (fixture 11 events 21–23); task back in `pr`; no S14 anywhere |
 | `non_blocking_cleanup_has_no_task_transition` | `worktree_remove` with `return_state: None` on a `completed` task | no task events at all; approval and operation events only |
-| `unknown_effect_is_outcome_unknown` | effect returns `EffectOutcome::Unknown` | `operation.outcome_unknown{cause: killed}`, never `operation.failed`; `Err(OutcomeUnknown)` |
+| `unknown_effect_is_outcome_unknown` | effect returns `EffectOutcome::Unknown` | `operation.outcome_unknown{cause: killed}` with actor `orchestrator`, never `operation.failed`; `Err(OutcomeUnknown)` |
 | `merge_requires_user_even_with_allow_rule` | rule file Allows `pr_merge` → still waits for the user |
 | `policy_rule_id_recorded_when_policy_approves` | Allow rule for `pr_create` → `approval.resolved` actor `policy` with `policy_rule_id` |
-| `effect_panic_is_outcome_unknown` | effect panics → `operation.outcome_unknown{cause: killed}`; `Err(OutcomeUnknown)` |
+| `effect_panic_is_outcome_unknown` | effect panics → `operation.outcome_unknown{cause: killed}` with actor `orchestrator`; `Err(OutcomeUnknown)` |
 | `same_key_twice_without_supersede_rejected` | second identical target → `Rejected` (Rule 5) |
 | `push_without_clean_checkpoint_rejected` | `git_push` without a checkpoint → `Rejected`; no marker |
 | `crash_after_started_is_not_rerun` | kill the process after the started commit and before the effect (P2-6 crash-harness pattern) → after reopen `outcome_unknown{host_crash}`; no marker; `execute_guarded` with the same target and no supersede → `Rejected` |

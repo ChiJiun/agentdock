@@ -205,6 +205,9 @@ Packets pick a default so work is not blocked; each needs confirmation.
 12. **Unix PDEATHSIG gap** (see "Not yet covered"): accept for alpha or add a packet.
 13. **ADR-0003 open questions the packets assume**: Q3 `auto_resume_policy` both off (P8-3 never arms auto-resume); Q7 policy may approve `pr_create`/`pr_update`/`pr_comment`/`external_write`, and `git_push` only through a user-created rule (P4-3); Q8/Q14 one pending permission per task/session, later requests are held in a FIFO (P4-3).
 14. **Node reference PRs are not drafts**: #25, #27, #28, #29, #33 are open and not marked draft on GitHub (checked 2026-11-22). ADR-0004 treats them as "open, never merged, reference only"; converting them to draft is the owner's call.
+15. **Interruption reasons** (P8-3): an agent that exits on its own → `adapter_disconnected` (actor adapter); a protocol error or oversized line → `session_unavailable` (actor orchestrator, `acp-capabilities.md` line 97). A user pause while `preparing` is written by `orchestrator`, because T09 does not allow actor `user`.
+16. **ACP permission requests while the task is in `pr` / `ci`** (P4-3): T33/T40 allow only actor `policy`, so such requests are answered `cancelled` and nothing is recorded (only a `tracing` warning).
+17. **Host-initiated session close** (P3-5 §5 step 9): waits up to 10 s for the turn to end after `session/cancel`; if the agent never ends it, the session is closed via S11 → S18 (active) or killed and recorded as S16 → S21 (awaiting permission).
 
 ## Existing document issues
 
@@ -214,6 +217,7 @@ Found while writing the packets; not fixed here (ADRs and contracts are not edit
 - UX-62 / F2 Rules / F5 step 4 vs `checkpoint-and-replay.md` crash recovery step 3 on pending approvals (see open questions 4–5).
 - ADR-0002 lines 52 and 99 pin `agent-client-protocol =5.3.0` pending #504; crates.io has `5.5.1` and `v5.4.0+` contain #504 (checked 2026-11-22; see ADR-0004). The pin is chosen in P3-1.
 - PR #29's 16-state workflow doc differs from ADR-0003's 12 states (ADR-0004 open question 2).
+- `checkpoint-and-replay.md` line 54 says recovery writes "one transaction per entity", while line 65 says the completed list is written "in the recovery transaction" (singular). P2-6 follows line 54.
 - `operation.failed{effect: unknown}` is a dead end in the contract: it can be neither reconciled (`validate_fixtures.py` line 1063 accepts only `outcome_unknown`) nor superseded (lines 969–971). Packets therefore never write it: every effect with an unknown result is `outcome_unknown{cause: killed}` (P4-3b `EffectOutcome::Unknown`, P7-2).
 
 ## V1 packets still to write (after alpha)

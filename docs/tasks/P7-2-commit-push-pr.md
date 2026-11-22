@@ -115,7 +115,8 @@ impl PublishService {
     /// Task state must be pr. Returns remote_sha.
     pub async fn push(&self, task: &TaskId) -> Result<String, PublishError>;
     pub async fn create_pr(&self, task: &TaskId, req: PrRequest) -> Result<PublishedPr, PublishError>;   // P7-2b
-    /// Read-only probe for an operation in outcome_unknown (or failed{effect: unknown}); writes operation.reconciled.
+    /// Read-only probe for an operation in outcome_unknown; writes operation.reconciled. (failed{effect: unknown} cannot
+    /// be reconciled in the contract; see §5 — it returns NeedsReconcile and is shown to the user.)
     pub async fn reconcile(&self, operation: &OperationId) -> Result<ReconcileFinding, PublishError>;
 }
 ```

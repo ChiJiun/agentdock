@@ -21,7 +21,7 @@ Goals:
 - **Implementation done** (T13, user): the user clicks "Done — run checks". If the worktree is dirty, P7-2a `commit` with a user-confirmed message first. Then T13 → `verifying` and a checkpoint `{phase: verifying, worktree{head_sha, dirty: false}}` (P7-2's "tested commit" binding).
 - **Verify**: `CheckService::run_all` (P6-1b). All passed → T23 `checks_passed` → `review`. Any `failed` → repair (below). Only `errored`/`cancelled` (no `failed`) → stay in `verifying` (attention shows `phase_decision_pending`); the user can re-run or send back.
 - **Repair loop** (T22 `checks_failed` → `running`): send a repair prompt with the failed check names, exit codes and the last 8 KiB of each redacted log; count rounds. Stop conditions (ADR-0002 PRL-3, pure function `stop_reason(&RoundHistory)`): more than `max_repair_rounds` (default 3) in this task, or the same failing check set twice in a row → T25 / T31 `repair_limit_reached` → `failed`.
-- **Pause** (T09/T14/T20/T24/T30/T35/T41 `interruption`, `interrupted{reason: user_paused}`; T20 covers a task waiting in `awaiting_approval`, T09 a task still `preparing`), **cancel** (T03/T11/T16/T21/T26/T32/T37/T43), **resume** (T44 → `queued`, then T05–T08 by `resume_phase`), **retry** (T47 → `queued`, restarts from `running`). Before leaving a phase: abandon recorded operations, cancel pending approvals, kill started operations as `outcome_unknown{killed}` — except a started `pr_merge` (never in alpha) — and shut down sessions (`no_open_operations`, `approval_not_pending_after`).
+- **Pause** (T09/T14/T20/T24/T30/T35/T41 `interruption`, `interrupted{reason: user_paused}`; T20 covers a task waiting in `awaiting_approval`, T09 a task still `preparing`; the actor is `user` except T09, whose actors are only orchestrator/adapter/recovery, so a user pause from `preparing` is written by `orchestrator`), **cancel** (T03/T11/T16/T21/T26/T32/T37/T43), **resume** (T44 → `queued`, then T05–T08 by `resume_phase`), **retry** (T47 → `queued`, restarts from `running`). Before the transition: cancel pending approvals, abandon recorded operations, kill started operations as `outcome_unknown{killed}` — except a started `pr_merge` (never in alpha) — so `no_open_operations` and `approval_not_pending_after` hold. After the transition: shut down the task's sessions (§5 step 8; order of fixture 03 events 13–16).
 - **Restart**: after P2-6 recovery, tasks are `interrupted{host_crashed}`; nothing resumes automatically unless `auto_resume_armed` (not used in alpha). The user resumes.
 - **Review (P8-3b)**: on entering `review`, start a fresh child session (role `review`, `parent_session_id` = implementation session, new ACP session, never `load`/`resume`) whose brief holds only: branch and head SHA, the original objective/issue, the diff summary (P7-1), the check results, and reviewer focus notes (ADR-0002 PRL-2). The reviewer is read-only: its permission requests with any class other than `read_only` are denied by policy rule `builtin.reviewer_read_only`.
 - **Verdict**: exactly one block delimited by a per-round nonce; the turn must end with `end_turn` (PRL-7). Parsed verdict stored as `session.summary_recorded{purpose: completion, source: agent_generated, content}` on the review session. `blocking` → T27 `review_blocking_findings` → `running` with the findings as the repair prompt. `mergeable` → stay in `review` (`phase_decision_pending`); **only the user** moves on with T28 `review_passed` (or T29 `accepted_without_pr`). Unparseable or missing verdict → stay in `review`; the user can rerun the review (a new fresh reviewer) or send back.
@@ -32,7 +32,7 @@ Non-goals: `pr` → `ci` and CI (P8-4); push/PR execution (P7-2, triggered from 
 
 - P8-3a: P2-3, P2-5, P2-6, P3-5b, P3-6, P3-7, P4-3a, P5-2, P5-3, P6-1b, P7-1a, P7-2a, P7-3 (issue picker).
 - P8-3b: P8-3a.
-- Parallel: P8-2, P8-4 (P8-4 starts where P8-3 leaves the task in `pr`).
+- Parallel: P8-2. P8-4 needs P8-3a (it starts where P8-3 leaves the task in `pr`); it can run in parallel with P8-3b.
 
 ## 3. Files
 
@@ -136,8 +136,16 @@ pub fn parse_verdict(agent_text: &str, nonce: &str, stop: agentdock_acp::StopRea
    5. T04 → first prompt for a new task, or a handoff prompt (`origin: handoff`, last summary if any) for a resumed one.
 6. `implementation_done`: state `running`, implementation session idle; dirty → `commit` (message from the user; empty → `BadObjective`-style validation error, never an agent-written default); T13 (user) → checkpoint `{phase: verifying}` → spawn `verify`.
 7. `verify`: `run_all(stop_on_failure = false)`. Results decide per §1. For repair: compute `Round{phase: Verifying, failing}`; `stop_reason` → T25 `repair_limit_reached` with `Failure{code: "repair_limit", message: reason}`; else T22 (orchestrator) → repair prompt to the implementation session (relaunch a `repair` session if it is gone).
-8. `phase_exit` (used by pause/cancel/fail): first `ApprovalService::cancel_open_for_task` (P4-3: pending approvals → `cancelled`, their operations → `abandoned`, unused grants → `invalidated`); then in one transaction per entity: abandon remaining `recorded` operations, record `outcome_unknown{killed}` for started operations after killing them; then shut down sessions (`SessionRuntime::shutdown`) and cancel running checks (token). Then the transition. Any started `pr_merge` → `Uninterruptible` (cannot happen in alpha; keep the guard).
-   - **Agent exit outside a permission wait**: when P3-5 reports the task's implementation session closed (S08/S12/S13/S22) while the task is `running` or `review`, write T14 / T30 `interrupted{reason: adapter_disconnected, phase}` (actor adapter; fixture 12 events 30–31). The `awaiting_permission` case is P4-3's (`on_session_closed` already writes T20).
+8. `phase_exit(task, exit)` (used by pause / cancel / fail). Strict order — fixture 03 events 13–16 (`approval.resolved{cancelled}` user → T21 user → S15 adapter → S06 orchestrator):
+   1. Any started `pr_merge` → return `Uninterruptible` before writing anything (cannot happen in alpha; keep the guard).
+   2. `ApprovalService::cancel_open_for_task(task)` (P4-3: pending approvals → `cancelled` and the agent is answered `cancelled`; their host-policy operations → `abandoned`; unused grants → `invalidated`).
+   3. Close the remaining operations, one transaction each: `recorded` without approval → `operation.abandoned` (orchestrator); `started` → abort it (P4-3b drop guard kills its process), then `operation.outcome_unknown{cause: killed}` (actor **orchestrator**, validator lines 1030–1033). Cancel running checks (cancellation token) and wait for them to finish.
+   4. The task transition (T21 / T16 / … for cancel, actor user; T20 / T14 / … `interrupted{user_paused}` for pause, actor user, T09 orchestrator; T10 / T25 / T31 … for fail). Its conditions `no_open_operations` and `approval_not_pending_after` now hold.
+   5. Only then `SessionRuntime::shutdown()` for each live session of the task (implementation and reviewer). P3-5 waits for the turn to end (S15 / S09), writes S06 / S25 / S18 / S21 with actor orchestrator, and sets `closing` first, so **no** S08/S12 is written and **no** T14 follows. Shutdown errors are logged (`tracing`) and do not undo the transition.
+   - **Session closed by itself outside a permission wait** (`SessionRuntime::unexpected_close()` becomes `Some(reason)` after P3-5 wrote S08/S12/S13/S22; it never fires after a host-initiated shutdown): if the task is `running` or `review`, write T14 / T30 with the reason chosen by `CloseReason` (`acp-capabilities.md` line 97):
+     - `ProcessExited` → `interrupted{reason: adapter_disconnected, phase}` (actor adapter; fixture 12 events 30–31).
+     - `ProtocolError` / `LineTooLong` → `interrupted{reason: session_unavailable, phase}` (actor orchestrator).
+     - Task `preparing` (session closed before T04) → T09 with the same reason mapping. The `awaiting_permission` case is P4-3's (`on_session_closed` already writes T20).
 9. `resume`: T44 (user) with `resume_phase` = `interruption.phase` (must satisfy `resume_phase_within_interrupted_phase`) → `queued` → normal scheduling.
 10. Desktop commands map 1:1 to the methods; `tasks_list` returns projection rows + attention reasons for the sidebar.
 
@@ -186,10 +194,11 @@ pub fn parse_verdict(agent_text: &str, nonce: &str, stop: agentdock_acp::StopRea
 | `errored_check_waits_for_user` | program missing → task stays `verifying`, attention `phase_decision_pending` |
 | `two_tasks_in_parallel_isolated` | two tasks, `max_parallel_tasks = 2`: both run; each session cwd is its own worktree; a mock permission request for the other task's path is denied (P5-3 scope) (G4) |
 | `third_task_waits_for_slot` | three tasks, max 2 → third stays `queued` until one leaves the active states |
-| `agent_exit_interrupts_task` | kill the mock agent while the task is `running` → `S12` then `T14 interrupted{adapter_disconnected}`; no orphan process |
+| `agent_exit_interrupts_task` | kill the mock agent while the task is `running` → `S12` then `T14 interrupted{adapter_disconnected}` (adapter); no orphan process |
+| `protocol_error_interrupts_with_session_unavailable` | mock `oversize` while `running` → `S13 active→failed (protocol_error)` then `T14 interrupted{session_unavailable}` (orchestrator); never `adapter_disconnected` |
 | `pause_while_awaiting_approval` | pause with a pending ACP permission → `approval.resolved{cancelled}` then `T20 interrupted{user_paused}`; projector accepts both |
-| `pause_and_resume_running` | pause → `interrupted{user_paused}`, session shut down, no orphan process; resume → T44, T02, T04, handoff prompt sent |
-| `cancel_with_pending_approval` | mock permission pending → cancel → approval `cancelled`, then T21, session closed |
+| `pause_and_resume_running` | pause → `T14 interrupted{user_paused}` (user), then the session ends `idle→closed (session_closed)` (orchestrator); no `disconnected` state and no second T14; no orphan process; resume → T44, T02, T04, handoff prompt sent |
+| `cancel_with_pending_approval` | mock permission pending → cancel → event order equals fixture 03 events 13–16: `approval.resolved{cancelled}` (user) → `T21` (user) → `S15 awaiting_permission→idle` (adapter) → `S06 idle→closed` (orchestrator); no `disconnected`, no T14 |
 | `cancel_abandons_recorded_operation` | a recorded `git_push` waiting for approval (task `awaiting_approval`, return_state `pr`) → cancel → `approval.resolved{cancelled}`, `operation.abandoned`, then T21 |
 | `restart_leaves_tasks_interrupted` | crash mid-run (drop service), reopen + recovery → `interrupted{host_crashed}`; nothing resumes until `resume` |
 | `retry_restarts_from_running` | failed → `retry` → T47 → … → T04 → `running` (never T05–T08) |
@@ -216,7 +225,7 @@ pub fn parse_verdict(agent_text: &str, nonce: &str, stop: agentdock_acp::StopRea
 
 ```bash
 cargo test -p agentdock-orchestrator stop:: verdict::                      # 11 unit tests pass
-cargo test -p agentdock-orchestrator --test task_flow -- --test-threads=1  # 16 pass
+cargo test -p agentdock-orchestrator --test task_flow -- --test-threads=1  # 17 pass
 cargo test -p agentdock-orchestrator --test review_flow -- --test-threads=1   # 9 pass (P8-3b)
 npm test                                                                   # FindingsPanel tests pass
 ```
@@ -251,6 +260,8 @@ Strong model implements and reviews. This packet decides when agent output may c
 - Putting the implementer's transcript in the reviewer brief: it carries the implementer's assumptions (PRL-2).
 - Treating `errored` checks as failures to repair: the agent cannot fix a missing toolchain.
 - Leaving a phase without closing operations/approvals: the projector rejects the transition (`no_open_operations`); fix the order, do not weaken the projector.
+- Shutting the session down before the task transition, or killing the agent directly: the close then looks like an agent crash (S08/S12 → T14 `adapter_disconnected`) after the user cancelled. Always transition first, then `SessionRuntime::shutdown()`.
+- Writing `adapter_disconnected` for every session close: a protocol error or oversized line is `session_unavailable` (`acp-capabilities.md` line 97).
 - Resuming automatically after restart: recovery's `interrupted{host_crashed}` waits for the user in alpha.
 - Forgetting the verifying checkpoint: P7-2 refuses to push ("untested commit").
 - Using one global nonce: a reviewer could replay an old block it found on disk.
@@ -259,7 +270,8 @@ Strong model implements and reviews. This packet decides when agent output may c
 
 - [ ] Is every `task.state_changed` produced through the single helper that calls `check_task_transition`?
 - [ ] Can any agent output (text, tool call, permission request) cause T13, T28, T29 or anything in `pr`? It must not.
-- [ ] Does leaving a phase always close operations, approvals, checks and sessions before the transition?
+- [ ] Does `phase_exit` follow the order approvals → operations/checks → task transition → session shutdown (fixture 03 events 13–16), with `outcome_unknown{killed}` written by `orchestrator`?
+- [ ] Is the interruption reason `adapter_disconnected` only for `ProcessExited` and `session_unavailable` for protocol errors, and is a user pause from `preparing` (T09) written by `orchestrator`?
 - [ ] Is the reviewer fresh, role `review`, read-only by policy, and given only the allowed brief?
 - [ ] Does `parse_verdict` require exactly one block with the current nonce and `end_turn`?
 - [ ] Are `stop_reason` limits applied to both check failures and review rounds?

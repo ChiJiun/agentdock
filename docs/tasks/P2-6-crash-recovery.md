@@ -49,7 +49,8 @@ impl RecoveryReport { pub fn is_empty(&self) -> bool; }
 
 impl Store {
     /// Runs recovery. If nothing needs changing, writes NO events (no empty bracket) and returns an empty report.
-    /// Otherwise: recovery_started, one transaction per entity in the order of steps 2..8 (+8a), then recovery_completed.
+    /// Otherwise: recovery_started, one transaction per entity in the order of steps 2..8 (+8a), then recovery_completed
+    /// (checkpoint-and-replay.md line 54: "in the order of the list, one transaction per entity").
     /// No command may be processed before this returns.
     pub fn recover(&self, now: Timestamp) -> Result<RecoveryReport>;
 }
@@ -76,7 +77,7 @@ Steps (**follow `docs/contracts/checkpoint-and-replay.md` lines 52–67**; summa
 
 1. Write the §6 tests first.
 2. `recovery_rules.rs`: add "inside bracket" state to the projector (stored in table `meta`, key `recovery_open`) and implement every rejection in the ADR-0003 §9 "Crash recovery" row.
-3. `recovery.rs`: follow the step order, one `transact` per entity. Step 8a must not depend on P8-1 attention (it does not exist yet). Use the minimal check: the event put the session's task into `reconcile_needed` (an `outcome_unknown` operation exists) or the task is still `running` with no live session — the two cases of fixture 13. P8-1 later replaces this with the attention function and keeps the tests.
+3. `recovery.rs`: follow the step order, one `transact` per entity (`checkpoint-and-replay.md` line 54; line 65 says "the recovery transaction" in the singular — a wording conflict listed in the README; this packet follows line 54, and the `recovery_completed` lists come from the entities changed in this run plus any already inside an open bracket). Step 8a must not depend on P8-1 attention (it does not exist yet). Use the minimal check: the event put the session's task into `reconcile_needed` (an `outcome_unknown` operation exists) or the task is still `running` with no live session — the two cases of fixture 13. P8-1 later replaces this with the attention function and keeps the tests.
 4. The caller (P3-7 app bootstrap) calls `recover` right after `Store::open`; document on `Store` that no command may be processed before `recover` returns.
 5. `agentdock-store-crash-harness`: arguments `<db> <kill-point>`; runs a fixed script that the projector accepts: create task → T02 preparing → T04 running → `operation.recorded{kind: external_write, target: {endpoint: "https://example.invalid/hook", content_sha256: <64 hex>, description}, reconcile_strategy: none}` + host_policy `approval.requested{return_state: running}` + T12 → `approval.resolved{approved, actor user}` + T17 → `operation.started` → effect → `operation.succeeded` → T13 verifying → `check.started{origin: local}`. (`external_write` is the one host-policy kind allowed in `running`, `validate_fixtures.py` `OP_STATES`; do **not** use `git_push`, which is only legal in `pr` after a clean checkpoint, and never loosen the projector to make the script pass.) At the kill point it prints `READY-TO-DIE`, flushes and sleeps until killed. The "external side effect" is simulated by writing a marker file `<db>.effect-<operation_id>`, **only after the `operation.started` commit**.
 
@@ -143,7 +144,7 @@ Strong model implements and reviews. Mistakes here mean a repeated push, an unkn
 ## 11. Common mistakes and pitfalls
 
 - Writing `operation.failed{effect: none}` in recovery "to allow a retry later": the contract forbids it (mutation `r4_recovery_fails_then_repush`).
-- Wrapping all of recovery in one transaction: the contract requires one transaction per entity; follow the step table.
+- Wrapping all of recovery in one transaction: `checkpoint-and-replay.md` line 54 says one transaction per entity, in list order (the order decides which transient `session_unavailable` states appear). Line 65's "the recovery transaction" is a wording conflict (README); follow line 54.
 - Simulating a crash with `std::process::exit`: not realistic (runs part of Rust's cleanup). Kill from the parent with `Child::kill()`.
 - Writing the marker before the commit: then the test cannot prove "persist then act".
 - UI or adapter writing events during `recover`: the P3-7 bootstrap must finish recovery first; the projector's bracket rule rejects non-recovery events inside the bracket as a second line of defense.

@@ -110,7 +110,9 @@ impl AcpConnection {
     pub async fn cancel(&self, session: &AcpSessionId) -> Result<(), AcpError>;
     /// Must be called only AFTER the caller has persisted approval.resolved (contract acp-capabilities.md line 94).
     pub fn respond_permission(&self, ticket: PermissionTicket, decision: PermissionDecision) -> Result<(), AcpError>;
-    /// Cancels open permissions, then AgentProcess::shutdown. Idempotent.
+    /// Cancels open permissions, then AgentProcess::shutdown. Idempotent. NOTE: this answers `cancelled` without
+    /// persisting anything; P3-5 calls it only after every recorded approval of the session is resolved (P3-5 §5 step 9),
+    /// so the only tickets answered here are ones that were never recorded.
     pub async fn shutdown(&self) -> agentdock_process::ExitKind;
 }
 ```
