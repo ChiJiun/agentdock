@@ -1,0 +1,47 @@
+name: Weekly upstream fork sync
+
+on:
+  schedule:
+    - cron: '0 19 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-upstream-fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-forks:
+    if: github.repository == 'ChiJiun/agentdock' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Synchronize tracking branches
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_FORK_SYNC_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::UPSTREAM_FORK_SYNC_TOKEN is missing"
+            exit 1
+          fi
+          python3 .github/scripts/sync_upstream.py
+  notify:
+    if: always() && (needs.sync-forks.result == 'failure' || needs.sync-forks.result == 'cancelled')
+    needs: sync-forks
+    permissions:
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify the fork tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: gh issue comment 53 --repo "$REPOSITORY" --body "Weekly fork sync did not complete. Review the job logs and per-fork results at $RUN_URL."
