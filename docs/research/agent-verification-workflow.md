@@ -8,6 +8,22 @@ Status: proposed; source-backed design, not a claim that AgentDock already imple
 - [pstack create-verification-skill](https://github.com/backnotprop/pstack/blob/main/skills/create-verification-skill/SKILL.md): public implementation reference. Verify its repository ownership, version and license before code reuse. This document adapts the **workflow**, not the source code.
 - The following contracts are **AgentDock proposals**, not verbatim statements from Lauren or evidence of Grok Bot's internal infrastructure.
 
+## Original references (direct URLs)
+
+These are the source pages and transcripts cited by this design. Secondary guides are identified as such; authorship and publication status must be verified before attributing claims to Lauren Tan.
+
+| Source | URL | Role |
+| --- | --- | --- |
+| Lauren Tan — All Code Is Slop (Except Mine), talk page | https://ai.engineer/talks/O_zcc6Xl12g-all-code-is-slop-except-mine | Primary talk |
+| All Code Is Slop (Except Mine), community transcript | https://github.com/The-Focus-AI/2026-11-ai-engineer-code-summit/blob/main/talks/2026-11-11-all-code-is-slop-except-mine/transcript.md | Transcript, third-party copy |
+| Lauren Tan — How I Shipped 2000 PRs Last Month, video | https://www.youtube.com/watch?v=NjoZoUm85x0 | Primary talk video |
+| How I Shipped 2000 PRs, third-party transcript | https://www.textpurr.com/transcript/how-i-shipped-2000-prs-last-month-trusting-ai-agentsgrok-botlauren-tan | Transcript, third-party copy |
+| pstack, public plugin source | https://github.com/cursor/plugins/tree/main/pstack | Public implementation reference; confirm authorship/version |
+| create-verification-skill, source SKILL.md | https://github.com/backnotprop/pstack/blob/main/skills/create-verification-skill/SKILL.md | Concrete skill specification; confirm provenance/license |
+| How to be like @poteto | https://thoughtfulbits.ai/how-to-be-like-poteto | Third-party interpretation, not Lauren's original article |
+
+**Source discipline:** Do not treat community transcripts, forks, or third-party guides as first-party articles. Cite exact URL and file commit SHA when adopting source code. No claim is made that Grok Bot's private production configuration is published here.
+
 ## Trust and ownership
 
 AgentDock controls task state, local worktrees, policy, verification selection, review evidence and approval of host-controlled operations. External ACP coding agents retain their own internal harness, authentication and context. Neither a successful agent message nor a passing model-checker run is proof that production implementation works. Existing GitHub required checks and human approval policies remain authoritative.
