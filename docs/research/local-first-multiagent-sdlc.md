@@ -11,7 +11,7 @@
 - 目標是**適用於各種 Repo/多 Repo**，不是針對單一錢包、Buildroot 或 Node 專案寫特例。先實作最少的 Project Adapter 契約，再逐步支援各語言。
 - **重用成熟工具優先**：Worktrunk CLI、各語言既有 build cache、Nx 的任務圖模型（不可假設 Nx TS 檔可獨立移植）、正式 Git 操作。只在缺乏可靠外部 API 時實作薄 Rust facade。
 - **不要複製 Scion**：Anthropic 的 Scion 是自研集中式 Source Control + server APIs + cache，目標規模與 AgentDock 不同；其公開文章是架構設計參考，沒有可直接採用的 Scion 開源程式碼。
-- **目前狀態**：主分支仍以 React/Vite UI 原型為主；PR #28 的 Worktree、PR #29 的 Node 開發版任務狀態機尚在審查/整合中。不得把它們算成已發行的 Rust/Tauri 功能，也不要在新切片重寫現有 state machine。
+- **目前狀態**：main 已有 React/Vite UI 原型，以及 ADR-0003 的 Task/Session/Event 契約（[`docs/contracts/`](../contracts/README.md)，PR #22 已合併）。後端以 Rust 為主（ADR-0004，PR #68，尚未合併；實作任務包在該 PR 的 `docs/tasks/`）。Node 版 PR #25/#27/#28/#29/#33 不會進 main，只當行為與測試參考。本文件不宣稱任何功能已實作；Task/Worktree 的契約以 ADR-0003 為準，不另建第二套。
 
 ## 2. 建議分層
 
@@ -44,7 +44,7 @@ AgentDock UI / CLI / ACP adapters / Remote worker
 
 | 功能 | 上游來源／固定 SHA／授權 | 可讀原始碼位置 | AgentDock 對應 |
 | --- | --- | --- | --- |
-| Worktree lifecycle／Git 操作 | [Worktrunk](https://github.com/max-sixty/worktrunk/tree/abe78b3be719b9caff4efc155ad83e697c2202f7) · MIT OR Apache-2.0 | [`src/commands/worktree/`](https://github.com/max-sixty/worktrunk/tree/abe78b3be719b9caff4efc155ad83e697c2202f7/src/commands/worktree)、[`src/git/repository/worktrees.rs`](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/src/git/repository/worktrees.rs) | #9、#37、PR #28 |
+| Worktree lifecycle／Git 操作 | [Worktrunk](https://github.com/max-sixty/worktrunk/tree/abe78b3be719b9caff4efc155ad83e697c2202f7) · MIT OR Apache-2.0 | [`src/commands/worktree/`](https://github.com/max-sixty/worktrunk/tree/abe78b3be719b9caff4efc155ad83e697c2202f7/src/commands/worktree)、[`src/git/repository/worktrees.rs`](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/src/git/repository/worktrees.rs) | #9、#37；Rust 任務包 P5-1～P5-3（PR #68，尚未合併）；Node PR #28 僅作測試情境參考 |
 | Worktree 審批／Hooks／Merge | Worktrunk · 同上 | [`src/config/hooks.rs`](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/src/config/hooks.rs)、[`src/commands/merge.rs`](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/src/commands/merge.rs)、[`src/git/repository/integration.rs`](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/src/git/repository/integration.rs) | #49、#8 |
 | 建置產物跨 worktree 複製 | Worktrunk · 同上 | [`src/copy.rs`](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/src/copy.rs)、[hook reference](https://github.com/max-sixty/worktrunk/blob/abe78b3be719b9caff4efc155ad83e697c2202f7/skills/worktrunk/reference/hook.md) | #48 |
 | 工作台／Worktree 安全與 Windows | [Orca](https://github.com/stablyai/orca/tree/35eed0a05314feae84a855c8a5a8b7773b719a66) · MIT | [`src/main/git/worktrees/creation/worktree-add.ts`](https://github.com/stablyai/orca/blob/35eed0a05314feae84a855c8a5a8b7773b719a66/src/main/git/worktrees/creation/worktree-add.ts)、[`removal/worktree-removal-preflight.ts`](https://github.com/stablyai/orca/blob/35eed0a05314feae84a855c8a5a8b7773b719a66/src/main/git/worktrees/removal/worktree-removal-preflight.ts)、[`removal/windows-worktree-removal.ts`](https://github.com/stablyai/orca/blob/35eed0a05314feae84a855c8a5a8b7773b719a66/src/main/git/worktrees/removal/windows-worktree-removal.ts) | #30、#37、PR #45；不搬 Electron IPC |
@@ -108,7 +108,7 @@ artifactDigests, logRef, cacheMode, invalidationReason?
 
 ## 7. 分期驗收與工程時數估計
 
-以目前 `main` 偏 UI 原型、PR #28/#29 等仍在整合的狀態估計；以下**累計工程時數**包含 Agent 產出審查、跨模組整合、測試與安全修正，並非日曆時間或效能實測。
+以目前 `main` 偏 UI 原型加 ADR-0003 契約、Rust 後端實作尚未開始合併的狀態估計；以下**累計工程時數**包含 Agent 產出審查、跨模組整合、測試與安全修正，並非日曆時間或效能實測。
 
 | 階段 | 累計工程時數（估計） | Gate |
 | --- | ---: | --- |
@@ -120,10 +120,10 @@ artifactDigests, logRef, cacheMode, invalidationReason?
 
 ## 8. 開發順序與既有 PR 邊界
 
-1. **先處理現有 Rust/Tauri 與 ACP 結構，以及既有 #9/#10 PR**：確認正式 Host 的單一 Task/Evidence contract；不得在新 Issues 建第二套。
+1. **先落地 Rust/Tauri 與 ACP 結構（PR #68 的任務包）以及 #9/#10**：以 ADR-0003 為正式 Host 的單一 Task/Evidence contract；Node PR #28/#29 只提供測試情境，不得在新 Issues 建第二套。
 2. **#47**：先完成可測試的 Project Adapter + Affected Tasks + 安全驗證命令，不建立通用可編程 CI 平台。
 3. **#48**：先包裝既有語言原生快取與保存可查 evidence，再擴充跨 worktree、結果快取。
-4. **#49**：在不破壞既有 Task State Machine 的情況下增加整合佇列、合併後重驗證及 policy。
+4. **#49**：在不偏離 ADR-0003 Task State Machine 的情況下增加整合佇列、合併後重驗證及 policy。
 5. **#14/#41**：固定 fixture 做多 Agent baseline 對照，確認 GitHub remote required checks 與本地證據邊界。
 6. Jujutsu、遠端共享快取、Scion 式專屬 Source Control Server 屬後續探索，沒有前述量測需要就不做。
 

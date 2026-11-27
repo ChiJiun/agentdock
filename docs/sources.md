@@ -121,6 +121,8 @@ Any PR that copies third-party source, adds a direct dependency on one of the mo
 
 AgentDock retains four GitHub forks under ChiJiun. The tracking branches are scheduled for safe weekly synchronization on Sundays at 03:00 Asia/Taipei under [#53](https://github.com/ChiJiun/agentdock/issues/53). A sync may advance only the mapped upstream tracking branch by fast-forward. Divergence blocks the update and is reported with the source, time and commit IDs. The audit also records changes to LICENSE and NOTICE files.
 
+The forks are not a mirror or a backup: the owner excluded Git mirrors, git bundles, NAS, other platforms and off-site snapshots, and a fork does not keep upstream Issues, PRs or release assets. A sync never force-pushes and never overwrites AgentDock's own branches.
+
 Nx and Jujutsu remain pinned research references. Updating a fork does not change an AgentDock dependency, source pin or release. An integration requires a separate reviewed PR with exact provenance, license and dependency review, and tests.
 
 | Research upstream | Fixed commit | License | Retention |
