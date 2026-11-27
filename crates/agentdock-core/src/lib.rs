@@ -23,3 +23,5 @@ mod tests {
         assert_eq!(crate_version(), "0.1.0");
     }
 }
+
+pub fn   badly_formatted( ) -> u8 {   1 }
