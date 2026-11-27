@@ -1,0 +1,42 @@
+# cargo-deny configuration (P1-3, ADR-0002 supply-chain gate).
+# CI runs `cargo deny check` through EmbarkStudios/cargo-deny-action, which passes
+# `--all-features` by default (stricter than `all-features = false` below).
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+# Allow-list pending owner confirmation (ADR-0002 section 5: AgentDock's own license is undecided).
+# GPL / AGPL / LGPL / MPL are intentionally NOT allowed. If CI fails on one of them the owner
+# decides on an exception; never add it here on your own.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[licenses.private]
+ignore = true # workspace crates are publish = false / UNLICENSED
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path (no version). Only affects private
+# (publish = false) crates; crates.io dependencies with "*" are still denied.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
