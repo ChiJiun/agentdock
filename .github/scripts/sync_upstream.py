@@ -18,7 +18,7 @@ UPSTREAMS = (
 TRACKING_REF = "refs/heads/main"
 
 
-FETCH_TIMEOUT = 900
+FETCH_TIMEOUT = 300
 LICENSE_NAME = re.compile(
     r"^(?:licen[cs]es?|notices?|copying|copyright|unlicense|third[-_ ]party[-_ ]notices?)"
     r"(?:\.(?:md|txt|rst|markdown|html)|-(?!.*\.(?:py|[jt]sx?|rs|go|css|json|ya?ml|toml)$)[\w.-]+)?$",
@@ -49,6 +49,7 @@ def sync(upstream, record):
     if not (metadata.get("permissions") or {}).get("push"):
         raise ValueError("Credential lacks push access to the fork")
 
+    record["fork"] = fork
     source_url = record["upstream"]
     fork_url = f"https://github.com/{fork}.git"
     old = tracking_sha(fork)
@@ -66,9 +67,13 @@ def sync(upstream, record):
             f"{TRACKING_REF}:refs/sync/fork", cwd=directory, timeout=FETCH_TIMEOUT)
         run("git", "fetch", "--no-tags", "--filter=blob:none", source_url,
             f"{TRACKING_REF}:refs/sync/upstream", cwd=directory, timeout=FETCH_TIMEOUT)
-        if (run("git", "rev-parse", "refs/sync/fork", cwd=directory) != old
-                or run("git", "rev-parse", "refs/sync/upstream", cwd=directory) != candidate):
-            raise ValueError("Blocked: a tracking ref moved during fetch")
+        if run("git", "rev-parse", "refs/sync/fork", cwd=directory) != old:
+            raise ValueError("Blocked: fork tracking ref moved during fetch")
+        # Upstream may advance while fetching; use the commit actually fetched.
+        candidate = run("git", "rev-parse", "refs/sync/upstream", cwd=directory)
+        record["upstream_sha"] = candidate
+        if candidate == old:
+            return "up-to-date"
 
         ancestry = subprocess.run(
             ["git", "merge-base", "--is-ancestor", old, candidate],
@@ -87,6 +92,7 @@ def sync(upstream, record):
         current = tracking_sha(fork)
         if current != old:
             raise ValueError("Blocked: fork tracking ref changed during validation")
+        record["new_sha"] = None  # unknown until read back after the update
         run("gh", "api", "--method", "PATCH", f"repos/{fork}/git/refs/heads/main",
             "-f", f"sha={candidate}", "-F", "force=false", "--jq", ".object.sha")
         record["new_sha"] = tracking_sha(fork)
