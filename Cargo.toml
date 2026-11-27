@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/agentdock-core"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"   # license not decided (ADR-0002 §5); keep UNLICENSED and publish = false
+publish = false
+rust-version = "1.91"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
