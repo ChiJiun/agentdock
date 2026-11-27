@@ -97,7 +97,7 @@ artifactDigests, logRef, cacheMode, invalidationReason?
 
 ## 6. Fork 策略
 
-**來源保存採四個 GitHub Fork，每週安全同步。** Worktrunk、Orca、AgentBridge 與 Orkestra 依 #53 保存。Nx 與 Jujutsu 保留固定研究 Commit 與原始碼位置。同步後的 HEAD 不改變研究基準或正式依賴。
+**來源保存採四個 GitHub Fork，每週安全同步（同步排程規劃中，見 #53／PR #58，尚未合併）。** Worktrunk、Orca、AgentBridge 與 Orkestra 依 #53 保存。Nx 與 Jujutsu 保留固定研究 Commit 與原始碼位置。同步後的 HEAD 不改變研究基準或正式依賴。
 
 上述保存用 fork 之外，僅在以下條件成立時才在 fork 上維護 patch、提交 upstream PR 或移植：
 1. 已證明現有 CLI/SDK 無法支援必要能力，而且 PR 需維護上游核心的改動；
@@ -127,4 +127,4 @@ artifactDigests, logRef, cacheMode, invalidationReason?
 5. **#14/#41**：固定 fixture 做多 Agent baseline 對照，確認 GitHub remote required checks 與本地證據邊界。
 6. Jujutsu、遠端共享快取、Scion 式專屬 Source Control Server 屬後續探索，沒有前述量測需要就不做。
 
-本文件記錄來源和設計盤點。四個 GitHub Fork 及每週同步驗收由 #53 追蹤。程式碼整合、本地驗證及多 Agent 端到端功能各有獨立的實作與驗收項目。
+本文件記錄來源和設計盤點，未執行任何上游程式碼，也未驗證本地整合或多 Agent 端到端功能。四個 GitHub Fork 及每週同步驗收由 #53 追蹤。程式碼整合、本地驗證及多 Agent 端到端功能各有獨立的實作與驗收項目。
