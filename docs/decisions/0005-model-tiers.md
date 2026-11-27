@@ -27,7 +27,7 @@ Status: Proposed。擁有者核准 PR 後才轉為 Accepted；等級對應表與
 
 - `parallel` 必須是獨立的開關，UI 要明示「會開多個 agent、成本倍增」，**不得藏在 T4 裡**。Codex 的 Ultra、Claude Code 的 `ultracode` 屬於編排軸，不是 T4 的同義詞。
 - 提高 tier 不會提高 permission。外部來源（任務包、issue 內容、agent 輸出）只能要求降級，不能要求升級；引擎不支援某權限模式時不得靜默放寬（沿用 #8／#40 與研究文件的權限等級借鏡項目）。
-- **repo 內的來源不能自動生效。** 任務包（`docs/tasks/`）、issue 內容與 agent 輸出都在 agent 可修改或不可信的範圍，其中的 `tier`、`orchestration`、`permission` 只是**給使用者看的建議**，套用前必須由使用者在 UI 確認。repo 來源只能讓設定往較低成本、較低權限、`single` 的方向走；要升高等級、開 `parallel` 或放寬權限，一律需要使用者明確操作。這條同時適用於 `tier` 與 `orchestration`，不只權限。
+- **repo 內的來源不能自動生效。** 任務包（`docs/tasks/`）、issue 內容與 agent 輸出都在 agent 可修改或不可信的範圍，其中的 `tier`、`orchestration`、`permission` 只是**給使用者看的建議**，**任何方向**都必須由使用者在 UI 確認後才套用。repo 來源不能讓 UI 預設選到比目前更高的等級、更高成本、`parallel` 或更寬的權限；使用者要升高這些，一律需要明確操作。這條同時適用於 `tier` 與 `orchestration`，不只權限。
 - 驗證等級（例如 [#70](https://github.com/ChiJiun/agentdock/issues/70) 的 L0–L4）是另一個維度，與 `T1`–`T4` 無關，兩者不得混用。
 - 權限軸的細節（各 agent 原生模式映射）不在本 ADR 範圍，由研究文件中的建議新 issue「統一權限等級與各 agent 原生模式映射」處理。
 
@@ -64,9 +64,10 @@ Fable 系列、Codex 的 Sol／Astra／Luna／Terra 在研究中沒有可靠的�
 | 欄位 | 值 | 說明 |
 | --- | --- | --- |
 | `tier` | `T-default`、`T1`～`T4` | 能力等級 |
-| `role` | `scout`、`implementer`、`reviewer`、`lead` | `scout` 約等於 PRD 的 explorer、`implementer` 約等於 executor；`lead` 是規劃角色；PRD 的 advisor、progress 在 #13 定案時再對應 |
+| `model_role` | `scout`、`implementer`、`reviewer`、`lead` | 模型選擇用的角色。**不是**契約的 `SessionRole`（`primary`／`implementation`／`review`／`repair`／`explore`／`subtask`，ADR-0003 schema，session 的 `role` 仍以它為準）。對照：scout→`explore`、implementer→`implementation`、reviewer→`review`；`lead`（規劃）在 `SessionRole` 沒有對應值，列為 open question 6。`scout` 約等於 PRD 的 explorer、`implementer` 約等於 executor；PRD 的 advisor、progress 在 #13 定案時再對應 |
 | `orchestration` | `single`、`parallel` | 預設 `single` |
 | `permission` | 建議的權限上限 | 預設 Ask |
+| `min_tier` | 選填，`T1`～`T4` | 最低可接受等級；解析結果低於它時**停下來問使用者**，不自動降級（例如 #68 的 St 任務包要求不為省錢降級） |
 | `reason` | 一句話 | 為什麼選這一級（例如「規則表要逐條對照 schema」） |
 
 推論：同一個任務包通常有兩列——implementer 一列、reviewer 一列。這比單一記號更能表達「實作者與 reviewer 不同級」。
@@ -105,7 +106,9 @@ AgentDock 不得在使用者不知情下替 session 選模型。若日後做任�
 - 只在能量測時顯示 token 與（API key 情境下的）金額。
 - 訂閱登入時顯示「額度未知」，不換算成假的金額或剩餘額度；與 [ADR-0003 §7](0003-task-session-event-contracts.md) 與 PRD 一致。#43 的上限與「unavailable 而非 0」規則直接適用。
 
-### 10. 角色預設（建議，使用者可改）
+### 10. 角色預設（僅為建議，使用者採用後才生效）
+
+下表只是 UI 可以顯示的**建議**。使用者在設定頁或建立 session 時明確採用（並寫入事件）之前，一律是 `T-default`；表中「需使用者明確選擇」的意思適用於整張表，不只 `T4`。
 
 | 角色 | 建議預設 | 理由（推論） |
 | --- | --- | --- |
@@ -159,15 +162,16 @@ AgentDock 不得在使用者不知情下替 session 選模型。若日後做任�
    1. 讀 adapter 的原始碼與 README（鎖定要支援的版本與 commit），搜尋 `configOptions`、`set_config_option`、`session/set_model`、`session/set_mode`，以及 `session/new` 回應中的 `models`／`modes` 欄位。
    2. 在擁有者已登入的機器上，用相容性測試（[PR #68](https://github.com/ChiJiun/agentdock/pull/68) 的 P3-6 規劃的 opt-in E2E 可重用，合併前先用一次性的小腳本）對兩個 adapter 各送 `initialize` 與 `session/new`（工作目錄用空的暫存資料夾），逐字記錄回應中與模型、effort、mode 相關的欄位（先遮蔽 token 與路徑）。
    3. 對一個一次性 session 以列出的值呼叫 `session/set_config_option`，確認有沒有 `config_option_update`、之後的 `session/prompt` 是否生效；不要用真實訂閱額度跑長任務。
-   3b. 一律以 adapter 的回報（回應欄位與 `config_option_update`）為準，不得用「問模型你是誰」的方式確認模型有沒有換。
-   4. 結果寫入 [acp-capabilities.md](../contracts/acp-capabilities.md) 的相容性紀錄（或 #6／#42 的矩陣）；未查證前，UI 一律顯示「無法由 AgentDock 設定」。
+   4. 一律以 adapter 的回報（回應欄位與 `config_option_update`）為準，不得用「問模型你是誰」的方式確認模型有沒有換。
+   5. 結果寫入 [acp-capabilities.md](../contracts/acp-capabilities.md) 的相容性紀錄（或 #6／#42 的矩陣）；未查證前，UI 一律顯示「無法由 AgentDock 設定」。
    此項建議以新 issue 追蹤（見研究文件的「建議新 issue」），在查證前本 ADR 不應轉為 Accepted。
 2. 四個等級與命名是否足夠？`T4` 是否需要每次使用者確認（因為成本很高）？
 3. 對應表放在使用者層級設定檔，還是整合進能力快照？是否隨附預設值？
 4. 事件型別與契約增補（`requested_tier`／`effective_tier`、降級、中途改動）由誰在何時加入 ADR-0003 的 schema？
 5. 「reviewer 不低於 implementer」是預設還是硬性規則？同廠商、不同 session 算不算獨立，是否讓使用者自行設定？
-6. 任務包欄位的語法（表格或 YAML front matter）與「#68 合併後改寫任務包」由誰負責。
-7. 若某 agent 的 effort 值本身包含編排（例如 Codex Ultra），UI 如何防止使用者在等級選擇器裡誤選？（草案：只在 `orchestration=parallel` 開關下才可選，並顯示成本倍增警告。）
+6. `lead`（規劃）在契約的 `SessionRole` 沒有對應值：要新增 role，還是只在 `model_role` 使用？
+7. 任務包欄位的語法（表格或 YAML front matter）與「#68 合併後改寫任務包」由誰負責。
+8. 若某 agent 的 effort 值本身包含編排（例如 Codex Ultra），UI 如何防止使用者在等級選擇器裡誤選？（草案：只在 `orchestration=parallel` 開關下才可選，並顯示成本倍增警告。）
 
 ## Acceptance (before Accepted)
 

@@ -211,10 +211,10 @@ Windsurf／Devin 這次只查到 Codemaps 由 SWE-1.5 與 Claude Sonnet 4.5 驅�
 |---|---|---|
 | `docs/research/agentdock-capability-map.md`、`docs/research/local-first-multiagent-sdlc.md`（PR #57） | 引用本文件的 H1–H40 與 NI-H1–H6，把缺口列入能力地圖；模型路由段落引用 ADR-0005 | PR #57 正在改 |
 | `docs/roadmap.md`（PR #57） | M5 Cost／Advisor 引用 ADR-0005；alpha 的狀態、權限、能力探索項目對照 H1–H11 | PR #57 正在改 |
-| `docs/PRD.md`（PR #57） | 「角色式模型設定」改以 ADR-0005 的 `tier`／`role` 描述；加入「權限等級映射」「全域並行上限」 | PR #57 正在改 |
+| `docs/PRD.md`（PR #57） | 「角色式模型設定」改以 ADR-0005 的 `tier`／`model_role` 描述；加入「權限等級映射」「全域並行上限」 | PR #57 正在改 |
 | `docs/architecture.md`（PR #57） | External ACP agents 段落補「模型等級由執行期能力表解析」 | PR #57 正在改 |
 | `docs/sources.md`（PR #57） | 納入本文件引用的新來源（各 harness 的官方文件與 repo 連結） | PR #57 正在改 |
-| `docs/tasks/README.md` 與各任務包 §10（PR #68） | 以 `tier`／`role` 欄位取代 `S`／`S/R`／`St`；對應見 ADR-0005 | PR #68 尚未合併，**不得在本 PR 修改** |
+| `docs/tasks/README.md` 與各任務包 §10（PR #68） | 以 `tier`／`model_role` 欄位取代 `S`／`S/R`／`St`；對應見 ADR-0005 | PR #68 尚未合併，**不得在本 PR 修改** |
 | `docs/contracts/acp-capabilities.md`、schema | 若 NI-H1 查證有結果：加入 model／effort 能力與 `config_option_update` 事件型別 | 契約變更需獨立 PR 與擁有者核准 |
 | `docs/ux/*` | 模型選擇器、權限等級、決策收件匣的鍵盤規則與 H1–H3 對齊（#56） | UX 規格另有 owner |
 
