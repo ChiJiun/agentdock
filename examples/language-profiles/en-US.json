@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "English",
+  "uiLocale": "en-US",
+  "workflowLocale": "en-US",
+  "artifactLocale": "inherit",
+  "outputs": {
+    "codeComments": "preserve-original"
+  },
+  "skills": {
+    "mode": "preserve-source-with-overlay",
+    "allowModifySource": false
+  }
+}

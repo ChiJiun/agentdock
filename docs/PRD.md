@@ -43,6 +43,11 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 
 ## 6. Functional requirements and versions
 
+### All versions — full-workflow language control (zh-TW / en-US)
+
+AgentDock must support **switching the language of the entire developer-facing workflow**: UI, agent explanations, task plans, advisor/subagent/reviewer prompts, skill output styles, GitHub PR/Issue narratives, CI explanations and Session Sentinel updates. This is separate from source code language, which should not change because a UI locale changed. Initial locales: Traditional Chinese (Taiwan, `zh-TW`) and English (`en-US`), with global/project/session overrides and an optional explicit per-task locale. Apply only through supported, trusted context APIs; do not silently rewrite external `SKILL.md`, `CLAUDE.md`, `AGENTS.md` or opaque vendor system prompts. Expose a capability-based `owned` / `confirmed` / `best-effort` / `unsupported` status per agent, and never report a language instruction as applied before the adapter confirms it. Resolution, policy snapshots, overlay composition and capability status belong in the Rust backend ([ADR-0004](decisions/0004-rust-primary-backend.md)); the React frontend only renders strings and the settings UI (PR #24 merged the UI part; the backend part is not implemented and has no task packet yet). Requirements and safety tests: [Language Policy](architecture/language-policy.md), [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
+
+
 ### MVP — usable, safe desktop client
 
 - Project picker, persisted recent project list, git branch/status.
@@ -73,6 +78,7 @@ Design pattern: left sidebar / primary session / collapsible right evidence pane
 - Event-driven background status reporting; polls should not incur model fees.
 - Token/cache statistics and controllable API budgets; subscription quotas marked unknown.
 - Scheduler, bounded concurrency, resume on provider throttling, explicit task deadlines.
+- Orchestration beyond `single` follows the orchestration axis of [ADR-0005](decisions/0005-model-tiers.md) (an explicit `parallel` switch with a visible cost warning; no hidden routing; automatic escalation only as the bounded V2 option). [Copilot Fusion research](research/copilot-fusion.md) (Single, Cascade, Critique) is background for that axis. Provider-owned Fusion tiers may be offered only through a supported SDK adapter and labelled provider-managed. Do not claim vendor internals are configurable.
 - Objective benchmarks comparing baseline with orchestrated agent configurations.
 
 ## 7. Non-functional requirements

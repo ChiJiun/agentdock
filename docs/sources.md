@@ -37,8 +37,11 @@ Snapshot: 2026-11-17 (source audit for [Issue #1](https://github.com/ChiJiun/age
 | [octos-org/octos](https://github.com/octos-org/octos) | `d1863004f8c09c4a330117db9fc32f017ff4fd56` (2026-11-16) | Apache-2.0 | `LICENSE` | Research only (remote/durable workflow) |
 | [contextbridge/aether](https://github.com/contextbridge/aether) | `b847dc863beddf3145a2e0bd8617bbb834e1bc31` (2026-11-14) | MIT, "Copyright (c) 2026 Joshua Carver" | `LICENSE` | Research only (native agent architecture) |
 | [Adulari/forge](https://github.com/Adulari/forge) | `45e984c927d029729c476e1efa4d09d070dfeb28` (2026-11-13) | **AGPL-3.0-only** (`Cargo.toml`) | `LICENSE` (GNU AGPL v3) | **Excluded** from implementation input; see licensing section |
+| [microsoft/copilot-sdk](https://github.com/microsoft/copilot-sdk) (formerly `github/copilot-sdk`; the GitHub API redirects the old name) | `bc4f9a19d190021c27554d3c1d95121ab61e8d43` (2026-11-17) | MIT, "Copyright GitHub, Inc." (SDK source only) | `LICENSE` (no `NOTICE`) | **Research only** ([Issue #17](https://github.com/ChiJiun/agentdock/issues/17)): candidate SDK-backed Copilot runtime; see the Copilot section below |
 
 Notes:
+
+- The `microsoft/copilot-sdk` row was added after the Issue #1 audit, by the Copilot Fusion research ([research/copilot-fusion.md](research/copilot-fusion.md)), and was checked less deeply than the other rows: only the full SHA, the root listing at that SHA, the first lines of `LICENSE` and `rust/README.md` were read through the GitHub REST API on 2026-11-17. The repository was **not** fetched or built, no `Cargo.lock` closure or advisory lookup was done, and the license and redistribution terms of the Copilot runtime/CLI artifacts that the SDK bundles or downloads were **not** reviewed. It is not covered by the per-module decisions in ADR-0002.
 
 - The Goose default branch moved to `75ef30fbab5d0e627d09a870df2f962c5691ee2f` during the audit; this inventory keeps the earlier `58fa06b1…` snapshot that the original planning document recorded. Re-pin before any Goose-derived work.
 - The SDK snapshot `6a4a95ca…` is 3 commits ahead of the `v5.3.0` release. A dependency must use the **published crate** (`agent-client-protocol 5.3.0`, crates.io checksum `956559bd2dfddb5c8bc86792b1669bd2611fb4bd2c31865e4b8165ab6ea63109`, MSRV 1.88.0), not the unreleased tip. One of those 3 commits is `6a4a95ca` "fix(acp): keep the connection open when an incoming line is not valid UTF-8 (#504)": **5.3.0 ends the whole connection on a line that is not valid UTF-8**. AgentDock pins 5.3.0 with this known issue and contains it in its own line framing (lossy UTF-8 decoding before the SDK's `Lines` transport), then moves to the first release that includes #504; see ADR-0002 section 1.
@@ -71,6 +74,11 @@ Decision vocabulary (from Issue #1): **dependency** (consume a published package
 | Octos `crates/octos-store/` | Apache-2.0 | 9 Rust files (~100 KB); `redb` storage | **Research only** (AgentDock uses SQLite) |
 | Aether `crates/aether-core/` (crate `aether-agent-core`) | MIT | 75 Rust files (~414 KB); internal deps `aether-auth`, `aether-llm`, `aether-mcp-utils`, `aether-utils`; `rmcp` | **Research only** |
 | Forge `crates/forge-core/`, `crates/forge-provider/` | AGPL-3.0-only | 345 + 65 Rust files (~5.39 MB + ~1.42 MB); `forge-core` depends on 12 internal `forge-*` crates | **Excluded** (no code, no line-by-line adaptation) |
+| Copilot SDK `rust/` (crate and bundled runtime artifacts) | MIT for the SDK source; bundled Copilot runtime/CLI terms **not reviewed** | Not measured. `rust/README.md` documents default `bundled-cli` / `bundled-in-process` features that embed or load a separate Copilot runtime | **Research only**; no dependency until the Issue #17 ADR and a separate runtime licensing/redistribution review |
+
+## Additional research: Copilot Fusion and SDK
+
+The [Copilot Fusion research](research/copilot-fusion.md) compares Single, Cascade and Critique routing, vendor-managed Standard/High/Max tiers, cache-aware escalation and the public Rust Copilot SDK. This is a candidate **external/SDK-backed harness**, not an Acpira component and not proof that the proprietary Copilot runtime can be copied or modified. The SDK embeds or downloads a separately supplied runtime binary whose redistribution conditions must be checked before packaging. Adding it as a dependency would need a PR that follows the migration template below and its own decision record (an Issue #17 deliverable); ADR-0002 does not authorize it.
 
 ## Imported source files
 
@@ -104,6 +112,17 @@ Any PR that copies third-party source, adds a direct dependency on one of the mo
 - GitHub Advisory Database: no advisories for `agent-client-protocol` or `agent-client-protocol-schema`; no published repository advisories for `agentclientprotocol/rust-sdk` or `hotic/acpira`.
 - Tauri: GHSA-7gmj-67g7-phm9 (origin confusion lets remote pages call local-only IPC, affects `tauri` 2.0.0–2.11.0, fixed in 2.11.1). AgentDock must require `tauri >= 2.11.1`; Acpira's desktop lock has `tauri 2.12.5`.
 - Not performed: `cargo audit`, `cargo deny check`, `npm audit` against any candidate. These belong in AgentDock CI from M1.
+
+## Model orchestration research references
+
+- [GitHub Copilot Fusion (GA, 2026-10-28)](https://github.blog/changelog/2026-10-28-route-and-orchestrate-models-with-github-copilot-fusion/) — three dynamic execution patterns; this is not a standalone open-source coding harness.
+- [Official Copilot Fusion runtime and cost documentation](https://docs.github.com/en/copilot/concepts/models/copilot-fusion) — per-prompt workflow routing, cache-aware switching, scoped reviewer context, provider health and per-leg costs.
+- [GitHub Project HydraFusion technical article](https://github.blog/ai-and-ml/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) — bounded legs, independent read-only critique, no patch on failed validation, and complete cost attribution.
+- [Claude Code Advisor](https://code.claude.com/docs/en/advisor) — experimental server-side consultation with full transcript; separate from multi-model orchestration.
+- [Claude Code custom subagents](https://code.claude.com/docs/en/sub-agents) — scoped context, independent model/tool restrictions and usage accounting.
+- [AgentDock research synthesis and proposed design](research/model-orchestration-claude-advisor-copilot-fusion.md).
+
+These are design references, **not source-code migration candidates**. Do not copy GitHub/Anthropic proprietary internals; use public APIs and ACP, preserving each external runtime's authority.
 
 ## UX and protocol references
 

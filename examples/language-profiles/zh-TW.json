@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "name": "繁體中文（臺灣）",
+  "uiLocale": "zh-TW",
+  "workflowLocale": "zh-TW",
+  "artifactLocale": "inherit",
+  "outputs": {
+    "plan": "inherit",
+    "review": "inherit",
+    "issue": "inherit",
+    "pullRequest": "inherit",
+    "commitMessage": "en-US",
+    "documentation": "inherit",
+    "codeComments": "preserve-original",
+    "sessionSummary": "inherit",
+    "notification": "inherit",
+    "skillExplanation": "inherit"
+  },
+  "skills": {
+    "mode": "preserve-source-with-overlay",
+    "allowModifySource": false
+  }
+}

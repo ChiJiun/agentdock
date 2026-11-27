@@ -27,11 +27,17 @@ flowchart TB
 
 The UI does not launch arbitrary shell commands. It calls typed Rust commands. All tool execution, approvals, task scopes and session transitions are mediated by the relevant backend boundary.
 
+## Multilingual instruction and context boundary
+
+The Rust host (Tauri 2 and `crates/*`; [ADR-0004](decisions/0004-rust-primary-backend.md)) will own a configurable [Language Policy / Context Composition Layer](architecture/language-policy.md): it resolves effective `zh-TW` / `en-US` preferences at Global → Project → Session → Task scopes, snapshots the policy version, composes bounded language overlays and records the capability status. The React frontend only renders UI strings and the settings UI through typed commands (`src/i18n/`, merged by PR #24, currently resolves preferences in the browser as a preview). Distinguish deterministic `uiLocale`, response `workflowLocale`, and generated-prose `artifactLocale`; initially support `zh-TW` and `en-US`. When an external ACP/SDK agent advertises compatible instruction capabilities, pass the effective language preference without replacing hidden system prompts or mutating Skills. Unavailable capabilities must be disclosed; raw tool output, code, commands, repository-specific instructions and backend permission rules remain intact. Session Sentinel's UI language updates must not trigger paid model calls. None of the backend part is implemented yet. See [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
+
 ## Runtime split
 
 **External ACP agents:** Claude Code, Codex, Octomind, etc. remain owners of their proprietary/native prompt loops, model usage, context, internal tools and authentication. ACP capabilities are negotiated per adapter; no promise to override opaque model routing.
 
 **AgentDock orchestration:** project/worktree selection, task history, UI timeline, approvals for host-controlled operations, independent review, CI flow, work scheduling and remote connectivity.
+
+**Copilot SDK-backed adapter (research only):** evaluate the official MIT-licensed Rust Copilot SDK as a distinct integration path for the separately distributed Copilot Runtime and Copilot Fusion tiers. This does not grant control over Fusion's internal model orchestration or permission to copy the proprietary runtime source. Fusion tiers are provider-managed settings, not AgentDock model tiers ([ADR-0005](decisions/0005-model-tiers.md)). See [Copilot Fusion research](research/copilot-fusion.md).
 
 **Optional native agent:** future extension only if ACP agents cannot satisfy cost routing/observability; never a prerequisite for the MVP.
 

@@ -17,14 +17,24 @@ Status: proposal; not a promise of completion dates.
 ## Initial work order
 
 1. License/provenance / precise upstream migration decision.
-2. Define UX states + design tokens and screen map.
+2. Define UX states + design tokens and screen map. Language: the frontend preview already switches `zh-TW`/`en-US` (PR #24, `src/i18n/`); workflow and artifact language for task/skill/prompt outputs follows the [Language Policy](architecture/language-policy.md) and belongs in the Rust backend ([ADR-0004](decisions/0004-rust-primary-backend.md)), which no alpha task packet covers yet. The [UX spec](ux/README.md) decision 10 ("UI copy in English first") predates PR #24 and has not been reconciled (Language Policy section 11).
 3. Rust & Tauri scaffold with typed front/back boundary. The separate UI-foundation branch prototypes Session Sentinel and keyboard navigation with in-memory data; real backend monitoring is tracked in [Issue #15](https://github.com/ChiJiun/agentdock/issues/15).
 4. ACP mock first and supported real adapter compatibility matrix.
 5. Storage and approval gates before unrestricted real-agent tools.
 6. Worktree and change review.
 7. GitHub integration with human confirmation before pushes/merges.
 8. Remote worker after reliable local tasks.
-9. Provider routing & advanced token optimizations after metrics.
+9. Provider routing & advanced token optimizations after metrics. Model tiers, the orchestration axis and the permission axis are defined by [ADR-0005](decisions/0005-model-tiers.md); the [Copilot Fusion research](research/copilot-fusion.md) is background for the orchestration axis (Single/Cascade/Critique, cache-aware context, independent review), not a second tier system. Prototype the optional Rust Copilot SDK adapter separately before considering deeper runtime reuse.
+
+## Language release gate
+
+These are targets, not achieved results. Backend items are implemented in Rust ([ADR-0004](decisions/0004-rust-primary-backend.md)); no alpha task packet in `docs/tasks/` covers them yet.
+
+- UI can switch between `zh-TW` and `en-US` without reloading agent state or triggering LLM calls.
+- Owned role templates and simulated Session Sentinel summaries use the selected workflow locale.
+- External ACP/SDK language policy is only reported as applied if the adapter confirms compatible support; prompt/Skill overrides are never assumed.
+- Source code, raw CI logs, commands and original Skill files remain unchanged by language switching.
+- A language preference change never changes authorization/approval rules.
 
 ## MVP Definition of Done
 
