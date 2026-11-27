@@ -1,6 +1,6 @@
 # P3-5: Session runtime (ACP events into the store: coalescing, output limits, streaming redaction, raw I/O artifacts)
 
-> **繁中摘要**：分兩個 PR。**P3-5a**：`agentdock-core::output` 純函式輸出治理——同一回合同一 channel 的 chunk 在 100 ms 或 16 KiB 內合併、每回合 8 MiB／20,000 筆與每則 1 MiB 上限、保留尾端 256 字元做跨段 redaction（含跨段私鑰）。**P3-5b**：建立 `agentdock-orchestrator` crate，`SessionRuntime` 把 P3-4 的 `AcpEvent` 依契約順序寫成 session 事件（created → capabilities_detected → idle、prompt_submitted 與 idle→active 同交易、turn_ended 等）；raw tool I/O 只存成 app data 目錄下內容定址的 artifact；permission 交給 `PermissionHandler`（P4-3），事件迴圈內不 await。`SessionConfig` 帶 `role` 與 `parent_session_id`（reviewer 子 session 需要）。模型等級：P3-5a 一般模型；P3-5b 強模型實作＋審查。
+> **繁中摘要**：分兩個 PR。**P3-5a**：`agentdock-core::output` 純函式輸出治理——同一回合同一 channel 的 chunk 在 100 ms 或 16 KiB 內合併、每回合 8 MiB／20,000 筆與每則 1 MiB 上限、保留尾端 256 字元做跨段 redaction（含跨段私鑰）。**P3-5b**：建立 `agentdock-orchestrator` crate，`SessionRuntime` 把 P3-4 的 `AcpEvent` 依契約順序寫成 session 事件（created → capabilities_detected → idle、prompt_submitted 與 idle→active 同交易、turn_ended 等）；raw tool I/O 只存成 app data 目錄下內容定址的 artifact；permission 交給 `PermissionHandler`（P4-3），事件迴圈內不 await。回合取消、`shutdown(outcome)`、agent 意外結束與 protocol error 的事件順序、actor 與 session `outcome` **全部以 P4-3 §5A 的單一狀態表為準**，本包只實作其中屬於 `SessionRuntime` 的列。`SessionConfig` 帶 `role` 與 `parent_session_id`（reviewer 子 session 需要）。模型等級：P3-5a 一般模型；P3-5b 強模型實作＋審查。
 
 Issues: #6, #7 | Gate (#51): G2 (output streaming), G3 (complete, redacted event log) | Model tier: **P3-5a standard model; P3-5b strong model implements and reviews**
 
@@ -13,16 +13,16 @@ Two PRs:
 
 Goals:
 
-- This packet writes every session-level event: `session.created` (S01), `session.capabilities_detected`, `session.state_changed` (S02, S03, S05, S08, S09, S12, S13, S15, S22; on shutdown also S06, S11, S18, S21, S25 and the shutdown-kill S16 — §5 step 9), `session.prompt_submitted`, `session.message_delta`, `session.tool_call`, `session.plan_updated`, `usage.reported`, `session.output_limited`.
+- This packet writes every session-level event: `session.created` (S01), `session.capabilities_detected`, `session.state_changed` (S02, S03, S05, S06, S08, S09, S11, S12, S13, S15, S18, S19, S21, S22, S24 — which of them when is P4-3 §5A), `session.prompt_submitted`, `session.message_delta`, `session.tool_call`, `session.plan_updated`, `usage.reported`, `session.output_limited`.
 - Streaming text is coalesced per contract: chunks of the same turn and channel merge into one `session.message_delta` within 100 ms or 16 KiB (whichever first), recording `coalesced_chunks` (`events.md` line 100).
 - Limits: per turn 8 MiB of text or 20,000 events, per message 1 MiB. Exceeding writes `session.output_limited`; default action `truncated` (keep reading, stop storing text); adapter config can choose `turn_cancelled` (send `session/cancel`) (`events.md` line 101).
 - Every external text passes the P2-7 `Redactor` before writing; secrets split across chunks are caught too (§5 P3-5a step 3).
 - `rawInput` / `rawOutput` are stored only as redacted artifact files (`raw_io`); events hold only an `ArtifactRef` (`events.md` line 121).
 - `session/request_permission` goes to the `PermissionHandler` trait (P4-3 implements it); this packet neither classifies nor approves.
 - Sessions carry a `role` (schema `SessionRole`: `primary`, `implementation`, `review`, `repair`, `explore`, `subtask`; alpha uses `primary`, `repair` and `review`) and an optional `parent_session_id`; `session.created` requires `role` (schema `SessionCreatedPayload`). P8-3 launches the coding session with `role: primary` (`repair` when relaunched for a repair round) and the reviewer sub-session with `role: review` and the coding session as parent. There is **no** `agent` role.
-- Turn cancel and shutdown are defined end to end here (§5 steps 8–9): the pending approval is persisted as cancelled **before** `session/cancel` is sent, and a host-initiated shutdown ends in `closed` without a `disconnected` state and without a task interruption.
+- Turn cancel, host shutdown, agent exit and protocol error are defined end to end in **P4-3 §5A** (the single state table: events, order, actors, session `outcome`). This packet implements the rows owned by `SessionRuntime` (§5 steps 5, 8, 9) and defines nothing of its own: the pending approval is persisted as cancelled **before** `session/cancel` is sent, and a host-initiated shutdown ends in `closed` (outcome = the `shutdown` argument) without a task interruption.
 
-Non-goals: approval events, S10 / S14 / S23 and the permission-wait S16 (P4-3), task transitions (P8-3), transcript compaction and retention (not in alpha; README "not covered"), reattach (S20, not in alpha).
+Non-goals: approval events, S10 / S14 and every session transition out of `awaiting_permission` except S15 (S16, S23: P4-3, §5A rule 1), task transitions (P8-3), the permission queue (P3-4 only), transcript compaction and retention (not in alpha; README "not covered"), reattach (S20, not in alpha).
 
 ## 2. Prerequisites and parallel work
 
@@ -103,17 +103,19 @@ impl ArtifactStore {
 pub type BoxFut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 /// Object-safe on purpose (native `async fn` in traits is not usable as `dyn`); no async-trait crate.
 pub trait PermissionHandler: Send + Sync {
-    /// Called for each forwarded permission. Implementation (P4-3) persists approval.requested + S10,
-    /// later persists approval.resolved (+ S14 when approved/denied/expired), and only then calls
-    /// AcpConnection::respond_permission. S15 is NOT written by P4-3: this packet writes it when the turn ends.
+    /// Called for each forwarded permission. Implementation (P4-3) persists approval.requested + S10 (only when the
+    /// session is `active`, else it refuses, §5A row C5), later persists approval.resolved (+ S14 when
+    /// approved/denied/expired), and only then calls AcpConnection::respond_permission. S15 is NOT written by P4-3:
+    /// this packet writes it when the turn ends.
     fn on_permission(&self, ctx: PermissionContext) -> BoxFut<'_>;
-    /// Called by SessionRuntime::cancel BEFORE session/cancel is sent. P4-3 (cancel_for_session) persists
-    /// approval.resolved{cancelled} + T-back for a pending approval of this session, then answers the agent
-    /// `cancelled`, and answers never-recorded queued requests `cancelled`. Resolves when that is done.
+    /// Called by SessionRuntime::cancel BEFORE session/cancel is sent: P4-3 `cancel_for_session` = §5A row C2 steps 1–2
+    /// (persist approval.resolved{cancelled} + T-back, then answer the ticket `cancelled`; the facade drops its queue).
+    /// Resolves when that is done.
     fn on_turn_cancel(&self, session_id: SessionId) -> BoxFut<'_>;
-    /// Called once when the connection closed while the session may hold a pending approval.
-    /// Called only when the session is awaiting_permission. P4-3 writes S16 → invalidated → T20 (process exit)
-    /// or cancelled → S23 → T20 (protocol error / line too long), per the P4-3 §5 step 4 table.
+    /// Called for EVERY close of the connection while the session is awaiting_permission (an approval pending or
+    /// already resolved by a turn cancel), and with CloseReason::ShutDown on the shutdown-timeout path. P4-3 writes
+    /// S16 / S23 and the approval events per §5A rows C3, C4, A2, A4, H3. If it finds the session no longer
+    /// awaiting_permission (the user's S14 landed first) it writes nothing and this packet re-reads and writes S12/S13.
     fn on_session_closed(&self, session_id: SessionId, reason: agentdock_acp::CloseReason) -> BoxFut<'_>;
 }
 pub struct PermissionContext {
@@ -131,29 +133,42 @@ pub struct SessionConfig {
     pub command: agentdock_process::AgentCommand, pub cwd: std::path::PathBuf, // cwd already checked by P4-1
     pub limits: OutputLimits, pub on_limit: LimitAction,
     pub known_secrets: Vec<String>,          // auth env values for this adapter (never logged)
+    pub timeouts: agentdock_acp::AcpTimeouts, // Default (30 s, 30 s, 10 s); tests shorten `cancel_ack`
+    pub supersedes_session_id: Option<SessionId>, // the replacement session of a pause / crash / agent exit (§5A row H9)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptOrigin { User, Orchestrator } // maps to the actor of session.prompt_submitted
 
-pub struct SessionRuntime { /* Arc<Store>, Arc<ArtifactStore>, Arc<AcpConnection>, Redactor, handler */ }
+pub struct SessionRuntime { /* Arc<Store>, Arc<ArtifactStore>, Arc<AcpConnection>, Redactor, handler, closing flag */ }
+
+/// Pure, table-driven (unit test `close_transition_table`): what the event loop does for `Closed{reason}` when the
+/// session is in `state` and `closing` is false. §5A rows A1, A3, C3, C4.
+pub(crate) enum CloseAction { Write(SessionTransitionId /* S08 S12 S19 | S13 S22 S24 */), CallHandler, Nothing }
+pub(crate) fn close_transition(state: SessionState, reason: &agentdock_acp::CloseReason) -> CloseAction;
 impl SessionRuntime {
     /// S01 session.created (persist_then_act; role and parent from cfg) → spawn+initialize → capabilities_detected
     /// → session/new → S02 idle. On spawn/initialize/new failure: S03 starting → failed (launch_failed) with a redacted Failure.
+    /// `abort` flips to `true` when P8-3 cancels or pauses the task during launch (§5A row H7): the process is stopped
+    /// and S03 starting → failed (launch_failed) is written with outcome `cancelled`.
     pub async fn launch(store: Arc<Store>, artifacts: Arc<ArtifactStore>, cfg: SessionConfig,
-                        handler: Arc<dyn PermissionHandler>) -> Result<Self, OrchestratorError>;
+                        handler: Arc<dyn PermissionHandler>,
+                        abort: tokio::sync::watch::Receiver<bool>) -> Result<Self, OrchestratorError>;
     /// S05 idle → active + session.prompt_submitted (one transaction, persist_then_act), then ACP prompt.
     /// Resolves after S09 active → idle (turn_ended, stop_reason) is committed. Returns the turn id too.
     pub async fn prompt(&self, text: &str, origin: PromptOrigin) -> Result<(TurnId, agentdock_acp::StopReason), OrchestratorError>;
-    /// User cancel of the current turn: `handler.on_turn_cancel` first (persist), then AcpConnection::cancel. §5 step 8.
+    /// User cancel of the current turn: `handler.on_turn_cancel` first (persist), then AcpConnection::cancel
+    /// (§5A rows C1, C2; §5 step 8).
     pub async fn cancel(&self) -> Result<(), OrchestratorError>;
-    /// Host-initiated close (P8-3 phase_exit, reviewer done, app exit). Ends in `closed`; never writes S08/S12 and
-    /// never reports a closed session to P8-3. Err(OrchestratorError::ApprovalPending) if an approval of this session
-    /// is still pending (the caller must call ApprovalService::cancel_open_for_task first). Idempotent. §5 step 9.
-    pub async fn shutdown(&self) -> Result<(), OrchestratorError>;
-    /// Becomes Some(reason) exactly when the event loop wrote S08/S12/S13/S22 for an unexpected close.
-    /// Stays None after a host-initiated shutdown and when the close was handed to handler.on_session_closed.
-    /// P8-3 watches it to write T14/T30/T09 (P8-3 §5 step 8).
+    /// Host-initiated close (P8-3 phase exit step 4, reviewer done, app exit): §5A rows H1–H6. `outcome` is the
+    /// session `outcome` carried by the closing transition (schema-required; §5A row H8 lists what P8-3 passes).
+    /// Ends in `closed`; never writes S08/S12 and never reports through `unexpected_close`.
+    /// Err(OrchestratorError::ApprovalPending) if an approval of this session is still pending (the caller must call
+    /// ApprovalService::cancel_open_for_task first). Idempotent. §5 step 9.
+    pub async fn shutdown(&self, outcome: agentdock_core::payload::SessionOutcome) -> Result<(), OrchestratorError>;
+    /// Becomes Some(reason) after every close the event loop handled while `closing` was false: after it wrote
+    /// S08/S12/S19 or S13/S22/S24, and after `handler.on_session_closed` returned for an awaiting_permission session
+    /// (S16/S23). Stays None after a host-initiated shutdown. P8-3 applies the "Task effect" of §5A group A.
     pub fn unexpected_close(&self) -> tokio::sync::watch::Receiver<Option<agentdock_acp::CloseReason>>;
     pub fn session_id(&self) -> &SessionId;
 }
@@ -184,39 +199,36 @@ impl SessionRuntime {
    - Drop every `_meta` key without interpreting it (`events.md` line 119).
    - `kind` / `status` outside the schema enums → `other` / `pending` (agents cannot invent values in the store).
 4. `SessionRuntime::launch`:
-   1. Any process exit, initialize failure or timeout after S01 and before S02 writes `S03 starting → failed (launch_failed)`; never S04 (reserved for recovery and reattach).
+   1. Any process exit, initialize failure or timeout after S01 and before S02 writes `S03 starting → failed (launch_failed)` with `outcome: failed` (§5A row A5); never S04 (reserved for recovery and reattach). If `abort` flips to `true` meanwhile (task cancel or pause): stop the process, write the same S03 with `outcome: cancelled` (row H7) and return `Err(OrchestratorError::Aborted)`; if S01 was not committed yet write nothing.
    2. One transaction writes `session.created` (S01, actor orchestrator, `launch_method: new`, `role`, `parent_session_id`). Spawn only after commit.
-   3. `AcpConnection::start`; failure → one transaction writes S03 with `error` = redacted message + the last 2 KiB of `AgentProcess::stderr_tail()` (also redacted).
+   3. `AcpConnection::start(&cfg.command, cfg.timeouts)`; failure → one transaction writes S03 with `error` = redacted message + the last 2 KiB of `AgentProcess::stderr_tail()` (also redacted).
    4. Success → `session.capabilities_detected` (`CapabilitySnapshot` via P2-2 `derive_features`; strip every `_meta` from `acp_agent_capabilities`).
    5. `new_session(cwd)` → `S02 starting → idle (session_ready)`, `external_session_id` = the agent's sessionId, `launch_method: new`.
    6. Start the event loop task: `while let Some(ev) = rx.recv().await`, plus `tokio::time::interval(50ms)` calling `governor.tick`.
 5. Event loop:
    - `SessionUpdate` → `acp_map`; text goes through `governor.push_chunk`; other updates call `governor.before_other_event` first, then write their own event. Tool call raw I/O: `redactor.redact_json` → `serde_json::to_vec` → `artifacts.put(.., "json")` → `raw_io: ArtifactRef`. `title` passes `redact_text` and `bound_text`.
    - `PermissionRequested` → `before_other_event`, then `tokio::spawn(handler.on_permission(ctx))` (never await it in the loop, or the session's later updates stall).
-   - If the in-memory `closing` flag is set (§5 step 9), a `Closed` event writes nothing and is not reported to P8-3; `shutdown` owns the final state. Otherwise:
-   - `Closed{ProcessExited}` → write `S08` (from idle) or `S12` (from active); if the session is `awaiting_permission`, write no state here and call `handler.on_session_closed` (P4-3 writes `S16` first, then invalidates the approval, then moves the task to `interrupted`). `Closed{ProtocolError|LineTooLong}` → `S13` / `S22` (from active / idle); from `awaiting_permission`, call `handler.on_session_closed` (P4-3 cancels the approval, then writes `S23`). After writing S08/S12/S13/S22, send `Some(reason)` on the `unexpected_close` watch channel. Task transitions for these cases (T14 `interrupted{adapter_disconnected}` or `{session_unavailable}`, fixture 12 events 30–31) belong to P8-3.
+   - A `Closed` event: if the in-memory `closing` flag is set (§5 step 9) write nothing and do not report it (`shutdown` owns the final state). Otherwise apply `close_transition(state, reason)`, reading the state in the same transaction (§5A rule 7):
+     - `ProcessExited`: `idle` → S08, `active` → S12, `suspended` → S19 (actor adapter; rows A1).
+     - `ProtocolError` / `LineTooLong`: `idle` → S22, `active` → S13, `suspended` → S24 (actor adapter, `outcome: failed`; row A3).
+     - `awaiting_permission` (an approval pending **or already resolved by a turn cancel**): write no state here; call `handler.on_session_closed(session_id, reason)` and wait for it (rows A2, A4, C3, C4: P4-3 writes S16 / S23 and the approval events). If the handler wrote nothing because the session left `awaiting_permission` meanwhile, re-read and write S12 / S13.
+     - `disconnected`, `closed`, `failed`: nothing.
+     After the writes (or after the handler returned) send `Some(reason)` on `unexpected_close`. The task transitions for these closes belong to P8-3 (§5A group A "Task effect").
    - Turn ended (`StopReason` returned) while the session is `awaiting_permission` (the user cancelled the turn and P4-3 already cancelled the approval): write `S15 awaiting_permission → idle (turn_ended)` (actor adapter) instead of S09.
    - Governor outputs: `Delta` → `session.message_delta` with `redaction.applied_rules` = `applied`; `Limited` → `session.output_limited`; the first time `cancel_requested()` is true → `connection.cancel()`.
 6. `prompt`: one transaction writes `session.prompt_submitted` (new `turn_id`, redacted `content.text`) and `S05 idle → active`; after commit call `connection.prompt` on another task (the event loop keeps consuming); when `StopReason` returns, `governor.end_turn`, write remaining deltas, then `S09 active → idle (turn_ended, stop_reason, turn_id)`.
 7. All writes use P2-4 `Store::transact` on a blocking thread (`spawn_blocking`); the store assigns `seq`.
-8. `cancel()` (user cancels the turn):
+8. `cancel()` (user cancels the turn) implements §5A rows C1 and C2, in this order:
    1. Session not `active` / `awaiting_permission` → `Ok(())`, nothing sent.
-   2. `handler.on_turn_cancel(session_id).await` — P4-3 commits `approval.resolved{cancelled}` (user) + T-back and only then answers the agent `cancelled` (`acp-capabilities.md` line 94: persist the resolution before answering).
-   3. Then `connection.cancel(acp_session)` (P3-4 sends `session/cancel` and answers any still-open ticket `cancelled`; the ticket P4-3 already answered is gone, so it is not answered twice).
-   4. When the turn ends: S15 (if still `awaiting_permission`) or S09 with `stop_reason: cancelled`, as in steps 5 and 6.
-9. `shutdown()` (host-initiated close). Order matters; transitions and actors are from `transitions.json`:
-   1. Read the session state from projections. If the session has a pending approval → `Err(OrchestratorError::ApprovalPending)` (add this variant), write nothing.
-   2. `active`, or `awaiting_permission` whose approval is already resolved (P8-3 called `cancel_open_for_task`): `connection.cancel(..)`, then wait up to `AcpTimeouts::cancel_ack` (10 s) for the turn to end; the event loop writes S09 (`stop_reason: cancelled`) or S15 (adapter) as usual.
-   3. Set `closing = true` (in memory, before any of the writes below and before stopping anything).
-   4. Final state, one transaction each, actor `orchestrator`, written **before** the process is stopped (`persist_then_act`), except the last two bullets:
-      - `idle` → `S06 idle → closed (session_closed)` — fixture 03 event 16.
-      - `starting` → `S25 starting → closed (session_closed)`.
-      - `suspended` → `S18 suspended → closed (session_closed)`.
-      - still `active` after the timeout → `S11 active → suspended (task_interrupted)`, then `S18 suspended → closed (session_closed)`.
-      - still `awaiting_permission` after the timeout (the agent never ended the turn): stop the process first (step 5), then `S16 awaiting_permission → disconnected (process_exited)` (actor adapter, the only allowed actor besides recovery), then `S21 disconnected → closed (abandoned)` (orchestrator).
-      - already `disconnected` (the process exited earlier) → `S21 disconnected → closed (abandoned)`.
-      - `closed` / `failed` → nothing (idempotent).
-   5. `connection.shutdown().await` (P3-4: answers open tickets `cancelled`, ends the connection, reaps the process tree). The resulting `Closed` event is ignored because `closing` is set (step 5, first bullet), so no S08/S12/S13/S22 and no T14.
+   2. `handler.on_turn_cancel(session_id).await` (row C2 steps 1–2; `acp-capabilities.md` line 94: persist the resolution before answering).
+   3. Then `connection.cancel(acp_session)` (P3-4 sends `session/cancel` and answers any ticket still open `cancelled`; the one P4-3 already answered is gone).
+   4. When the turn ends: S15 (if the session is still `awaiting_permission`) or S09, with `stop_reason: cancelled`, as in steps 5 and 6.
+9. `shutdown(outcome)` (host-initiated close) implements §5A rows H1–H6; this list only adds the mechanics. Actor of every event written here: orchestrator, except S09 / S15 (adapter).
+   1. Read the session state from projections. A pending approval of this session → `Err(OrchestratorError::ApprovalPending)` (add this variant), write nothing.
+   2. `active`, or `awaiting_permission` whose approval is already resolved: `connection.cancel(..)`, then wait until the turn ended (the event loop wrote S09 / S15), the connection closed, or `cfg.timeouts.cancel_ack` elapsed. Then **re-read the state**.
+   3. Set `closing = true` (in memory, before any final-state write and before stopping anything).
+   4. Final state, one transaction each, written **before** the process is stopped (`persist_then_act`) except where the row says otherwise: `idle` → S06; `suspended` → S18; `active` after the timeout → S11 then S18; `awaiting_permission` after the timeout → stop the process, `handler.on_session_closed(session_id, CloseReason::ShutDown)` (P4-3 writes S16), then S21; `disconnected` → S21; `closed` / `failed` → nothing. The closing transition carries `outcome` = the argument. Triggers: S06 `session_closed`; S18 `session_closed`, or `superseded` when `outcome == Superseded`; S21 `abandoned`, or `superseded` when `outcome == Superseded`.
+   5. `connection.shutdown().await` (P3-4: answers open tickets `cancelled`, ends the connection, reaps the process tree). The resulting `Closed` event is ignored because `closing` is set, so no S08/S12/S13/S22, no `unexpected_close`, and no T14.
 
 ## 6. Tests to write first
 
@@ -278,7 +290,7 @@ The bodies written as comments are specifications; implement them fully.
 
 ### P3-5b: `crates/agentdock-orchestrator/tests/session_runtime_mock.rs`
 
-Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory, and a fake `PermissionHandler` that records calls. Each test ends by checking the session state through P2-5 projections and the event order through `events_after(0)`.
+Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory, and a fake `PermissionHandler` in `tests/common.rs` with two modes: `Passive` (records calls, writes nothing) and `Recording` (writes `approval.requested` + S10 like P4-3 in `on_permission`, `approval.resolved{cancelled}` in `on_turn_cancel`, and S16 / S23 in `on_session_closed`, so that a real session can sit in `awaiting_permission`). Each test ends by checking the session state through P2-5 projections and the event order through `events_after(0)`.
 
 | Test | Scenario | Expected |
 | --- | --- | --- |
@@ -295,8 +307,12 @@ Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory,
 | `permission_is_delegated_not_answered` | `permission` + fake handler that does nothing | handler called once; **no** `approval.*` events (not written here); after `cancel` the turn ends `cancelled` |
 | `unknown_updates_are_ignored_not_fatal` | `unknown-notification` | turn ends normally; no event written for the unknown update |
 | `cancel_persists_before_session_cancel` | `slow` + fake handler whose `on_turn_cancel` records a timestamp, sleeps 300 ms, records again | `prompt` in the background; after 2 deltas `cancel()`; the handler call finishes before the turn ends; at least one delta is written between the two handler timestamps (proves `session/cancel` was not sent yet); turn ends `active→idle (turn_ended, cancelled)` |
-| `shutdown_idle_writes_s06_not_disconnected` | `echo`, launch, `shutdown()` | last state event `idle→closed (session_closed)` with actor `orchestrator`; no `disconnected` state anywhere; the fake handler's `on_session_closed` is never called; no process left; a second `shutdown()` → `Ok`, no new event |
-| `shutdown_mid_turn_cancels_then_closes` | `slow`, prompt in the background, `shutdown()` | `active→idle (turn_ended, cancelled)` (adapter) then `idle→closed (session_closed)` (orchestrator); no `active→disconnected` |
+| `shutdown_idle_writes_s06_not_disconnected` | `echo`, launch, `shutdown(Cancelled)` | last state event `idle→closed (session_closed)` with actor `orchestrator` and `outcome: cancelled`; no `disconnected` state anywhere; the fake handler's `on_session_closed` is never called; no process left; a second `shutdown(Cancelled)` → `Ok`, no new event; `unexpected_close()` stays `None` |
+| `shutdown_mid_turn_cancels_then_closes` | `slow`, prompt in the background, `shutdown(Abandoned)` | `active→idle (turn_ended, cancelled)` (adapter) then `idle→closed (session_closed, outcome: abandoned)` (orchestrator); no `active→disconnected` |
+| `shutdown_outcome_is_the_argument` | `echo`; five launches, `shutdown` with each of `Succeeded`, `Failed`, `Cancelled`, `Abandoned`, `Superseded`; plus one session left `disconnected` (`exit-mid-turn`) closed with `Superseded` | each closing payload's `outcome` equals the argument; the idle ones use trigger `session_closed`; the disconnected one is `disconnected→closed` with trigger `superseded` (S21); every event passes the projector |
+| `closed_while_awaiting_permission_calls_handler_once` | `permission-fault --arg exit`, fake handler `Recording` | `on_session_closed` called once with `ProcessExited`; this packet writes **no** S08/S12/S16; `unexpected_close()` becomes `Some(ProcessExited)` only after the handler returned (the fake delays 200 ms and the test compares timestamps) |
+| `closed_after_turn_cancel_still_calls_handler` | `scripted` with prompt `EDIT-PATH: <file>` and `ON-CANCEL: exit`, fake handler `Recording`; `cancel()` | the approval is already resolved when the agent exits; `on_session_closed` is still called once with `ProcessExited` (the session is `awaiting_permission`) and the session ends `disconnected`, not stuck (§5A row C3) |
+| `launch_abort_writes_failed_cancelled` | `hang-init`; flip `abort` after 500 ms | `session.created` then `starting→failed (launch_failed)` with `outcome: cancelled` (actor orchestrator); `launch` returns `Err(Aborted)`; the process is gone (§5A row H7) |
 | `artifact_put_is_content_addressed` (`agentdock-store` unit test) | write the same content twice | same path, one file; `/` separators |
 
 ## 7. Acceptance commands and expected results
@@ -304,7 +320,8 @@ Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory,
 ```bash
 cargo test -p agentdock-core output            # P3-5a: 10 pass
 cargo test -p agentdock-store artifacts        # P3-5b: 1 passes
-cargo test -p agentdock-orchestrator --test session_runtime_mock -- --test-threads=1   # P3-5b: 15 pass
+cargo test -p agentdock-orchestrator --test session_runtime_mock -- --test-threads=1   # P3-5b: 19 pass
+cargo test -p agentdock-orchestrator --lib session_runtime                              # P3-5b: 1 passes (`close_transition_table`: every state × reason of §5A rows A1, A3, C3, C4)
 ```
 
 Windows-only (CI `rust-windows`): `session_runtime_mock` must also pass on `windows-latest`.
@@ -315,7 +332,7 @@ All line numbers refer to main `c9e33cf`.
 
 - `docs/contracts/events.md` lines 87–104 (subscriptions and backpressure; line 100 coalescing, line 101 limits, line 102 pipe backpressure), line 113 (artifact location), lines 115–124 (redaction; line 119 drop `_meta`, line 121 raw I/O only as artifacts).
 - `docs/contracts/acp-capabilities.md` lines 80–98 (ACP → AgentDock mapping; line 92 usage, line 95 updates outside the contract).
-- `docs/contracts/transitions.json` session transitions S01–S25 (this packet writes S01, S02, S03, S05, S08, S09, S12, S13, S15, S22 and, on shutdown, S06, S11, S18, S21, S25 and the shutdown-kill S16; P4-3 writes S10, S14, S23 and the permission-wait S16).
+- `docs/contracts/transitions.json` session transitions S01–S25 (this packet writes S01, S02, S03, S05, S06, S08, S09, S11, S12, S13, S15, S18, S19, S21, S22, S24; P4-3 writes S10, S14, S16, S23; S04, S07, S17, S20, S25 are not written in alpha). **P4-3 §5A is the table that says which, when and in what order.**
 - Schema `$defs`: `SessionMessageDeltaPayload`, `SessionToolCallPayload`, `SessionOutputLimitedPayload`, `SessionStateChangedPayload`, `SessionCreatedPayload` (lines 821–837; `role` required), `SessionPlanUpdatedPayload`, `Usage`, `TextOrRef`, `RedactedText` (maxLength 65,536), `ArtifactRef`.
 - ADR-0003 open question 6 (8 MiB / 20,000 event defaults await owner confirmation).
 - Behavior references (Node draft, ideas only, do not port code): PR #25, SHA `7d41c9f1`, `apps/runtime/store.mjs` line 10 `protect()` (truncation markers), `runtime.test.mjs` line 72 (large output truncated and marked), line 116 (streamed replies stored as evidence).
@@ -346,7 +363,9 @@ P3-5a standard model (pure functions, full tests). P3-5b strong model implements
 - Omitting `role` from `session.created`: the schema requires it; P2-2 rejects the payload. Inventing a role such as `agent`: not in the schema enum.
 - Sending `session/cancel` before P4-3 has persisted the cancelled approval: the agent may act on the cancel before the store knows the approval ended (`acp-capabilities.md` line 94).
 - Letting the `Closed` event of a host-initiated shutdown write S08/S12 and reach P8-3: the task would be marked `interrupted{adapter_disconnected}` after the user cancelled it. Set `closing` first.
-- Stopping the process before writing S06/S25/S18: these are `persist_then_act`.
+- Calling `handler.on_session_closed` only when an approval is pending: after a turn cancel the approval is resolved but the session is still `awaiting_permission`; skipping the handler leaves it there for ever (§5A row C3).
+- Writing `closed` without `outcome` (schema-required): `shutdown` takes the outcome as an argument.
+- Stopping the process before writing S06/S18 (and S11 on the timeout path): these are `persist_then_act`.
 
 ## 12. Reviewer checklist
 
@@ -355,5 +374,6 @@ P3-5a standard model (pure functions, full tests). P3-5b strong model implements
 - [ ] Is cross-chunk redaction (carry + private key state) tested and correct?
 - [ ] Is raw I/O stored only as artifacts outside any repo, and are `_meta` keys dropped?
 - [ ] Does `session.created` carry `role` and `parent_session_id` from `SessionConfig`?
-- [ ] Are the transitions written here exactly the ones listed (no S10/S14/S23; S16 only on the shutdown-kill path)?
-- [ ] Does `cancel` await `on_turn_cancel` before `connection.cancel`, and does `shutdown` set `closing`, write the final state with actor `orchestrator` before stopping the process, and refuse while an approval is pending?
+- [ ] Are the transitions written here exactly the ones listed (no S10/S14/S16/S23: those are P4-3's, §5A rule 1)? Is every `closed`/`failed` transition written with the `outcome` of §5A?
+- [ ] Does `cancel` await `on_turn_cancel` before `connection.cancel`, and does `shutdown(outcome)` set `closing`, write the final state with actor `orchestrator` before stopping the process (rows H1–H6), and refuse while an approval is pending?
+- [ ] Is a close of an `awaiting_permission` session always handed to the handler, and does `unexpected_close` fire after it returned?

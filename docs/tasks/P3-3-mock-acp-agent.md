@@ -33,7 +33,7 @@ Modified: root `Cargo.toml` (members).
 
 ## 4. Interface
 
-Command line: `agentdock-mock-agent [--scenario <name>]`, default `echo`. Unknown scenario: print `unknown scenario` to stderr and `exit(2)`.
+Command line: `agentdock-mock-agent [--scenario <name>] [--arg <text>] [--nonce <hex>]`, default `echo`. `--arg` and `--nonce` are read only by the scenarios that say so below; every other scenario ignores them. Unknown scenario: print `unknown scenario` to stderr and `exit(2)`.
 
 ACP v1 wire format (method names checked against `agent-client-protocol-schema` 1.21.2 `src/v1/agent.rs` lines 6846–6869 and `src/v1/client.rs` lines 4849–4851; permission outcome shape against `src/v1/client.rs` lines 3029–3045):
 
@@ -69,6 +69,13 @@ pub fn request_permission(req_id: &str, tool_call_id: &str, title: &str) -> Valu
         "options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},
                    {"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}})
 }
+/// Same options as above, but the tool call is an edit with a path (used by `scripted` `EDIT-PATH`).
+pub fn request_permission_edit(req_id: &str, tool_call_id: &str, title: &str, path: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":req_id,"method":"session/request_permission","params":{"sessionId":SESSION_ID,
+        "toolCall":{"toolCallId":tool_call_id,"title":title,"kind":"edit","locations":[{"path":path}]},
+        "options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},
+                   {"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}})
+}
 ```
 
 Scenarios (each lists only what differs from `echo`):
@@ -93,18 +100,31 @@ Scenarios (each lists only what differs from `echo`):
 | `flood` | on prompt: 10,000 text chunks of 10 characters, then `end_turn` | P3-5 coalescing and backpressure |
 | `secret-echo` | on prompt: text `token ghp_000000000000000000000000000000000000 end` | P3-5 redaction |
 | `auth-required` | `initialize` answers `authMethods: [{"id":"mock-login","name":"Mock login"}]`; `session/new` answers error `-32000 Authentication required` | ADR-0002 S4, P3-6 |
+| `permission-two` | on prompt: `tool_call("call_1",…)` and `tool_call("call_2",…)`, then **immediately** two requests, `request_permission("mock-perm-1","call_1",…)` and `request_permission("mock-perm-2","call_2",…)` (a parallel-permission agent), then waits for both answers (any order). Text `perm1=<optionId or cancelled> perm2=<optionId or cancelled>`; if either answer is `cancelled` the prompt result is `cancelled`, else `end_turn`. If `session/cancel` arrives first: answers `cancelled` | P3-4 queue, P4-3 §5A rows C2 and C5 |
+| `permission-fault` | `--arg exit` or `--arg oversize`. On prompt: `tool_call`, `request_permission("mock-perm-1",…)`, then after 300 ms: `exit` → `exit(5)` without answering anything; `oversize` → the `oversize` behavior (64 MiB of `A` without a newline, then sleep) | P4-3 §5A rows A2 and A4 (agent exits or breaks the protocol while a permission is pending) |
+| `scripted` | prompt-driven, so one adapter command can serve the implementation and the reviewer session. Optional `--arg <verdict JSON text>` and `--nonce <16 hex>`. Reads the **prompt text** and applies the first matching directive (table below); no directive → behaves as `echo` | P4-3 §5A rows C3, C4 and H3, P8-3 `task_flow` / `review_flow` |
+
+`scripted` directives (checked in this order; each directive is a whole line `NAME: value` of the prompt text):
+
+| Directive | Behavior |
+| --- | --- |
+| `REVIEWER-EDIT-PATH: <path>` together with a line `Verdict nonce: <hex>` | reviewer-side edit: behaves as `EDIT-PATH` below (and prints no verdict) |
+| `Verdict nonce: <hex>` and `--arg` given | prints text `<<<AGENTDOCK-VERDICT {n}>>>` + newline + the `--arg` text + newline + `<<<END-AGENTDOCK-VERDICT {n}>>>`, then `end_turn`; `{n}` = `--nonce` when given, else the nonce from the prompt line |
+| `EDIT-PATH: <path>` | `tool_call("call_1","Edit file",…)` then `request_permission_edit("mock-perm-1","call_1","Edit file",<path>)`. After the answer: `selected allow-once` → **writes the text `edited-by-mock` to `<path>`** (so tests can prove an edit did or did not happen), `tool_call_done("completed")`, text `approved`, `end_turn`; `selected reject-once` → `tool_call_done("failed")`, text `denied`, `end_turn`; `cancelled` → `cancelled`. Optional extra line `ON-CANCEL: exit\|oversize\|ignore\|end`: the permission answer is then **ignored** (the turn is not ended) and the mock waits for `session/cancel`; on it: `exit` → `exit(6)` without answering the prompt; `oversize` → the `oversize` behavior; `ignore` → never answers (sleeps at most 600 s); `end` → answers `cancelled` |
+| `SAY: <text>` | text chunk `<text>`, then `end_turn` |
 
 ## 5. Implementation steps
 
 1. Write the §6 tests.
 2. `main.rs`:
-   - Parse `--scenario` with `std::env::args` only (no clap).
+   - Parse `--scenario`, `--arg` and `--nonce` with `std::env::args` only (no clap).
    - Reader thread: `BufReader::new(stdin).split(b'\n')`, each segment `serde_json::from_slice`; ignore lines that fail to parse (the mock does not test its own parser); on EOF send `Msg::Eof`.
    - Writer: `fn send(v: &Value)` locks `stdout`, writes `serde_json::to_vec(v)` + `b"\n"`, then `flush()`. A failed write (client closed the pipe) → `exit(0)`.
 3. Main loop: dispatch on `method`; requests (with `id` and `method`) are always answered unless the scenario says otherwise; a message with `id` and no `method` is a client response to a mock request and goes to the waiting scenario logic.
 4. `slow` and `permission` must handle `session/cancel` while streaming: check `mpsc::Receiver::recv_timeout(200ms)` between chunks.
 5. Grandchildren: `std::process::Command::new(std::env::current_exe()?)` with `--scenario sleep-forever`; `stubborn` uses `Stdio::null()`, `orphan-stdio` passes `Stdio::inherit()` for stdout.
 6. Every sleep is bounded (600 s) so a failing test never leaves a permanent process.
+7. `scripted`: read the whole prompt text (the first `text` block of `session/prompt`), split into lines, and look for the directives in the table order. Directive names are matched at the start of a line, case-sensitively. `ON-CANCEL` is read from the same prompt. The mock never reads the verdict JSON; it forwards `--arg` verbatim, so tests can also feed it malformed JSON.
 
 ## 6. Tests to write first
 
@@ -134,11 +154,21 @@ fn prompt(id: u64, text: &str) -> serde_json::Value { /* session/prompt with ses
 | `auth_required_errors_on_new_session` | `initialize` has `authMethods[0].id == "mock-login"`; `session/new` is error `-32000` |
 | `unknown_scenario_exits_2` | exit code 2 |
 | `remaining_scenarios_start` | `oversize`, `stubborn`, `orphan-stdio`, `flood`, `secret-echo` each start and produce output after a prompt (deeper tests live in P3-1, P3-2/P3-4, P3-5); kill each child at the end |
+| `permission_two_sends_two_requests_back_to_back` | `permission-two`: both `request_permission`s (`mock-perm-1`, `mock-perm-2`) arrive before any answer is sent; after answering `allow-once` and `reject-once` the text is `perm1=allow-once perm2=reject-once`, result `end_turn` |
+| `permission_fault_exit_exits_5` | `permission-fault --arg exit`: request arrives, then exit code 5 within 2 s, prompt never answered |
+| `permission_fault_oversize_writes_unterminated_line` | `permission-fault --arg oversize`: after the request, at least 1 MiB arrives without a newline |
+| `scripted_edit_permission_writes_file_only_when_allowed` | prompt line `EDIT-PATH: <temp file>`: answer `allow-once` → the file contains `edited-by-mock`; in a second run answer `reject-once` → the file is untouched and the text is `denied` |
+| `scripted_on_cancel_exit_exits_6` | `EDIT-PATH` + `ON-CANCEL: exit`; answer the permission `cancelled` → the turn is **not** ended; then `session/cancel` → exit code 6 |
+| `scripted_on_cancel_ignore_stays_silent` | same with `ON-CANCEL: ignore`: after `session/cancel` no prompt result within 2 s; the child is still alive (kill it at the end) |
+| `scripted_on_cancel_oversize_writes_unterminated_line` | same with `ON-CANCEL: oversize`: after `session/cancel`, at least 1 MiB without a newline |
+| `scripted_say_replies_text` | prompt line `SAY: CI is green` → text `CI is green`, `end_turn` |
+| `scripted_verdict_block_uses_prompt_nonce` | `--arg '{"verdict":"mergeable","blocking":[],"suggestions":[]}'`, prompt with `Verdict nonce: 0123456789abcdef` → the reply holds exactly one block delimited by that nonce, then `end_turn` |
+| `scripted_verdict_nonce_override` | the same with `--nonce fedcba9876543210` → the block uses the override nonce, not the prompt's |
 
 ## 7. Acceptance commands and expected results
 
 ```bash
-cargo test -p agentdock-mock-agent                           # 13 pass
+cargo test -p agentdock-mock-agent                           # 23 pass
 cargo run -q -p agentdock-mock-agent -- --scenario nope; echo "exit=$?"   # exit=2
 ```
 

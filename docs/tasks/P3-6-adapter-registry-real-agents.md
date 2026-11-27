@@ -147,10 +147,10 @@ pub fn discover(env: &DiscoverEnv) -> Vec<Candidate>;
 
 | Test | Steps | Expected |
 | --- | --- | --- |
-| `claude_prompt_roundtrip` / `codex_prompt_roundtrip` | `SessionRuntime::launch` in a temp git repo (`git init`) → prompt `Reply with exactly the word: pong` | `EndTurn`; delta text contains `pong` (case-insensitive); session `idle` in the store |
+| `claude_prompt_roundtrip` / `codex_prompt_roundtrip` | `SessionRuntime::launch` (with an `abort` receiver that never flips) in a temp git repo (`git init`) → prompt `Reply with exactly the word: pong` | `EndTurn`; delta text contains `pong` (case-insensitive); session `idle` in the store |
 | `claude_cancel_midturn` / `codex_cancel_midturn` | prompt `Count slowly from 1 to 200, one number per line.`; `cancel` after the first delta | `Cancelled` within 10 s |
 | `claude_permission_forwarded` / `codex_permission_forwarded` | prompt `Create a file named agentdock-e2e.txt containing hello.`; fake handler always answers `reject_once` | at least one `on_permission`; file **absent** after the turn. If the agent wrote the file without asking, fail with a hint: "agent may be in bypass/full-access mode (ADR-0002 APR-11)" |
-| `claude_shutdown_reaps_tree` / `codex_shutdown_reaps_tree` | launch, then `shutdown` | the agent's process tree is gone within 5 s |
+| `claude_shutdown_reaps_tree` / `codex_shutdown_reaps_tree` | launch, then `shutdown(Cancelled)` (P4-3 §5A rows H1–H2) | the agent's process tree is gone within 5 s; the closing transition carries `outcome: cancelled` |
 
 ## 7. Acceptance commands and expected results
 

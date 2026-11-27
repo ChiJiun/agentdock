@@ -124,7 +124,7 @@ impl TaskService {
 | `gate_passes_writes_t34_as_integration` | all good → `task.state_changed pr→ci`, actor `integration`, trigger `pr_published` |
 | `ci_checks_recorded_as_ci_origin` | snapshot pending → `check.started{origin: ci, external_url}`; next poll pass → `check.finished{passed}`; actor `integration` |
 | `ci_success_waits_for_user` | all pass → state stays `ci`; `accept_ci` → T39 by `user` → `completed` |
-| `agent_cannot_accept_ci` | mock agent writes "CI is green" → state stays `ci` (no T39 without the user) |
+| `agent_cannot_accept_ci` | the mock agent (P3-3 `scripted`, directive `SAY: CI is green` in the objective) writes it → state stays `ci` (no T39 without the user) |
 | `ci_failure_sends_back_once_per_head` | fail → T38, repair prompt contains failed check names and links; another poll with the same head does not send back twice |
 | `ci_repair_limit` | failures repeated → T42 `failed` |
 | `new_round_needs_new_push` | after T38 → … → back in `pr`: `publish_gate` without a new push → `NotPushedThisRound` |

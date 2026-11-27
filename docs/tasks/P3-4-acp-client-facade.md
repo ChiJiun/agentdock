@@ -1,6 +1,6 @@
 # P3-4: ACP client facade (initialize, session, prompt streaming, cancel, permission forwarding)
 
-> **繁中摘要**：在 `agentdock-acp` 提供 `AcpConnection`，是整個 AgentDock **唯一**接觸 ACP SDK 的地方：把 P3-2 程序、P3-1 framing 與 SDK 的 `Client.v1()` 接起來，對外只暴露自己的型別。`initialize` 只接受 v1、30 秒逾時；`session/new`、`session/prompt`（更新經有界 channel 送出、形成背壓）、`session/cancel`。permission 請求在 SDK callback 內**不等待使用者**：存下 responder 立即返回，之後呼叫端持久化 `approval.resolved` 後才 `respond_permission`；每個 session 一次只轉發一個。取消時把所有 pending permission 以 `cancelled` 回覆。另寫 spike S3／S5 紀錄。模型等級：強模型實作＋強模型審查。
+> **繁中摘要**：在 `agentdock-acp` 提供 `AcpConnection`，是整個 AgentDock **唯一**接觸 ACP SDK 的地方：把 P3-2 程序、P3-1 framing 與 SDK 的 `Client.v1()` 接起來，對外只暴露自己的型別。`initialize` 只接受 v1、30 秒逾時；`session/new`、`session/prompt`（更新經有界 channel 送出、形成背壓）、`session/cancel`。permission 請求在 SDK callback 內**不等待使用者**：存下 responder 立即返回，之後呼叫端持久化 `approval.resolved` 後才 `respond_permission`；每個 session 一次只轉發一個，**這個 per-session 佇列只在本包定義**（P4-3 沒有自己的佇列）；任何一次以 `cancelled` 回覆 ticket，都會連同該 session 排隊中的請求一起以 `cancelled` 回覆並丟棄，**不會把下一個升為 active**（否則會對已取消的回合寫出非法的 S10，P4-3 §5A 列 C2）。取消時把所有 pending permission 以 `cancelled` 回覆。另寫 spike S3／S5 紀錄。模型等級：強模型實作＋強模型審查。
 
 Issue: #6 | Gate (#51): G2 (create sessions, send prompts and cancel through real ACP) | Model tier: **strong model implements and reviews**
 
@@ -11,7 +11,7 @@ Goal: `AcpConnection` in `agentdock-acp`, the **only** place in AgentDock that t
 - `initialize`: send `protocolVersion: 1` and AgentDock's `clientCapabilities` (alpha always `fs.readTextFile=false`, `fs.writeTextFile=false`, `terminal=false`). A response `protocolVersion` other than 1 → end the process, return `UnsupportedProtocolVersion` (contract `acp-capabilities.md` line 108 "Default is v1"). Timeout 30 s (PR #25 `initTimeoutMs`; X-1 notes Windows cold starts can exceed 10 s).
 - Return the raw `agentCapabilities` JSON and `authMethods`; P3-5 builds the `CapabilitySnapshot` with P2-2's `derive_features`. The facade does not derive features.
 - `session/new`, `session/prompt` (updates streamed through a channel), `session/cancel`.
-- `session/request_permission`: **never wait for the user inside the SDK callback**. Store the SDK `Responder`, emit an event, return immediately; `respond_permission` answers later. One forwarded request per session at a time; a second one queues (current proposal for ADR-0003 open questions 8, 14).
+- `session/request_permission`: **never wait for the user inside the SDK callback**. Store the SDK `Responder`, emit an event, return immediately; `respond_permission` answers later. One forwarded request per session at a time; a second one queues (current proposal for ADR-0003 open questions 8, 14). **This per-session FIFO is the only permission queue in AgentDock**: P4-3 and P8-3 define none. Rule: answering a ticket with `Selected` promotes the next waiting request; answering it with `Cancelled` (or calling `cancel` / `shutdown`) answers every waiting request of that session `cancelled`, drops them and promotes nothing, so no `PermissionRequested` event is emitted for a request of a cancelled turn (P4-3 §5A rows C2 and C5).
 - `cancel`: send `session/cancel` and answer every forwarded and queued permission of that session with `cancelled` (ACP v1 rule, contract line 26).
 - Protocol errors, process exit and oversized lines become `AcpEvent::Closed { reason }`.
 - Record ADR-0002 spikes S3 and S5 (`docs/research/acp-sdk-s3-s5.md`).
@@ -109,6 +109,9 @@ impl AcpConnection {
     /// Sends session/cancel and answers every forwarded or queued permission of this session with `cancelled`.
     pub async fn cancel(&self, session: &AcpSessionId) -> Result<(), AcpError>;
     /// Must be called only AFTER the caller has persisted approval.resolved (contract acp-capabilities.md line 94).
+    /// `Selected` answers the ticket and promotes the session's next waiting request (emits its `PermissionRequested`).
+    /// `Cancelled` answers the ticket, then answers every waiting request of the same session `cancelled` and drops
+    /// them: nothing is promoted and no event is emitted.
     pub fn respond_permission(&self, ticket: PermissionTicket, decision: PermissionDecision) -> Result<(), AcpError>;
     /// Cancels open permissions, then AgentProcess::shutdown. Idempotent. NOTE: this answers `cancelled` without
     /// persisting anything; P3-5 calls it only after every recorded approval of the session is resolved (P3-5 §5 step 9),
@@ -133,7 +136,7 @@ impl AcpConnection {
 3. `permissions.rs`:
    - `HashMap<AcpSessionId, SessionQueue { active: Option<(PermissionTicket, Responder, Vec<String>)>, waiting: VecDeque<...> }>` under a `std::sync::Mutex` (never held across await). Put the SDK `Responder` behind a small trait so tests can use a fake.
    - `enqueue`: no active request for that session → make it active and emit `PermissionRequested`; otherwise push to waiting without an event.
-   - `respond(ticket, decision)`: unknown ticket → `UnknownTicket`; `Selected{option_id}` not among that request's options → `OptionNotOffered` (**do not answer the agent**; let the caller fix it); otherwise `responder.respond(RequestPermissionResponse::new(outcome))`, promote the first waiting request to active and emit its event.
+   - `respond(ticket, decision)`: unknown ticket → `UnknownTicket`; `Selected{option_id}` not among that request's options → `OptionNotOffered` (**do not answer the agent**; let the caller fix it); otherwise `responder.respond(RequestPermissionResponse::new(outcome))`. `Selected` → promote the first waiting request to active and emit its event. `Cancelled` → behave as `cancel_session(session)` for the rest of the queue: answer every waiting request `Cancelled`, remove them, promote nothing, emit nothing.
    - `cancel_session(session)`: answer active and waiting with `RequestPermissionOutcome::Cancelled` and remove them.
    - Emit events outside the lock: decide what to send inside, release, then `try_send`; if the channel is full, `tokio::spawn(async move { tx.send(ev).await })` so nothing waits under a sync lock.
 4. `prompt`: `cx.send_request(PromptRequest::new(session, vec![ContentBlock::Text(TextContent::new(text))])).block_task().await`; map `stop_reason` to `StopReason`. Unknown values → `AcpError::Agent{code: 0, message: "unknown stop reason"}`.
@@ -156,6 +159,8 @@ impl AcpConnection {
 | `permission_option_must_be_offered` | `permission` | `respond_permission(Selected{"allow-always"})` → `Err(OptionNotOffered)`; a later correct `respond` still works |
 | `ticket_cannot_be_replayed` | `permission` | second `respond_permission` with the same ticket → `Err(UnknownTicket)` |
 | `cancel_answers_pending_permission_as_cancelled` | `permission` | after `PermissionRequested`, `cancel` → `prompt` returns `Cancelled`; `respond_permission` with that ticket → `UnknownTicket` |
+| `second_permission_is_forwarded_after_first_is_selected` | `permission-two` | only one `PermissionRequested` (`mock-perm-1`) arrives; after `respond_permission(Selected{"allow-once"})` the second one arrives; answering it `reject-once` ends the turn with text `perm1=allow-once perm2=reject-once` |
+| `cancelled_answer_drops_queue_without_promoting` | `permission-two` | after the first `PermissionRequested`, `respond_permission(ticket, Cancelled)` → **no** second `PermissionRequested` within 1 s; the mock reports `perm1=cancelled perm2=cancelled` and `prompt` returns `Cancelled` |
 | `cancel_stops_slow_stream` | `slow` | after 2 updates, `cancel`; `prompt` returns `Cancelled` within 2 s |
 | `invalid_utf8_and_non_json_keep_connection` | `bad-bytes` | text `still connected after bad bytes`, `EndTurn`; a second prompt still succeeds |
 | `oversized_line_closes_explicitly` | `oversize` | `prompt` returns `Err(Closed)`; channel gets `Closed{LineTooLong}` or `Closed{ProtocolError(_)}` (record which in the S3 doc) |
@@ -165,12 +170,13 @@ impl AcpConnection {
 | `shutdown_reaps_stubborn_tree` | `stubborn` | read the grandchild pid after a prompt; it is gone within 5 s of `shutdown` |
 | `shutdown_is_bounded_with_orphan_stdio` | `orphan-stdio` | `shutdown` finishes within 10 s |
 | `second_permission_waits_for_first` (unit test in `permissions.rs`) | two `enqueue`s for one session with fake responders | only one event; the second is emitted after the first is answered |
+| `cancelled_response_drops_waiting` (unit test in `permissions.rs`) | two `enqueue`s, then `respond(first, Cancelled)` | both fake responders got `Cancelled`; no second event; the queue of that session is empty; a later `enqueue` for the same session becomes active again |
 
 ## 7. Acceptance commands and expected results
 
 ```bash
-cargo test -p agentdock-acp --test client_mock -- --test-threads=1   # 17 pass
-cargo test -p agentdock-acp client::permissions                      # queue unit test passes
+cargo test -p agentdock-acp --test client_mock -- --test-threads=1   # 19 pass
+cargo test -p agentdock-acp client::permissions                      # 2 queue unit tests pass
 ```
 
 Windows-only (CI `rust-windows`): the same suite must pass on `windows-latest` (process tree and pipe behavior differ). Link the run in the PR.
@@ -205,6 +211,7 @@ Strong model implements and reviews. The SDK dispatch loop has deadlock traps, a
 - Answering the agent before recording the approval: violates "persist approval.resolved first". `respond_permission`'s docs and the P3-5 / P4-3 call order must respect it.
 - Choosing "allow" by option position or name: only use `kind` and the agent's `optionId` (the SDK example does the same; PR #25 line 167).
 - Forgetting to answer pending permissions on cancel: ACP v1 requires `cancelled`, or the agent may wait forever.
+- Promoting the next waiting request after a `Cancelled` answer: the caller then records a permission for a turn that is already cancelled (S10 from `awaiting_permission`, illegal). `Cancelled` always empties the session's queue.
 - Classifying operations from `toolCall.title` or agent text: only P4-2 classifies, from parsed commands/paths (contract line 93).
 - An unbounded event channel: flood output exhausts memory. Use the bounded channel so backpressure reaches the agent (ADR-0002 S3 "backpressure is applied in AgentDock's event bus").
 - Awaiting while holding a `std::sync::Mutex`: may compile (inside `tokio::spawn`) but deadlocks. Only synchronous work under the lock.
@@ -215,6 +222,6 @@ Strong model implements and reviews. The SDK dispatch loop has deadlock traps, a
 - [ ] Is the SDK used only inside `agentdock-acp`, with only AgentDock types in the public API?
 - [ ] Does the permission callback return without awaiting user input, and is `block_task` never called inside callbacks?
 - [ ] Does `respond_permission` refuse options that were not offered and tickets already used?
-- [ ] Does `cancel` answer active and queued permissions with `cancelled`?
+- [ ] Does `cancel` answer active and queued permissions with `cancelled`, and does a `Cancelled` answer through `respond_permission` drop the queue instead of promoting the next request?
 - [ ] Is the event channel bounded, and is no lock held across `.await`?
 - [ ] Does the S3/S5 doc record observed behavior, including whether `_meta` survives?
