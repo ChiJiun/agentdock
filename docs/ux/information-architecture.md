@@ -53,7 +53,7 @@ Mobile/narrow mapping (future Android client, not MVP): see §6.
 | Sidebar | New task; **Pinned** group; one group per project; main sessions; nested sub-tasks; “Show N archived” toggles; “N archived — search with Ctrl+K” per project | `nav` with an ARIA `tree` | Resizable 220–400 px; collapsible (Ctrl+B); drawer below 960 px. |
 | Main | Home, Project, Session or Settings view | `main` | Session view is the default after launch (last session). |
 | Review panel | Changes / Checks / Findings tabs, diff, comment-to-agent | `aside` | Docked at ≥ 1280 px; overlay drawer below. |
-| Overlays | Inbox popover, Usage popover, Quick switcher, shortcuts dialog, toasts | — | Only one overlay at a time; see [accessibility.md](accessibility.md#overlays--one-at-a-time). |
+| Overlays | Inbox popover, Usage popover, Quick switcher, shortcuts dialog, toasts | — | One popover or modal drawer at a time (a new one replaces the old one); a dialog may open above a drawer; see [accessibility.md](accessibility.md#overlays--one-at-a-time). |
 
 ## 4. Screens
 
@@ -68,7 +68,8 @@ Purpose: start work and see what needs you across all projects.
 Repository metadata (path, base branch, dirty files), **runtime selection** (default agent, local vs remote target), **worktrees** table (path, branch, sessions, state; cleanup requires explicit confirmation, V1.0), sessions list (including sub-tasks).
 
 ### Session
-- **Header**: breadcrumb (project / branch · worktree · “Sub-task of …” link), title, chips (status, kind, agent + model *as reported by the adapter*, “Archived” when archived), actions (**Unarchive** when archived, Stop while running, **Changes +a −d** toggles the review panel).
+- **Header**: breadcrumb (project / branch · worktree · “Sub-task of …” link), title, chips (status, kind, agent + model *as reported by the adapter*, “Policy not enforced” or “Policy coverage unknown” when they apply, “Archived” when archived), actions (**Unarchive** when archived, Stop while running, **Changes +a −d** toggles the review panel).
+- **Policy note**: only while the agent runs in its own bypass / full-access mode — a persistent, non-dismissible note under the header saying that AgentDock’s approval rules do not apply to what the agent does ([states §9](states-and-indicators.md#9-policy-enforcement-indicator-agent-bypass--full-access-modes)).
 - **Sticky attention banner**: only while a pending approval/question card is scrolled out of view; “Show” scrolls to and focuses the card (not its Approve button). The banner is only a pointer: its one-line text may be truncated (full text in a tooltip); the **full command is shown only in the approval card**, which is what the user approves.
 - **Timeline** (`role="log"`): user messages, agent text, plan card, collapsible tool events (collapsed by default, output in monospace), approval cards, question cards, notices (interrupted, quota, remote, cancelled), completion card with “Review changes · N files +a −d” and check summary.
 - **Composer**: suggestion chips (“Suggested next”), ghost text for the first suggestion, Tab or → inserts it (only when the composer is empty and the ghost is visible), Enter sends / steers while running, Stop (placed after Send/Steer in focus order). Drafts are kept per session.
@@ -88,7 +89,7 @@ See [states-and-indicators.md §4](states-and-indicators.md#4-attention-model-in
 See [states-and-indicators.md §8](states-and-indicators.md#8-usage-display-rules-connected-accounts).
 
 ### Settings
-Sections: **Agents & adapters** (detected/installed, version, capability snapshot: session reattach advertised or not, cancel support), **Accounts & usage** (sources, refresh), **Environments** (WSL, SSH targets — V1.0), **Permissions** (approval rules; enforced in Rust), **Appearance** (theme system/light/dark, density, UI text size, reduced motion override), **Keyboard** (shortcut list; remapping later).
+Sections: **Agents & adapters** (detected/installed, version, capability snapshot: session reattach advertised or not, cancel support, whether the adapter reports its permission mode), **Accounts & usage** (sources, refresh), **Environments** (WSL, SSH targets — V1.0), **Permissions** (approval rules; enforced in Rust), **Appearance** (theme system/light/dark, density, UI text size, reduced motion override), **Keyboard** (shortcut list; remapping later).
 
 ## 5. Navigation model — why there is no tab strip
 

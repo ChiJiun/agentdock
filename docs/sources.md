@@ -2,7 +2,7 @@
 
 Snapshot: 2026-11-17 (source audit for [Issue #1](https://github.com/ChiJiun/agentdock/issues/1)). Module-level decisions are recorded in [ADR-0002](decisions/0002-source-reuse.md).
 
-**No third-party code has been imported.** This file is the provenance manifest that any future copy or dependency PR must cite. A directory existing does not prove independent embeddability or security; every row below states what was actually checked.
+**No upstream source files have been copied into the AgentDock UI prototype.** The Acpira UI helpers were evaluated but replaced with original implementations to respect ADR-0002. This file remains the provenance manifest for future copy or dependency PRs. A directory existing does not prove independent embeddability or security; every row below states what was actually checked.
 
 ## Source strategy
 
@@ -80,6 +80,10 @@ Decision vocabulary (from Issue #1): **dependency** (consume a published package
 
 The [Copilot Fusion research](research/copilot-fusion.md) compares Single, Cascade and Critique routing, vendor-managed Standard/High/Max tiers, cache-aware escalation and the public Rust Copilot SDK. This is a candidate **external/SDK-backed harness**, not an Acpira component and not proof that the proprietary Copilot runtime can be copied or modified. The SDK embeds or downloads a separately supplied runtime binary whose redistribution conditions must be checked before packaging. Adding it as a dependency would need a PR that follows the migration template below and its own decision record (an Issue #17 deliverable); ADR-0002 does not authorize it.
 
+## Imported source files
+
+None. The prototype's tab keyboard handling, textarea ref wiring, and progress animation are original implementations in `src/App.tsx`, `src/components/Composer.tsx`, and `src/components/ProgressRail.tsx`. Acpira remains a UX reference only; the Issue #1 source audit is still tracked separately. Published npm dependencies are declared in `package.json` and require their own license inventory before distribution.
+
 ## License and notice obligations
 
 - **MIT** (Acpira, Aether): copied material must keep the copyright line and permission notice "in all copies or substantial portions", which includes **binary distributions**. Keep the upstream copyright line verbatim as it appears in the upstream `LICENSE` (Acpira's line includes the author's e-mail address); do not paraphrase it. Material from `packages/ui/effects/` and `packages/ui/styles/beam.css` carries a second MIT notice (Jakub Antalik) listed in Acpira's `THIRD_PARTY_NOTICES.md`.
@@ -131,3 +135,24 @@ These are design references, **not source-code migration candidates**. Do not co
 - [Tauri 2 Capabilities](https://v2.tauri.app/security/capabilities/)
 - [Tauri 2 Permissions](https://v2.tauri.app/security/permissions/)
 - [Acpira Harness research issue](https://github.com/ChiJiun/acpira/issues/10)
+
+## Upstream source retention
+
+AgentDock retains four GitHub forks under ChiJiun. Safe weekly synchronization of the tracking branches (planned for Sundays at 03:00 Asia/Taipei) is tracked in [#53](https://github.com/ChiJiun/agentdock/issues/53); its schedule PR is [#58](https://github.com/ChiJiun/agentdock/pull/58), not merged, and no scheduled run has been verified yet. A sync may advance only the mapped upstream tracking branch by fast-forward. Divergence blocks the update and is reported with the source, time and commit IDs. The planned audit will also record changes to LICENSE and NOTICE files, and a failed sync will notify the owner. Forks and the schedule need the matching GitHub permissions (see #53).
+
+These retention forks are not the fork decision described under the source-reuse rules above: maintaining a patch on a fork still follows the reviewed migration-PR process.
+
+The forks are not a mirror or a backup: the owner excluded Git mirrors, git bundles, NAS, other platforms and off-site snapshots, and a fork does not keep upstream Issues, PRs or release assets. A sync never force-pushes and never overwrites AgentDock's own branches.
+
+Nx and Jujutsu remain pinned research references. Updating a fork does not change an AgentDock dependency, source pin or release. An integration requires a separate reviewed PR with exact provenance, license and dependency review, and tests.
+
+| Research upstream | Fixed commit | License | Retention |
+| --- | --- | --- | --- |
+| [Worktrunk](https://github.com/max-sixty/worktrunk/tree/abe78b3be719b9caff4efc155ad83e697c2202f7) | `abe78b3be719b9caff4efc155ad83e697c2202f7` | MIT / Apache-2.0 | [Fork](https://github.com/ChiJiun/worktrunk) |
+| [Orca](https://github.com/stablyai/orca/tree/35eed0a05314feae84a855c8a5a8b7773b719a66) | `35eed0a05314feae84a855c8a5a8b7773b719a66` | MIT | [Fork](https://github.com/ChiJiun/orca) |
+| [AgentBridge](https://github.com/yoonjae26/AgentBridge/tree/c37a3c904785d7f84090fd98cf364577e4caf90f) | `c37a3c904785d7f84090fd98cf364577e4caf90f` | MIT | [Fork](https://github.com/ChiJiun/AgentBridge) |
+| [Orkestra](https://github.com/andyyaro/orkestra/tree/68ef18b939d62b703334746ea94e5ecb7bc3cae0) | `68ef18b939d62b703334746ea94e5ecb7bc3cae0` | Apache-2.0 | [Fork](https://github.com/ChiJiun/orkestra) |
+| [Nx](https://github.com/nrwl/nx/tree/341530f8a798dcfa071bb975100f41c214543427/packages/nx/src) | `341530f8a798dcfa071bb975100f41c214543427` | MIT | Research pin |
+| [Jujutsu](https://github.com/jj-vcs/jj/tree/0f7f4ced8c1a24bef5a7fd8b9be64fbc63ddb3e0) | `0f7f4ced8c1a24bef5a7fd8b9be64fbc63ddb3e0` | Apache-2.0 | Research pin |
+
+See #53 for file-level links and the [capability plan](research/agentdock-capability-map.md) for integration decisions.

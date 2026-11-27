@@ -2,7 +2,8 @@
 
 Status: architecture reference, **not implemented**
 Researched: 2026-11-17
-Related AgentDock issues: [#1](https://github.com/ChiJiun/agentdock/issues/1), [#6](https://github.com/ChiJiun/agentdock/issues/6), [#13](https://github.com/ChiJiun/agentdock/issues/13), [#15](https://github.com/ChiJiun/agentdock/issues/15)
+Related AgentDock issues: [#1](https://github.com/ChiJiun/agentdock/issues/1), [#6](https://github.com/ChiJiun/agentdock/issues/6), [#13](https://github.com/ChiJiun/agentdock/issues/13), [#15](https://github.com/ChiJiun/agentdock/issues/15), [#17](https://github.com/ChiJiun/agentdock/issues/17)
+Related decisions: [ADR-0004](../decisions/0004-rust-primary-backend.md) (Rust backend), [ADR-0005](../decisions/0005-model-tiers.md) (model tiers; the single source for tier, orchestration and permission vocabulary)
 
 ## Executive summary
 
@@ -46,9 +47,9 @@ Sources:
 
 | Axis | Claude Code Advisor (reference) | Copilot Fusion (reference) | AgentDock design |
 | --- | --- | --- | --- |
-| Primary mechanism | Consult a stronger advisor on important decisions. | Route model **and** workflow per request. | Mode-based execution policies plus explicit advisor escalation. |
+| Primary mechanism | Consult a stronger advisor on important decisions. | Route model **and** workflow per request. | Three independent axes (tier, orchestration, permission) per ADR-0005; manual selection in V1. |
 | Lightweight tasks | Primary model handles most work. | Single. | Single with deterministic tools where possible. |
-| Uncertain quality | Consult advisor selectively. | Cascade quality gate then stronger solver. | Configurable evidence gate, transparent escalation reason. |
+| Uncertain quality | Consult advisor selectively. | Cascade quality gate then stronger solver. | V1: the user decides. V2 at the earliest: bounded, logged escalation (ADR-0005 section 6). |
 | Independent review | Explicit reviewer/subagent usage. | Critique with independent reviewers and solver revision. | Separate read-only context and trusted test evidence. |
 | Control | Internal vendor runtime behavior. | Internal Copilot runtime routing. | Workbench can control only **its own** policies and supported adapter capabilities. |
 | Cost transparency | Model/provider dependent. | Constituent model billing and possible multi-call overhead. | Track each leg, retries, review, cache and cost provenance. |
@@ -80,20 +81,25 @@ Sources:
 
 ## AgentDock design proposal
 
-### UX: user selects policy, not raw implementation details
+### UX: use the ADR-0005 vocabulary
 
-Proposed options (these are **AgentDock-owned** design concepts, not GitHub's tier names):
+An earlier draft of this section proposed AgentDock-owned options named Economy/Balanced/Quality/Manual (the wording also used in Issue #17's deliverables). That proposal is **withdrawn**: [ADR-0005](../decisions/0005-model-tiers.md) is the single source, and it separates what those names mixed together:
 
-- **Economy** — single inexpensive model or direct tool; fail explicitly if quality gate cannot be met.
-- **Balanced** — Single initially; allow bounded Cascade where evidence indicates uncertainty.
-- **Quality** — selectively use independent Critique and stronger models, within budget.
-- **Manual** — user fixes model/provider, review and escalation decisions.
-- **Copilot Fusion** (if SDK-backed adapter is installed) — expose the vendor's actual Standard/High/Max choices, labelled **provider-managed**, with no imitation of custom routing controls.
+- **Tier** (`T-default`, `T1`–`T4`): capability and cost level. The default is `T-default` (send no model/effort setting).
+- **Orchestration** (`single`, `parallel`): whether one task uses more than one agent or model call. An explicit switch with a visible cost warning.
+- **Permission**: what the agent may do; unrelated to model strength.
+
+For Copilot Fusion specifically (only if an SDK-backed adapter is ever built; inference, not ADR-0005 text):
+
+- Show the vendor's Standard/High/Max as **provider-managed** settings, and only the values the runtime actually reports. Do not map them onto `T1`–`T4`, and do not imitate custom routing controls.
+- Fusion may run Cascade or Critique inside the vendor runtime, which means several model calls for one request. The UI should say that cost can multiply, the same way ADR-0005 requires for `parallel`.
+- Issue #17's deliverable "UX mapping of Fusion Standard/High/Max vs AgentDock-owned Economy/Balanced/Quality/Manual" should be read as "vs the ADR-0005 axes".
 
 Expose to Session Sentinel: `execution_pattern`, `phase`, `needs_review`, `approval_request`, `evidence_links`, `estimated_cost` (if available), `source_of_estimate`, `last_update_at`. All status polling should use stored events, not issue additional model requests.
 
 ### Execution policies
 
+- These rules are enforced in the Rust backend ([ADR-0004](../decisions/0004-rust-primary-backend.md)), not by prompts, and follow ADR-0005: no hidden routing, no automatic upgrade.
 - Read-only critique contexts; reviewers should not mutate the same worktree.
 - Validate available models, provider permissions, concurrency, per-leg timeouts and costs **before** executing.
 - Use bounded evidence packages for critics; keep cache-friendly stable prompt prefixes.
@@ -110,7 +116,7 @@ Compare (1) single model, (2) bounded Cascade, (3) bounded Critique, (4) Copilot
 ## Next implementation experiments
 
 1. **SDK feasibility spike (separate Issue):** validate Rust SDK compile, official Fusion configuration, local CLI/runtime lifecycle, auth/permissions, and clearly observable events in a throwaway repository. This is an adapter experiment, not code vendoring.
-2. **Routing-policy design:** define typed `Single | Cascade | Critique` and capability negotiation; defer actual multi-model execution until session store/policy are in place.
+2. **Routing-policy design:** input for #13 under the ADR-0005 orchestration axis: how Single, Cascade and Critique would be recorded and bounded. Defer actual multi-model execution until the session store and policy exist.
 3. **Session Sentinel:** surface meaningful routing transitions and genuine user decisions without prompting an LLM during UI refresh.
 4. **Source/provenance:** log exact SDK versions/runtime artifact terms before making a redistribution decision.
 

@@ -1,5 +1,7 @@
 /**
- * Proof-of-concept resolver for effective locale in AgentDock.
+ * Specification reference prototype for the effective-locale rules of AgentDock.
+ * Not product code and not shipped: the product implementation is Rust (ADR-0004)
+ * under a separate task packet that has not been written yet.
  * Not yet wired into React, Rust, ACP or any external agent.
  * Pure JS + Node test runner, deliberately no runtime dependencies.
  */
@@ -12,6 +14,8 @@ const STAGES = new Set(['ui', 'conversation', 'plan', 'review', 'issue', 'pullRe
   'commitMessage', 'documentation', 'codeComments', 'sessionSummary', 'notification', 'skillExplanation']);
 const LAYERS = ['task', 'session', 'project', 'global'];
 export const POLICY_VERSION = 'agentdock-language-v1';
+// Issue #18: Chinese workflows default to zh-TW; en-US must be selected explicitly.
+const DEFAULT_LOCALE = 'zh-TW';
 
 /** Unsupported tags (for example zh-CN) are rejected, never substituted. */
 function assertLocale(value, where) {
@@ -25,20 +29,22 @@ export function effectiveLanguage(scopes, stage) {
   const global = scopes?.global ?? {};
   if (stage === 'ui') {
     assertLocale(global.uiLocale, 'global.uiLocale');
-    return global.uiLocale ?? 'en-US';
+    return global.uiLocale ?? DEFAULT_LOCALE;
   }
 
-  for (const layer of LAYERS) {
-    const profile = scopes?.[layer];
-    if (!profile || typeof profile !== 'object') continue;
+  const profiles = LAYERS
+    .map((layer) => [layer, scopes?.[layer]])
+    .filter(([, profile]) => profile && typeof profile === 'object');
+
+  // Pass 1: stage-specific and artifact preferences of every layer, nearest first.
+  // A nearer layer's workflowLocale must not override a farther layer's explicit
+  // per-stage or artifact setting (same order as src/i18n/language.ts on main).
+  for (const [layer, profile] of profiles) {
     const explicit = profile.outputs?.[stage];
     if (explicit != null && !OVERRIDE_VALUES.has(explicit)) {
       throw new Error(`Unsupported output locale value in ${layer}: ${explicit}`);
     }
     if (explicit && explicit !== 'inherit') return explicit;
-
-    // Code comments follow repository conventions unless explicitly overridden.
-    if (PRESERVED.has(stage)) continue;
 
     if (ARTIFACT_STAGES.has(stage)) {
       const artifact = profile.artifactLocale;
@@ -47,11 +53,17 @@ export function effectiveLanguage(scopes, stage) {
       }
       if (artifact && artifact !== 'inherit') return artifact;
     }
+  }
 
+  // Code comments follow repository conventions unless explicitly overridden.
+  if (PRESERVED.has(stage)) return 'preserve-original';
+
+  // Pass 2: the nearest workflowLocale.
+  for (const [layer, profile] of profiles) {
     assertLocale(profile.workflowLocale, `${layer}.workflowLocale`);
     if (profile.workflowLocale) return profile.workflowLocale;
   }
-  return PRESERVED.has(stage) ? 'preserve-original' : 'en-US';
+  return DEFAULT_LOCALE;
 }
 
 const INSTRUCTIONS = {

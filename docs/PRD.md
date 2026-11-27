@@ -37,14 +37,16 @@ This product is not a Claude/Anthropic clone and should not copy protected asset
 - **Review drawer**: changed file list, diff, tests, reviewer findings, comment-to-agent.
 - **GitHub**: Issue/PR links, checks, remote status; do not auto-merge.
 - **Settings**: agent adapters, accounts, providers, workspace scopes, budget, optional SSH targets.
+- **Session Sentinel (navigation bell)**: cross-project attention inbox with concise event-derived summaries, decision prompts, and navigation to the relevant session. Inspired by the existing Acpira fork's notification bell / Ctrl+K switcher PR #7, expanded into an evidence-driven Monitor; see [Issue #15](https://github.com/ChiJiun/agentdock/issues/15).
 
 Design pattern: left sidebar / primary session / collapsible right evidence panel. Terminal and editor are embedded or delegated to the developer's IDE; do not build a full IDE in MVP.
 
-## 6. Full-workflow language control (zh-TW / en-US)
+## 6. Functional requirements and versions
 
-AgentDock must support **switching the language of the entire developer-facing workflow**: UI, agent explanations, task plans, advisor/subagent/reviewer prompts, skill output styles, GitHub PR/Issue narratives, CI explanations and Session Sentinel updates. This is separate from source code language, which should not change because a UI locale changed. Initial locales: Traditional Chinese (Taiwan, `zh-TW`) and English (`en-US`), with global/project/session overrides and an optional explicit per-task locale. Apply only through supported, trusted context APIs; do not silently rewrite external `SKILL.md`, `CLAUDE.md`, `AGENTS.md` or opaque vendor system prompts. Expose a capability-based `owned` / `confirmed` / `best-effort` / `unsupported` status per agent, and never report a language instruction as applied before the adapter confirms it. Requirements and safety tests: [Language Policy](architecture/language-policy.md), [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
+### All versions — full-workflow language control (zh-TW / en-US)
 
-## 7. Functional requirements and versions
+AgentDock must support **switching the language of the entire developer-facing workflow**: UI, agent explanations, task plans, advisor/subagent/reviewer prompts, skill output styles, GitHub PR/Issue narratives, CI explanations and Session Sentinel updates. This is separate from source code language, which should not change because a UI locale changed. Initial locales: Traditional Chinese (Taiwan, `zh-TW`) and English (`en-US`), with global/project/session overrides and an optional explicit per-task locale. Apply only through supported, trusted context APIs; do not silently rewrite external `SKILL.md`, `CLAUDE.md`, `AGENTS.md` or opaque vendor system prompts. Expose a capability-based `owned` / `confirmed` / `best-effort` / `unsupported` status per agent, and never report a language instruction as applied before the adapter confirms it. Resolution, policy snapshots, overlay composition and capability status belong in the Rust backend ([ADR-0004](decisions/0004-rust-primary-backend.md)); the React frontend only renders strings and the settings UI (PR #24 merged the UI part; the backend part is not implemented and has no task packet yet). Requirements and safety tests: [Language Policy](architecture/language-policy.md), [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
+
 
 ### MVP — usable, safe desktop client
 
@@ -56,6 +58,7 @@ AgentDock must support **switching the language of the entire developer-facing w
 - Local Git diff and test results; no automatic push.
 - SQLite schema with migrations for projects, tasks, sessions, events and approvals.
 - Basic Windows installer/dev flow, logging, accessible keyboard navigation, dark/light themes.
+- Session Sentinel preview UI: bell count represents **human-required decisions**, not ordinary active agents; grouped items navigate to sessions. In the MVP preview, summaries are deterministic and demo-labelled. Live summaries require trusted event sources and policy-controlled decisions.
 
 ### V1.0 — complete SDLC & remote execution
 
@@ -66,6 +69,7 @@ AgentDock must support **switching the language of the entire developer-facing w
 - Clear distinction between view restoration, actual agent session reattach, task resume.
 - Per-task usage metrics when exposed by adapters/providers.
 - Opt-in OS notifications for approvals / completion.
+- Event-driven Session Sentinel summary store: classify actionable tasks, deduplicate repeated status events, concise next actions, stable evidence links, and revalidate decisions before execution. UI polling must not trigger model calls.
 
 ### V1.x — cost-aware autonomous orchestration
 
@@ -74,10 +78,10 @@ AgentDock must support **switching the language of the entire developer-facing w
 - Event-driven background status reporting; polls should not incur model fees.
 - Token/cache statistics and controllable API budgets; subscription quotas marked unknown.
 - Scheduler, bounded concurrency, resume on provider throttling, explicit task deadlines.
-- A future adaptive execution selector inspired by [Copilot Fusion](research/copilot-fusion.md): Single, bounded Cascade and read-only Critique; allow explicit Manual mode and provider-owned Fusion tiers via a supported SDK adapter. Do not claim vendor internals are configurable.
+- Orchestration beyond `single` follows the orchestration axis of [ADR-0005](decisions/0005-model-tiers.md) (an explicit `parallel` switch with a visible cost warning; no hidden routing; automatic escalation only as the bounded V2 option). [Copilot Fusion research](research/copilot-fusion.md) (Single, Cascade, Critique) is background for that axis. Provider-owned Fusion tiers may be offered only through a supported SDK adapter and labelled provider-managed. Do not claim vendor internals are configurable.
 - Objective benchmarks comparing baseline with orchestrated agent configurations.
 
-## 8. Non-functional requirements
+## 7. Non-functional requirements
 
 - No hidden tool execution or secret exfiltration. Scope tools to allowed workspaces.
 - UI closure must not silently cancel *remote, explicitly persistent* work; local process lifecycle should be explicit.
@@ -87,7 +91,7 @@ AgentDock must support **switching the language of the entire developer-facing w
 - Avoid runtime versions that unnecessarily require heavyweight system-wide modifications.
 - Accessibility: keyboard-first navigation and labels, non-color-only status cues.
 
-## 9. Product exclusions for MVP
+## 8. Product exclusions for MVP
 
 - Reimplementing Claude Code, Codex, or Octomind internals.
 - Full IDE or cross-platform mobile client.
@@ -95,7 +99,7 @@ AgentDock must support **switching the language of the entire developer-facing w
 - Guaranteed 24/7 cloud infrastructure or exact subscription quota measurement.
 - Rebranding or copying proprietary Claude UI artwork/assets.
 
-## 10. Success gates
+## 9. Success gates
 
 - Two independently configured agents can complete a scripted task end-to-end.
 - Concurrent tasks in distinct worktrees cannot accidentally overwrite each other.
@@ -105,3 +109,7 @@ AgentDock must support **switching the language of the entire developer-facing w
 - No unsupported claims about real remaining subscription quota.
 
 See [roadmap.md](roadmap.md) for sequencing and concrete tests.
+
+## Delivery and provenance
+
+[The capability plan](research/agentdock-capability-map.md) tracks Alpha, V1, V2 and Later under [#52](https://github.com/ChiJiun/agentdock/issues/52). Alpha focuses on the Windows self-hosting gate in [#51](https://github.com/ChiJiun/agentdock/issues/51). Source retention uses the [four GitHub forks](sources.md#upstream-source-retention) (weekly sync planned under [#53](https://github.com/ChiJiun/agentdock/issues/53)).

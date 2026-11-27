@@ -2,7 +2,7 @@
 
 **A Rust-powered, agent-agnostic coding workbench inspired by the usability patterns of Claude Code Desktop.**
 
-> Status: product specification and architecture planning. **No application implementation or migrated third-party source code is present yet.**
+> Status: early implementation. A React/Vite UI prototype is under development; **no production ACP runtime or Rust/Tauri desktop binary is integrated yet**.
 
 AgentDock aims to give a developer one desktop environment for multiple coding agents, isolated Git worktrees, controlled tool approvals, verifiable review/CI workflows, and eventually resilient remote execution. It is an independent product—not an official Anthropic or Claude application.
 
@@ -30,6 +30,20 @@ AgentDock aims to give a developer one desktop environment for multiple coding a
 - Git CLI / worktrees and GitHub CLI or GitHub API for SDLC integration
 - SSH + optional persistent Rust worker for remote execution
 
+## Run the UI preview (development branch)
+
+The frontend provides an **interactive, in-memory demo** of projects, sessions, a simulated message timeline, change review, and the **Session Sentinel** notification/decision inbox. Nothing in the preview invokes an AI model, executes Git, or submits an approval.
+
+```sh
+npm ci
+npm run typecheck
+npm test
+npm run dev
+npm run build
+```
+
+The preview is intended for validating layout and interactions, **not** for real coding-agent execution. The Rust/Tauri desktop shell is tracked in Issue #4, ACP integration in Issue #6, and event-driven Session Sentinel in Issue #15.
+
 ## Project documents
 
 - [Product requirements](docs/PRD.md)
@@ -38,7 +52,7 @@ AgentDock aims to give a developer one desktop environment for multiple coding a
 - [Claude Advisor × Copilot Fusion / HydraFusion orchestration research](docs/research/model-orchestration-claude-advisor-copilot-fusion.md)
 - [Copilot Fusion / HydraFusion / Rust SDK research](docs/research/copilot-fusion.md)
 - [End-to-end multilingual Harness language policy (繁體中文 / English)](docs/architecture/language-policy.md)
-- [Standalone language-policy resolver prototype and tests](prototypes/language-policy/README.md)
+- [Language-policy resolver reference prototype and tests](prototypes/language-policy/README.md) (specification reference, not product code; the product implementation is Rust)
 - [Roadmap and release gates](docs/roadmap.md)
 - [Architecture decision 0001](docs/decisions/0001-independent-workbench.md)
 - [Agent contributor rules](AGENTS.md)
@@ -53,8 +67,8 @@ AgentDock aims to give a developer one desktop environment for multiple coding a
 
 ## Working policy
 
-This repository initially contains **original project documentation only**. External runtimes should be integrated over public protocols first. A migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
+The UI preview uses original AgentDock components and helpers, following the **reimplement** decision in [ADR-0002](docs/decisions/0002-source-reuse.md). No Acpira source files are vendored. External runtimes should be integrated over public protocols first. A future migration PR must document source location + commit, exact files, license, necessary attribution/NOTICE, adaptations, tests and a plan for keeping security fixes up to date.
 
 ## Licensing
 
-**To be decided before publishing copied third-party implementation.** Third-party repositories have different obligations, especially AGPL-3.0. The initial repository is private while architecture and provenance are being evaluated. See [sources.md](docs/sources.md).
+AgentDock's distribution license remains to be decided. The UI preview depends on published npm packages, whose notices must be included in release artifacts. Third-party repositories have different obligations, especially AGPL-3.0. See [sources.md](docs/sources.md).

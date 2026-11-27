@@ -9,6 +9,7 @@ Status: proposal; not a promise of completion dates.
 | M0 — Sources and decisions | Identify sources, licenses, ACP SDK choice, UX reference, threat model | ADR, provenance inventory, clear exclusions |
 | M1 — Desktop skeleton | Rust workspace/Tauri 2 + React, Windows dev build, CI | App starts, smoke test, lint/build CI |
 | M2 — Usable sessions | Project management, typed ACP host, 2 adapters, streaming, persistence, approvals | Same test task works through 2 agents and safe cancel |
+| M2.5 — Self-hosting Alpha | Windows install, real Claude Code/Codex, two isolated worktrees, diff/tests/PR, controlled approvals, persistence | [#51](https://github.com/ChiJiun/agentdock/issues/51) v0.1.0-alpha gate; see [M2.5 below](#m25--self-hosting-alpha) |
 | M3 — Coding workflow | Git diff/worktree and tests; GitHub Issue→PR review→CI | Isolated parallel worktree test + PR demonstration |
 | M4 — Reliable remote | SSH worker, durable event log, reconnect, bounded concurrency | Disconnect/reconnect and no duplicate side effects |
 | M5 — Cost/Advisor | Role routing, manual advisor, budgets, benchmarks | Cost and quality evaluated against baseline |
@@ -16,16 +17,18 @@ Status: proposal; not a promise of completion dates.
 ## Initial work order
 
 1. License/provenance / precise upstream migration decision.
-2. Define UX states + design tokens and screen map, including zh-TW/en-US labels and the [Language Policy](architecture/language-policy.md) for task/skill/prompt outputs. Note: the merged [UX spec](ux/README.md) decision 10 currently plans English UI copy first with zh-TW later; the owner has not yet reconciled that with this item (see Language Policy section 11).
-3. Rust & Tauri scaffold with typed front/back boundary.
+2. Define UX states + design tokens and screen map. Language: the frontend preview already switches `zh-TW`/`en-US` (PR #24, `src/i18n/`); workflow and artifact language for task/skill/prompt outputs follows the [Language Policy](architecture/language-policy.md) and belongs in the Rust backend ([ADR-0004](decisions/0004-rust-primary-backend.md)), which no alpha task packet covers yet. The [UX spec](ux/README.md) decision 10 ("UI copy in English first") predates PR #24 and has not been reconciled (Language Policy section 11).
+3. Rust & Tauri scaffold with typed front/back boundary. The separate UI-foundation branch prototypes Session Sentinel and keyboard navigation with in-memory data; real backend monitoring is tracked in [Issue #15](https://github.com/ChiJiun/agentdock/issues/15).
 4. ACP mock first and supported real adapter compatibility matrix.
 5. Storage and approval gates before unrestricted real-agent tools.
 6. Worktree and change review.
 7. GitHub integration with human confirmation before pushes/merges.
 8. Remote worker after reliable local tasks.
-9. Provider routing & advanced token optimizations after metrics, informed by [Copilot Fusion research](research/copilot-fusion.md) (Single/Cascade/Critique, cache-aware context, independent review). Prototype the optional Rust Copilot SDK adapter separately before considering deeper runtime reuse.
+9. Provider routing & advanced token optimizations after metrics. Model tiers, the orchestration axis and the permission axis are defined by [ADR-0005](decisions/0005-model-tiers.md); the [Copilot Fusion research](research/copilot-fusion.md) is background for the orchestration axis (Single/Cascade/Critique, cache-aware context, independent review), not a second tier system. Prototype the optional Rust Copilot SDK adapter separately before considering deeper runtime reuse.
 
 ## Language release gate
+
+These are targets, not achieved results. Backend items are implemented in Rust ([ADR-0004](decisions/0004-rust-primary-backend.md)); no alpha task packet in `docs/tasks/` covers them yet.
 
 - UI can switch between `zh-TW` and `en-US` without reloading agent state or triggering LLM calls.
 - Owned role templates and simulated Session Sentinel summaries use the selected workflow locale.
@@ -67,3 +70,18 @@ Run identical representative tasks on: (A) single strong model, (B) role routing
 ## Delivery caution
 
 For one developer working around classes and internship, optimize for vertical slices: a real agent finishes a safe task in a real repo, with visible evidence, before building an Agent OS. Multi-month estimates are dependent on available engineering time, not a fixed release commitment.
+
+## M2.5 · Self-hosting Alpha
+
+[#51](https://github.com/ChiJiun/agentdock/issues/51) requires a reproducible Windows install and smoke test, real Claude Code and Codex tasks, persistent events, two isolated worktrees, host-controlled approvals, runner-observed test evidence (no agent-filled PASS) and negative security tests such as path traversal and worktree escape. Release only after every #51 gate item passes, including ten real tasks, and publish checksums and known limitations. Measure 20–30 tasks before replacing the existing workflow. Make AgentDock the primary entry point for its own repo only after ten of its own tasks pass, and keep the existing desktop tools as a fallback. The 20–30 task comparison (completion time, failure rate, manual interventions, recovery success) is a verifiable target, not a measured speed-up.
+
+The Alpha backend is Rust under [ADR-0004](https://github.com/ChiJiun/agentdock/pull/68) (PR #68, not merged), with implementation packets in `docs/tasks/` of that PR. The contracts of [ADR-0003](decisions/0003-task-session-event-contracts.md) (`docs/contracts/`, on main) own Task/Session/Event and state transitions. The Node runtime PRs #25, #27, #28, #29 and #33 are behaviour and test references only and are not merged. V1 work (#47–#49) must extend those contracts and must not add a second Task or Worktree model.
+
+V1 expands Local CI, caching and the integration queue via #47–#49. V2 and Later decisions are in the [capability plan](research/agentdock-capability-map.md). Repository protection is tracked in [#55](https://github.com/ChiJiun/agentdock/issues/55) and the [four GitHub forks](sources.md#upstream-source-retention) (weekly sync planned) in [#53](https://github.com/ChiJiun/agentdock/issues/53).
+
+## Repository protection
+
+- GitHub server-side rulesets and branch protection are the authority on main; local hooks and AgentDock policy protect controlled operations only. [#55](https://github.com/ChiJiun/agentdock/issues/55) tracks the acceptance checks.
+- Inventory the real CI check names and triggers first, so each required check runs on every relevant PR. Add Rust/Tauri Windows CI as required only after it is stable.
+- For a single maintainer, a required human approving review may make PRs unmergeable. Confirm available reviewers and that the ruleset is satisfiable before enabling it.
+- Changing a ruleset needs repository administration permission. A merged docs PR does not show that permission.

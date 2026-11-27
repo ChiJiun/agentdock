@@ -54,18 +54,24 @@ test('artifactLocale applies to prose artifacts only, below explicit outputs and
     assert.equal(effectiveLanguage(scopes, stage), 'zh-TW');
   }
   assert.equal(effectiveLanguage(scopes, 'codeComments'), 'preserve-original');
-  // `inherit` falls through to workflowLocale; a nearer layer wins over a farther artifactLocale.
+  // `inherit` falls through to workflowLocale.
   assert.equal(effectiveLanguage({ global: { workflowLocale: 'zh-TW', artifactLocale: 'inherit' } }, 'documentation'), 'zh-TW');
-  assert.equal(effectiveLanguage({ global: scopes.global, session: { workflowLocale: 'zh-TW' } }, 'documentation'), 'zh-TW');
+  // A nearer workflowLocale does not override a farther artifactLocale...
+  assert.equal(effectiveLanguage({ global: scopes.global, session: { workflowLocale: 'zh-TW' } }, 'documentation'), 'en-US');
+  // ...but a nearer artifactLocale or explicit stage setting does.
+  assert.equal(effectiveLanguage({ global: scopes.global, session: { artifactLocale: 'zh-TW' } }, 'documentation'), 'zh-TW');
+  assert.equal(effectiveLanguage({ global: scopes.global, task: { outputs: { documentation: 'zh-TW' } } }, 'documentation'), 'zh-TW');
 });
 
-test('nearer-layer workflowLocale overrides an explicit per-stage setting of a farther layer (documented trade-off)', () => {
-  const scopes = { global: zh, project: { workflowLocale: 'zh-TW' } };
+test('a nearer workflowLocale does not override a farther explicit per-stage setting', () => {
+  // Same rule as src/i18n/language.ts on main: the default commit-message policy survives.
   assert.equal(effectiveLanguage({ global: zh }, 'commitMessage'), 'en-US');
-  assert.equal(effectiveLanguage(scopes, 'commitMessage'), 'zh-TW');
-  // Pinning the stage in the nearer layer keeps it.
-  const pinned = { global: zh, project: { workflowLocale: 'zh-TW', outputs: { commitMessage: 'en-US' } } };
-  assert.equal(effectiveLanguage(pinned, 'commitMessage'), 'en-US');
+  assert.equal(effectiveLanguage({ global: zh, project: { workflowLocale: 'zh-TW' } }, 'commitMessage'), 'en-US');
+  assert.equal(effectiveLanguage({ global: en, session: { workflowLocale: 'zh-TW' } }, 'codeComments'), 'preserve-original');
+  // The nearer workflowLocale still decides stages nobody pinned.
+  assert.equal(effectiveLanguage({ global: zh, project: { workflowLocale: 'en-US' } }, 'review'), 'en-US');
+  // A nearer explicit setting for the same stage wins over the farther one.
+  assert.equal(effectiveLanguage({ global: zh, project: { outputs: { commitMessage: 'zh-TW' } } }, 'commitMessage'), 'zh-TW');
 });
 
 test('unsupported locale tags are rejected, never substituted', () => {
@@ -75,9 +81,13 @@ test('unsupported locale tags are rejected, never substituted', () => {
   assert.throws(() => effectiveLanguage({ global: { artifactLocale: 'zh-Hans' } }, 'documentation'), /Unsupported artifact locale/);
 });
 
-test('default language is en-US and unknown values/stages are rejected', () => {
+test('default language is zh-TW, en-US is explicit, and unknown values/stages are rejected', () => {
   assert.equal(effectiveLanguage({ global: en }, 'review'), 'en-US');
-  assert.equal(effectiveLanguage({}, 'conversation'), 'en-US');
+  assert.equal(effectiveLanguage({ global: en }, 'ui'), 'en-US');
+  assert.equal(effectiveLanguage({}, 'conversation'), 'zh-TW');
+  assert.equal(effectiveLanguage({}, 'ui'), 'zh-TW');
+  assert.equal(effectiveLanguage(undefined, 'documentation'), 'zh-TW');
+  assert.equal(effectiveLanguage({}, 'codeComments'), 'preserve-original');
   assert.throws(() => effectiveLanguage({ global: zh }, 'shell'), /Unsupported/);
   assert.throws(() => effectiveLanguage({ global: { outputs: { review: 'fr-FR' } } }, 'review'), /Unsupported/);
 });

@@ -29,7 +29,7 @@ The UI does not launch arbitrary shell commands. It calls typed Rust commands. A
 
 ## Multilingual instruction and context boundary
 
-The host will own a configurable [Language Policy / Context Composition Layer](architecture/language-policy.md). Distinguish deterministic `uiLocale`, response `workflowLocale`, and generated-prose `artifactLocale`; initially support `zh-TW` and `en-US`. When an external ACP/SDK agent advertises compatible instruction capabilities, pass the effective language preference without replacing hidden system prompts or mutating Skills. Unavailable capabilities must be disclosed; raw tool output, code, commands and repository-specific instructions remain intact. Session Sentinel's UI language updates must not trigger paid model calls.
+The Rust host (Tauri 2 and `crates/*`; [ADR-0004](decisions/0004-rust-primary-backend.md)) will own a configurable [Language Policy / Context Composition Layer](architecture/language-policy.md): it resolves effective `zh-TW` / `en-US` preferences at Global → Project → Session → Task scopes, snapshots the policy version, composes bounded language overlays and records the capability status. The React frontend only renders UI strings and the settings UI through typed commands (`src/i18n/`, merged by PR #24, currently resolves preferences in the browser as a preview). Distinguish deterministic `uiLocale`, response `workflowLocale`, and generated-prose `artifactLocale`; initially support `zh-TW` and `en-US`. When an external ACP/SDK agent advertises compatible instruction capabilities, pass the effective language preference without replacing hidden system prompts or mutating Skills. Unavailable capabilities must be disclosed; raw tool output, code, commands, repository-specific instructions and backend permission rules remain intact. Session Sentinel's UI language updates must not trigger paid model calls. None of the backend part is implemented yet. See [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
 
 ## Runtime split
 
@@ -37,11 +37,9 @@ The host will own a configurable [Language Policy / Context Composition Layer](a
 
 **AgentDock orchestration:** project/worktree selection, task history, UI timeline, approvals for host-controlled operations, independent review, CI flow, work scheduling and remote connectivity.
 
-**Copilot SDK-backed adapter (research only):** evaluate the official MIT-licensed Rust Copilot SDK as a distinct integration path for the separately distributed Copilot Runtime and Copilot Fusion tiers. This does not grant control over Fusion's internal model orchestration or permission to copy the proprietary runtime source. See [Copilot Fusion research](research/copilot-fusion.md).
+**Copilot SDK-backed adapter (research only):** evaluate the official MIT-licensed Rust Copilot SDK as a distinct integration path for the separately distributed Copilot Runtime and Copilot Fusion tiers. This does not grant control over Fusion's internal model orchestration or permission to copy the proprietary runtime source. Fusion tiers are provider-managed settings, not AgentDock model tiers ([ADR-0005](decisions/0005-model-tiers.md)). See [Copilot Fusion research](research/copilot-fusion.md).
 
 **Optional native agent:** future extension only if ACP agents cannot satisfy cost routing/observability; never a prerequisite for the MVP.
-
-**Language context boundary:** resolve effective `zh-TW` / `en-US` preferences at Global → Project → Session → Task scopes, pass bounded language overlays only through supported Agent capabilities, and never rewrite raw Skill source or backend permission instructions. See [Language Policy](architecture/language-policy.md) and [Issue #18](https://github.com/ChiJiun/agentdock/issues/18).
 
 ## Rust module plan (initial)
 
@@ -120,3 +118,7 @@ Security: path traversal, symlink escapes, env leaks, replay of non-idempotent o
 Performance: event-stream latency, memory, CPU, long transcripts; compared to fixed baseline.
 
 References in [sources.md](sources.md).
+
+## Repository enforcement boundary
+
+Local validators and integration queues produce evidence bound to the task, head SHA, base SHA and validated tree. Operations that change those inputs invalidate the evidence. GitHub independently enforces main through the active "Protect main" ruleset, whose verification is tracked in [#55](https://github.com/ChiJiun/agentdock/issues/55). The [four GitHub forks](sources.md#upstream-source-retention) (weekly sync planned under #53) are isolated from the product dependency and release path.

@@ -1,19 +1,29 @@
 # Research: Claude Code Advisor vs GitHub Copilot Fusion for AgentDock
 
 Date: 2026-11-17
-Status: Research and proposed design (not implemented)
-Related: #6 ACP adapter · #7 event store · #8 policy · #13 cost/Advisor · #14 benchmarks · #15 Session Sentinel
+Status: Research input (not implemented, not a decision). Model tiers and routing rules are decided in [ADR-0005](../decisions/0005-model-tiers.md); where this document and ADR-0005 differ, ADR-0005 wins.
+Related: #6 ACP adapter · #7 event store · #8 policy · #13 cost/Advisor · #14 benchmarks · #15 Session Sentinel · [ADR-0004](../decisions/0004-rust-primary-backend.md) (Rust backend) · [ADR-0005](../decisions/0005-model-tiers.md) (model tiers) · [coding-harness-comparison.md](coding-harness-comparison.md)
 
-## Executive decision
+## Summary and status relative to ADR-0005
 
-**Build a configurable, evidence-driven orchestration layer over an existing agent runtime, not a copy of Copilot Fusion.** AgentDock should eventually support:
+**This document is research input for [Issue #13](https://github.com/ChiJiun/agentdock/issues/13). It does not define tiers or routing rules.** Those are in [ADR-0005](../decisions/0005-model-tiers.md) (Status: Proposed), with the evidence in [coding-harness-comparison.md](coding-harness-comparison.md). In short, ADR-0005 keeps three independent axes (capability tier `T-default` and `T1`–`T4`; orchestration `single`/`parallel`; permission), defaults to `T-default`, allows only manual selection in V1, downgrades but never upgrades automatically, defers bounded automatic escalation to V2, forbids hidden routing, and lists Fusion-style automatic routing under "Alternatives considered" as conflicting with the no-hidden-interception rule.
+
+What this document adds is a description of four execution patterns seen in Copilot Fusion and Claude Code Advisor:
 
 1. `Single` — one model/agent handles the request.
 2. `Cascade` — a cheaper executor proposes work; a quality gate either accepts it or escalates/repairs.
 3. `Critique` — a drafting executor produces a candidate, independent read-only reviewers inspect it, and the executor revises if necessary.
-4. `Advisor` — a consultative escalation mode for major decisions, repeated failures, or completion review; **not equivalent to a cascade or a replacement executor**.
+4. `Advisor` — a consultative escalation for major decisions, repeated failures, or completion review; **not equivalent to a cascade or a replacement executor**.
 
-These are strategies that AgentDock can configure and benchmark **when it owns the relevant model calls and execution loop**. For Claude Code, Codex, Octomind, GitHub Copilot, and other external ACP-backed harnesses, keep their own model routing and private context untouched. Use only capabilities their adapters actually expose.
+How they relate to ADR-0005 (the first two rows restate ADR-0005; the Advisor row is this document's inference):
+
+| Pattern | ADR-0005 axis | Note |
+| --- | --- | --- |
+| Single | orchestration `single` | The baseline. Which tier it runs at is a separate choice |
+| Cascade, Critique | orchestration (ADR-0005 names Copilot Fusion's Cascade/Critique as orchestration strength, and lists critique under `parallel`) | More model calls or agents for one task: an explicit switch with a visible cost warning, never hidden inside `T4` |
+| Advisor | not assigned by ADR-0005 (it leaves the PRD's advisor role to #13) | Inference: a manual advisor consultation is a separate, bounded session with its own tier |
+
+These patterns can only be configured and benchmarked **when AgentDock owns the relevant model calls and execution loop**. For Claude Code, Codex, Octomind, GitHub Copilot, and other external ACP-backed harnesses, keep their own model routing and private context untouched. Use only capabilities their adapters actually expose.
 
 ## Official references and what they establish
 
@@ -48,9 +58,11 @@ The post's approximate **99% reduction** refers to a particular reported *backgr
 | Cost | Additional advisor token usage | Sum of every stage (including rejected/failed legs) |
 | Visibility | Consulted/declined/unavailable | Show stage/model/status and final validated output, avoid presenting drafts as final |
 
-**Single** is the baseline, not a failure of orchestration. More reviewers on every prompt can cost more and add latency. Copilot Fusion's Standard/High/Max correspond to a *quality/cost effort intent*, not user-selectable raw model mappings. AgentDock can expose comparable **Economy / Balanced / Quality** policies (plus **Manual**; the same names as [Copilot Fusion research](copilot-fusion.md) and Issue #17) instead of reusing GitHub's Standard/High/Max tier names for AgentDock-owned routing.
+**Single** is the baseline, not a failure of orchestration. More reviewers on every prompt can cost more and add latency. Copilot Fusion's Standard/High/Max correspond to a *quality/cost effort intent*, not user-selectable raw model mappings. AgentDock does not copy those names and does not map them onto `T1`–`T4`: they are provider-managed settings of the Copilot runtime that combine effort with orchestration, the kind of value ADR-0005 open question 8 says must not be mistaken for a tier (inference).
 
 ## Proposed architecture
+
+The sketch below is a research sketch for a future AgentDock-owned loop, not a V1 design. Anything in it that selects a strategy or model automatically is outside V1 (ADR-0005 sections 6 and 8). Limits and permissions are enforced in the Rust backend ([ADR-0004](../decisions/0004-rust-primary-backend.md)), not by prompts.
 
 ```text
 Task / Session / User-approved budget
@@ -82,42 +94,23 @@ Component responsibility:
 - **StateStore**: append each leg's started/completed/failed/cancelled state and cost; track model/provider/caches/latency/retries and evidence references.
 - **Session Sentinel**: event-driven digest of what changed / why it matters / action requested. Never query an LLM merely because a user opens the bell or refreshes a panel.
 
-### Suggested typed interfaces (illustrative, not committed code)
+### Vocabulary: use ADR-0005, do not add a second set
 
-```ts
-type Strategy = "single" | "cascade" | "critique" | "advisor" | "external-managed";
-type Effort = "economy" | "balanced" | "quality" | "manual";
+An earlier draft of this document proposed its own effort names (Economy/Balanced/Quality/Manual) and a `Strategy`/`Effort` type sketch. They are **withdrawn** in favour of the ADR-0005 section 3 fields: `tier`, `model_role`, `orchestration`, `permission`, `min_tier`, `reason`.
 
-type RoutingInput = {
-  taskId: string;
-  effort: Effort;
-  capabilities: string[];
-  risk: "low" | "medium" | "high";
-  sessionCacheAffinity?: string;
-  apiBudgetUsd?: number;
-  allowedProviders: string[];
-};
+If #13 later needs to record which pattern a `parallel` task used, a per-leg record could carry: leg kind (executor, judge, critic, repair, advisor), requested and effective tier, a read-only flag, and token/time bounds. This is a suggestion for #13 and for a future contract change under ADR-0003, **not** a schema, and not a claim that external ACP agents can be forced to use a specific model in their private harness.
 
-type PlannedLeg = {
-  kind: "executor" | "judge" | "critic" | "repair" | "advisor";
-  providerId: string;
-  modelId: string;
-  readOnly: boolean;
-  maxTokens: number;
-  timeoutMs: number;
-};
-```
+## Policy: what ADR-0005 decides and what stays open
 
-These are intent contracts, **not** a claim that external ACP agents can be forced to use a specific model in their private harness.
+Decided by ADR-0005 (pointers only, not restated): default `T-default` (section 2); downgrade only, never automatic upgrade (section 5); V1 is manual selection, and bounded automatic escalation is V2 with a count limit, an event per escalation, a user off-switch, no permission increase and no recursion (section 6); a mid-session change is a cost event (section 7); no hidden routing (section 8); usage and cost display (section 9).
 
-## Default policy proposal (test before enabling)
+Open research input for #13 (not decided; anything automatic is V2 at the earliest):
 
-- **Economy**: Single unless a deterministic gate fails or the user requests review. Prefer local/deterministic tools for search/status.
-- **Balanced**: Single first; Cascade if a cheap executor has a reproducible uncertain result; a one-pass independent Critique for substantial changes when evidence warrants it.
-- **Quality**: Evaluate critique or advisory escalation for high-risk code; bounded independent review plus required tests, never unlimited parallel judges.
-- **Manual**: the user fixes model/provider, review and escalation decisions; no automatic strategy selection.
-- **Human-in-the-loop**: changes to default/protected branches, deletion, force push, release, external publication, irreversible actions require explicit approval regardless of strategy.
-- **Stop**: budget exceeded, reviewer disagreements unresolved, context is insufficient, policy denies a tool, or model/provider unavailable without approved fallback.
+- Which deterministic gate (build, tests, lint, diff safety checks) is reliable enough to justify a Cascade-style second attempt.
+- Whether a one-pass independent Critique for substantial changes is worth its cost, measured against a single-agent baseline.
+- Candidate triggers for an advisor consultation: before an irreversible architecture choice, after repeated verified failure, at completion review.
+- **Human-in-the-loop** (unchanged repo rule): changes to default/protected branches, deletion, force push, release, external publication and irreversible actions require explicit approval regardless of strategy.
+- **Stop conditions**: budget exceeded, reviewer disagreements unresolved, context insufficient, policy denies a tool, or model/provider unavailable without approved fallback.
 
 ### Cache-aware routing
 
@@ -160,8 +153,8 @@ GitHub's own reported results (in the Artificial Analysis Coding Agent Index, Co
 
 ## Implementation mapping / dependencies
 
-1. **#3 / #6 / #7 / #8**: typed task events, real adapter capability negotiation, event journal and backend permissions.
-2. **#13**: add observational routing; implement `single` before `cascade`, manual advisor next, critique and automatic decision policies only after measured benefits. Do not require a new native Harness for the first desktop MVP.
+1. **#3 / #6 / #7 / #8**: typed task events, real adapter capability negotiation, event journal and backend permissions, implemented in Rust (ADR-0004) against the ADR-0003 contracts.
+2. **#13**: use ADR-0005 as the single source for tiers; start with `single` and manual selection, add a manual advisor next, and consider critique or automatic policies only after measured benefits (V2 for anything automatic). Do not require a new native Harness for the first desktop MVP.
 3. **#14**: mock-provider deterministic tests and fixed-repo cost/quality benchmarks for strategy selection.
 4. **#15**: monitor displays **verified** orchestration leg status/evidence and only prompts for actionable decisions.
 5. A separate ADR should document whether routing belongs in a future owned native Agent loop, or in an external orchestrator supervising ACP agents with limited control.
