@@ -8,7 +8,7 @@ Related: [ADR-0003](../decisions/0003-task-session-event-contracts.md)、[ADR-00
 
 **如何閱讀對應欄**：第 6、7 節的表格多了兩欄：「對應 issue／任務包」與「owner 狀態」。`PR #68 P*` 指 [PR #68](https://github.com/ChiJiun/agentdock/pull/68) 的 alpha 任務包（尚未合併，所以只寫編號）。`NI-V*` 指本文件末尾的「建議新 issue」，`NI-H*` 指姊妹文件的建議新 issue；**這些 issue 尚未建立**，要等協調者與擁有者確認。V2 候補暫時由 [#52](https://github.com/ChiJiun/agentdock/issues/52) 收納。契約以 main 上的 ADR-0003 為準；後端以 Rust 為主（ADR-0004 在 PR #68，尚未合併）。
 
-大型提案流程、企業 monorepo 與大型開源專案的共通做法有三點。第一，核准規則寫在 repo 內可 diff 的檔案（OWNERS、MAINTAINERS、kep.yaml、EIP front matter），由 bot 讀取並執行。第二，「產生變更的身分不能為自己背書」：Kubernetes 作者不能 `/lgtm` 自己的 PR，GitHub 不把 Copilot 發起者的 approval 算進 required approvals。第三，main 保持綠燈的方式是在「預測的合併結果」上驗證，再搭配便宜的 revert，沒有任何一家把每個變更都在最新 trunk 上序列跑完全部測試。AI 貢獻政策的光譜很寬，一端是 Gentoo、NetBSD、QEMU 的禁止，另一端是 kernel、LLVM、Fedora、ASF 的「人類全責」。本次查到的政策裡，沒有一家把 AI review 當成足以合併的最終把關：Rust 規定 LLM review 只能 advisory，OpenSSF Scorecard 不計 AI review，SLSA v1.2 Source L4 要求兩位可信人員 review。所以 AgentDock 目前「fresh AI review 通過即合併」的流程，在可稽核性上已經比多數專案嚴謹，在「人類負責」與「兩人 review」這兩個外部標準上則有結構性落差。這個落差有五種處理選項，第 5 節列出，不替擁有者決定。可借鏡的低成本項目集中在這幾類：AI 揭露 trailer、作者與 reviewer 身分分離、revert-first、ADR front matter 機器驗證、證據綁定 merge candidate SHA、只讓受控 test runner 寫入證據。大規模機制（ML 選測、speculation graph、輪值 sheriff、merge window）對單人專案不划算。
+大型提案流程、企業 monorepo 與大型開源專案的共通做法有三點。第一，核准規則寫在 repo 內可 diff 的檔案（OWNERS、MAINTAINERS、kep.yaml、EIP front matter），由 bot 讀取並執行。第二，「產生變更的身分不能為自己背書」：Kubernetes 作者不能 `/lgtm` 自己的 PR，GitHub 不把 Copilot 發起者的 approval 算進 required approvals。第三，main 保持綠燈的方式是在「預測的合併結果」上驗證，再搭配便宜的 revert，沒有任何一家把每個變更都在最新 trunk 上序列跑完全部測試。AI 貢獻政策的光譜很寬，一端是 Gentoo、NetBSD、QEMU 的禁止，另一端是 kernel、LLVM、Fedora、ASF 的「人類全責」。本次查到的政策裡，沒有一家把 AI review 當成足以合併的最終把關：Rust 規定 LLM review 只能 advisory，OpenSSF Scorecard 不計 AI review，SLSA v1.2 Source L4 要求兩位可信人員 review。推論：AgentDock 目前「fresh AI review 通過即合併」的流程，在可稽核性上可能比多數專案嚴謹（未逐一比對），在「人類負責」與「兩人 review」這兩個外部標準上則有結構性落差。這個落差有五種處理選項，第 5 節列出，不替擁有者決定。可借鏡的低成本項目集中在這幾類：AI 揭露 trailer、作者與 reviewer 身分分離、revert-first、ADR front matter 機器驗證、證據綁定 merge candidate SHA、只讓受控 test runner 寫入證據。大規模機制（ML 選測、speculation graph、輪值 sheriff、merge window）對單人專案不划算。
 
 > 讀取日期：除另行標示外，所有來源皆於 **2026-11-27** 讀取（WebFetch／WebSearch）。WebFetch 回傳的是摘要工具產生的內容，不是原文全文；標「未驗證」的項目只見於搜尋摘要或二手報導。「推論：」開頭的句子是本報告的判斷，不是來源原文。第 6、7 節表格中的「優點」「成本／適用規模」「建議階段」「風險」四欄全部是推論。
 >
@@ -60,7 +60,7 @@ GitHub 平台另外加上了數量控制：沒有寫入權的使用者在單一 
 
 ## 5. AI-only 合併與人類責任：待擁有者決定（五種處理方式）
 
-**本節不替擁有者決定。** 下列選項只列出取捨，沒有推薦；選擇後的落實（ADR、ruleset、CODEOWNERS、範本、AGENTS.md）都是**另案**，本 PR 不改 AGENTS.md、PR 範本、ruleset 或任何設定檔。
+**本節不替擁有者決定。** 下列選項只列出取捨，不推薦五個選項中的任何一個（流程面的建議，例如「把 AI review 與人類核准記成不同狀態」「把決定寫成 ADR」，在各選項下都成立，另列於選項表之後）；選擇後的落實（ADR、ruleset、CODEOWNERS、範本、AGENTS.md）都是**另案**，本 PR 不改 AGENTS.md、PR 範本、ruleset 或任何設定檔。
 
 **main 保護現況**（2026-11-27 以 `gh api repos/ChiJiun/agentdock/rulesets` 讀取，規則集「Protect main」）：只允許 squash merge、線性歷史、禁止刪除與 non-fast-forward；required status check 為 `check`（不要求分支與 base 同步）；review thread 必須 resolve；`required_approving_review_count` 為 0（**不要求任何 approval**）；不要求 code owner review、不要求最後一次 push 的 approval、不在新 push 時 dismiss 舊 approval；啟用「未歸屬變更需額外 approval」；沒有 bypass actor。推論：目前 repo 層級沒有任何機制強制「人類」核准，人類責任只存在於擁有者的流程指示。
 
@@ -124,12 +124,12 @@ GitHub 平台另外加上了數量控制：沒有寫入權的使用者在單一 
 | B3. 本機 integration queue：先做序列處理 | Tide、bors；Uber 指出單一佇列能保綠但不能擴展（[the morning paper](https://blog.acolyer.org/2019/04/18/keeping-master-green-at-scale/)） | 單機規模下最簡單、可預測 | 中 | alpha | agent 數量增加後等待時間會線性變長 | #49 | 有 owner |
 | B4. queue 狀態由事件重建，啟動時與實際 refs／worktree 對帳 | Shopify 的 in-memory 期望狀態加上 reconcile（[Shopify](https://shopify.engineering/successfully-merging-work-1000-developers)） | 符合 event-sourced 設計，能從崩潰中恢復 | 中 | alpha | 對帳規則有錯時可能誤刪 worktree，破壞性動作要另行確認 | #49、#7；PR #68 P2-6（crash recovery）、P5-3（worktree 對帳） | 有 owner |
 | B5. 不在 agent 執行中移動它的 worktree；送入 queue 時才 restack | ezyang 的平行 agent 做法（[ezyang](https://blog.ezyang.com/2026/03/parallel-agents-heart-sapling/)） | agent 不會在工作途中看到程式碼變動 | 低 | alpha | 做完後才 restack，衝突可能比較大 | #49、#37 | 有 owner（建議擴充 #49） |
-| B6. agent 專屬分支前綴，只能 push 到自己的分支 | Copilot 的 `copilot/` 分支（[GitHub Docs](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations)） | backend 強制，不依賴 prompt | 低 | alpha | 分支命名要避開 merge queue 不支援的 `*` pattern | #9、#8；PR #68 P5-2／P5-3 | 有 owner（建議擴充 #9） |
+| B6. agent 專屬分支前綴，只能 push 到自己的分支 | Copilot 的 `copilot/` 分支（[GitHub Docs](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations)） | backend 強制，不依賴 prompt | 低 | alpha | 分支命名要避開 merge queue 不支援的 `*` pattern | #9、#8；PR #68 P5-2／P5-3（分支建立）、P7-2a（push 範圍） | 有 owner（建議擴充 #9） |
 | B7. backend 強制「產生者不能當自己的 reviewer」，並記錄每個 commit 的 actor | GitHub 發起者 approval 不計入；Kubernetes、Chromium 的自我核准限制 | 對應第 5 節的核心問題；讓產品使用者也能採用選項 2 或 3 | 中 | alpha | 「同模型不同 session」算不算獨立，要讓使用者自己設定 | #10、#8；與第 5 節選項 2、3 綁定 | 部分 → NI-V4 |
 | B8. agent commit 只帶 `Assisted-by:`，完整的 agent、model、session 存在 event log；`Signed-off-by` 只能由人類的 UI 動作加上 | kernel（[coding-assistants](https://docs.kernel.org/process/coding-assistants.html)）；ASF 的 Tooling-Provenance 目標 | 讓使用者向 kernel、LLVM、Fedora 貢獻時直接合規 | 低到中 | alpha | trailer 格式在變，要可設定；`Co-authored-by` 在 ASF 與 Copilot 的語意相反，不建議混用 | #40、PR #68 P7-2（commit／push／PR）。commit trailer 與人類簽核動作無 owner | 缺口 → NI-V4 |
 | B9. 依目標 repo 套用上游 AI policy profile | QEMU、Gentoo、NetBSD 禁止；LLVM 禁止未經人類核准就行動的 agent；Rust 只限 non-critical 程式碼 | 防止使用者在禁止 AI 的專案中誤用 | 中；profile 要維護 | V1 | 政策常變（kernel 2026 年就改過），profile 過期會誤導使用者 | 無 | 缺口 → NI-V5 |
 | B10. 三個獨立的核准 bit：`peer_review`、`owner_approval`、`style_gate` | Google LGTM、OWNERS、readability（[SWE book ch.9](https://abseil.io/resources/swe-book/html/ch09.html)） | 讓 AI review、人類 owner、lint 三者分開判定 | 中 | V1 | 設定複雜度增加 | #10、#40 | 部分 → NI-V4 |
-| B11. agent 產出的程式碼先經使用者核准，才在受控 runner 執行 | Copilot agent 的 workflow 預設要人工核准才執行（[GitHub Docs](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations)） | 降低惡意或失控程式碼在本機執行的風險 | 中；會增加互動次數 | alpha（高風險指令）；V1（可設定） | 核准太頻繁會讓使用者疲乏，最後一律按允許 | #8；PR #68 P4-2／P4-3、P6-1 | 有 owner |
+| B11. agent 產出的程式碼先經使用者核准，才在受控 runner 執行 | Copilot agent 的 workflow 預設要人工核准才執行（[GitHub Docs](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations)） | 降低惡意或失控程式碼在本機執行的風險 | 中；會增加互動次數 | alpha（高風險指令）；V1（可設定） | 核准太頻繁會讓使用者疲乏，最後一律按允許 | #8；PR #68 P4-2／P4-3（指令分類與核准）、P8-3（使用者按「完成實作」）。受控 runner 執行 agent 產出程式碼前的核准，P6-1 沒有明列 | 部分（待 owner 確認 P6-1 範圍） |
 | B12. 對照重跑判定 flaky：失敗時在 base 上重跑 | Chromium CQ 的含 patch／不含 patch 重跑（[CQ docs](https://chromium.googlesource.com/chromium/src/+/main/docs/infra/cq.md)） | 避免 agent 為了 flaky 測試去亂改程式 | 中；多跑一次 base | V1 | 測試時間加倍；預設要 ALLGREEN，flaky 容忍要明確且可稽核 | #47、#48 | 有 owner（建議擴充） |
 | B13. 保存 main 每個 SHA 的基準結果，忽略原本就存在的失敗 | Rosie 忽略變更前就存在的 presubmit 失敗（[SWE book ch.22](https://abseil.io/resources/swe-book/html/ch22.html)） | 區分「agent 弄壞」和「本來就壞」 | 中 | V1 | 基準本身過期就會誤判 | #47、#48 | 有 owner（建議擴充） |
 | B14. 依 Cargo crate 反向依賴選測；動到 `Cargo.lock`、`build.rs`、toolchain 時升級為全量測試 | TAP 依依賴圖選測（[SWE book ch.23](https://abseil.io/resources/swe-book/html/ch23.html)）；Bazel 的 hermeticity 教訓 | 縮短 queue 時間 | 中 | V1 | 漏追蹤的輸入會造成 false green | #47（變更影響分析） | 有 owner |
@@ -149,7 +149,7 @@ GitHub 平台另外加上了數量控制：沒有寫入權的使用者在單一 
 
 ## 8. Conclusion
 
-這次研究改變的判斷是：AgentDock 和大型專案的差距不在工具，而在「誰負責」這個角色。Tide、bors、CQ、merge queue 的核心邏輯在單機上都能以低成本重做，而且 AgentDock 在證據綁定 SHA、event log、fresh reviewer 這幾點上已經比多數開源專案更容易稽核。真正無法靠工具補上的，是 Scorecard、SLSA、Rust、Fedora、LLVM 共同預設的那個「為內容負責的人類」。推論：與其讓 AI reviewer 假裝成第二個人，更務實的做法是讓「沒有人類核准」這件事在 label、trailer、event log 中可見，再由擁有者依第 5 節選擇補多少人力。這個選擇最好在 alpha 之前寫成 ADR，因為 roadmap 承諾給使用者的 human-approved merge boundary，需要 repo 自己先示範。
+這次研究改變的判斷是：AgentDock 和大型專案的差距不在工具，而在「誰負責」這個角色。Tide、bors、CQ、merge queue 的核心邏輯在單機上都能以低成本重做，而且推論：AgentDock 在 event log 與 fresh reviewer 這兩點上可能比多數開源專案更容易稽核（證據綁定 SHA 即 B1 尚未實作，不能算已具備）。真正無法靠工具補上的，是 Scorecard、SLSA、Rust、Fedora、LLVM 共同預設的那個「為內容負責的人類」。推論：與其讓 AI reviewer 假裝成第二個人，更務實的做法是讓「沒有人類核准」這件事在 label、trailer、event log 中可見，再由擁有者依第 5 節選擇補多少人力。這個選擇最好在 alpha 之前寫成 ADR，因為 roadmap 承諾給使用者的 human-approved merge boundary，需要 repo 自己先示範。
 
 產品面最有差異化的機會，在於大型專案的 AI 政策正快速分化而且頻繁改版：kernel 的 trailer 格式在 2026 年就改過一次，Rust 與 Fedora 對 AI review 的限制也不同。推論：一個能依目標 repo 自動套用上游政策的工作台（agent 不 sign off、自動揭露、人類核准才送出、禁止 AI 的專案直接警告），比再做一個 merge queue 更能解決使用者真正會遇到的合規問題。這一點的前提是 profile 要持續維護。本次未取得一手資料的部分（Meta land queue、Chromium／Kubernetes／EIP 的 AI 政策、eip-review-bot 的 automerge 規則、kernel 2026-07 patch 是否已併入主線、GitHub squash merge 的簽章行為），在做相關決策前需要補查。
 

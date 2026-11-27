@@ -27,6 +27,8 @@ Status: Proposed。擁有者核准 PR 後才轉為 Accepted；等級對應表與
 
 - `parallel` 必須是獨立的開關，UI 要明示「會開多個 agent、成本倍增」，**不得藏在 T4 裡**。Codex 的 Ultra、Claude Code 的 `ultracode` 屬於編排軸，不是 T4 的同義詞。
 - 提高 tier 不會提高 permission。外部來源（任務包、issue 內容、agent 輸出）只能要求降級，不能要求升級；引擎不支援某權限模式時不得靜默放寬（沿用 #8／#40 與研究文件的權限等級借鏡項目）。
+- **repo 內的來源不能自動生效。** 任務包（`docs/tasks/`）、issue 內容與 agent 輸出都在 agent 可修改或不可信的範圍，其中的 `tier`、`orchestration`、`permission` 只是**給使用者看的建議**，套用前必須由使用者在 UI 確認。repo 來源只能讓設定往較低成本、較低權限、`single` 的方向走；要升高等級、開 `parallel` 或放寬權限，一律需要使用者明確操作。這條同時適用於 `tier` 與 `orchestration`，不只權限。
+- 驗證等級（例如 [#70](https://github.com/ChiJiun/agentdock/issues/70) 的 L0–L4）是另一個維度，與 `T1`–`T4` 無關，兩者不得混用。
 - 權限軸的細節（各 agent 原生模式映射）不在本 ADR 範圍，由研究文件中的建議新 issue「統一權限等級與各 agent 原生模式映射」處理。
 
 ### 2. 等級 ID
@@ -41,6 +43,7 @@ Status: Proposed。擁有者核准 PR 後才轉為 Accepted；等級對應表與
 | `T3` | 深入 | 需要推理與跨檔理解 | 跨檔重構、除錯、規劃、獨立 review | 高 |
 | `T4` | 極限 | 少量、關鍵、可接受慢與貴 | 架構決策、難解 bug、合併前最終把關 | 很高 |
 
+- `T-default` 的意思是**不送任何 model／effort 設定**，完全由 agent 自己決定。
 - **預設是 `T-default`**，不是某個具體等級。理由：各家 effort 預設值會隨模型世代改變（研究筆記記錄 Opus 4.7 的預設為 `xhigh`、5.5 世代為 `medium`），AgentDock 替使用者覆寫會變成「暗中改 agent 的 effort」，而 Anthropic 的 postmortem 顯示 harness 層的小改動就會造成可感知的品質變化。**使用者明確選擇某一等級是例外**，且選擇要寫進事件。
 - 成本提示只用「低、中、高、很高」四個相對檔位。不換算金額，不顯示剩餘額度（見第 9 節）。
 - 下列對應只是 **2026-11-27 的現況範例，不是規格**；任何具體模型名稱都不得寫死在 UI 或任務包。
@@ -70,15 +73,17 @@ Fable 系列、Codex 的 Sol／Astra／Luna／Terra 在研究中沒有可靠的�
 
 ### 4. 執行期解析
 
-1. AgentDock 從 agent 回報的資料取得它**實際提供**的模型清單與可調整的設定（若 adapter 有暴露；見 open question 1），記錄在 `CapabilitySnapshot` 的**加法式**欄位。本 ADR 不修改現有 schema；[acp-capabilities.md](../contracts/acp-capabilities.md) 目前把 `config_option_update` 列為 v1 契約之外、之後可作為新事件型別加入。
+1. AgentDock 從 agent 回報的資料取得它**實際提供**的模型清單與可調整的設定（若 adapter 有暴露；見 open question 1），記錄下來。注意模型清單與 `configOptions` 通常在 `session/new` 回應、以 session 為單位回來，不是 `initialize` 回應；現有 `CapabilitySnapshot` 的範圍限於 initialize 回應，因此記錄位置（session 層級的新事件或新欄位，需改 schema）留待 open question 3 與 4 決定。本 ADR 不修改現有 schema；[acp-capabilities.md](../contracts/acp-capabilities.md) 目前把 `config_option_update` 列為 v1 契約之外、之後可作為新事件型別加入。
 2. 每個 agent 有一份「等級→{模型, effort}」對應表。建議放在使用者層級的 app data，**不從 repo 讀取**，理由與 adapter 設定相同：agent 能改 repo，對應表不能讓 agent 影響。預設值只當範例出貨，使用者可改。
 3. 解析結果必須是 agent 回報的清單中**確實存在**的組合；不存在的組合視為「此等級不可用」。
-4. 若 agent 完全不暴露模型或 effort 的設定方式，UI 顯示「此 agent 無法由 AgentDock 設定，請在 agent 端調整」，session 以 `T-default` 執行並記錄 `requested_tier` 與原因；**不假裝生效**。
+4. 若 agent 完全不暴露模型或 effort 的設定方式：UI 顯示「此 agent 無法由 AgentDock 設定，請在 agent 端調整」，**不假裝生效**。
+   - 若所要求的等級就是 `T-default`，直接執行。
+   - 若要求的是 `T1`–`T4`，**不得自動改用 agent 預設**（agent 預設可能比要求的更貴，等於自動升級）：停下來問使用者，使用者明確確認「以 agent 預設執行」後才啟動，並記錄 `requested_tier`、`effective_tier=T-default`、原因與確認動作。
 
 ### 5. 降級，不升級
 
-- 所要求的等級不可用時，只能往較低且可用的等級找（`T4→T3→T2→T1`）。找到時以該等級啟動，並寫一筆事件，內容至少含 `requested_tier`、`effective_tier`、具體 model／effort（已遮蔽）、原因。
-- 找不到任何不高於要求的可用等級時，**停下來問使用者**，不靜默改用 `T-default`（agent 預設可能比要求的更貴）。
+- 所要求的等級不可用時，只能往較低且可用的等級找（`T4→T3→T2→T1`）。找到時以該等級啟動，在 session 建立當下於 UI 顯示「要求 Tx，實際 Ty」（不能只留在 event log），並寫一筆事件，內容至少含 `requested_tier`、`effective_tier`、具體 model／effort（已遮蔽）、原因。
+- 找不到任何不高於要求的可用等級時（含第 4 節第 4 點的情況），**停下來問使用者**，不靜默改用 `T-default`（agent 預設可能比要求的更貴）；使用者明確確認後才能改用，且要寫事件。
 - 任何情況都不自動升級到較高等級、較高成本或較高權限。
 
 ### 6. 自動升級留到 V2
@@ -88,7 +93,7 @@ V1 只有手動選擇。V2 才允許「政策約束的自動升級」（例如 `
 ### 7. 中途換等級是成本事件
 
 - 等級在 session 建立時選定。
-- session 中途改等級或改 effort 時，UI 必須先提示「這可能會重建 prompt cache（成本與延遲上升）」，並建議改開子 session 或 reviewer session 承接。依據：Claude Code 官方文件把切換模型、在多數模型上切換 effort 列為會讓快取失效的操作；OpenAI 的 Codex agent loop 文章說明中途改模型、sandbox 或 approval mode 會破壞快取。各 agent 的實際行為以該 agent 為準，AgentDock 只負責提示，不攔截。
+- session 中途改等級或改 effort 時，UI 必須先提示「這可能會重建 prompt cache（成本與延遲上升）」，並建議改開子 session 或 reviewer session 承接。依據：Claude Code 官方文件把切換模型、在多數模型上切換 effort 列為會讓快取失效的操作（官方文件列出例外：Fable 5.1 以上、Opus 5.5、Sonnet 5.5、Haiku 5.5 在 API key 或訂閱下切換 effort 不會，因此提示文字應依 agent 與模型回報而定，不一律警告）；OpenAI 的 Codex agent loop 文章說明中途改模型、sandbox 或 approval mode 會破壞快取。各 agent 的實際行為以該 agent 為準，AgentDock 只負責提示，不攔截。
 - 每次改動寫成事件。
 
 ### 8. 不做隱藏路由
@@ -109,7 +114,7 @@ AgentDock 不得在使用者不知情下替 session 選模型。若日後做任�
 | 規劃（lead）、reviewer | `T3` | LangChain 的「規劃與驗證用高 reasoning、執行用中等」 |
 | 合併前最終把關、難解 bug | `T4`，需使用者明確選擇 | 成本很高 |
 
-另一條建議：**reviewer 的等級不低於 implementer，或改用不同廠商的 agent**，避免同一模型自己檢查自己。這是預設而非硬性規則（open question 5）。
+另一條建議：**reviewer 的等級不低於 implementer，或改用不同廠商的 agent**，避免同一模型自己檢查自己。這是預設而非硬性規則（open question 5）。implementer 是 `T-default`（實際等級未知）時無法比較，此時 reviewer 建議用不同廠商的 agent，或由使用者明確指定 reviewer 等級。
 
 ## 與 PR #68 任務包記號的對應
 
@@ -154,6 +159,7 @@ AgentDock 不得在使用者不知情下替 session 選模型。若日後做任�
    1. 讀 adapter 的原始碼與 README（鎖定要支援的版本與 commit），搜尋 `configOptions`、`set_config_option`、`session/set_model`、`session/set_mode`，以及 `session/new` 回應中的 `models`／`modes` 欄位。
    2. 在擁有者已登入的機器上，用相容性測試（[PR #68](https://github.com/ChiJiun/agentdock/pull/68) 的 P3-6 規劃的 opt-in E2E 可重用，合併前先用一次性的小腳本）對兩個 adapter 各送 `initialize` 與 `session/new`（工作目錄用空的暫存資料夾），逐字記錄回應中與模型、effort、mode 相關的欄位（先遮蔽 token 與路徑）。
    3. 對一個一次性 session 以列出的值呼叫 `session/set_config_option`，確認有沒有 `config_option_update`、之後的 `session/prompt` 是否生效；不要用真實訂閱額度跑長任務。
+   3b. 一律以 adapter 的回報（回應欄位與 `config_option_update`）為準，不得用「問模型你是誰」的方式確認模型有沒有換。
    4. 結果寫入 [acp-capabilities.md](../contracts/acp-capabilities.md) 的相容性紀錄（或 #6／#42 的矩陣）；未查證前，UI 一律顯示「無法由 AgentDock 設定」。
    此項建議以新 issue 追蹤（見研究文件的「建議新 issue」），在查證前本 ADR 不應轉為 Accepted。
 2. 四個等級與命名是否足夠？`T4` 是否需要每次使用者確認（因為成本很高）？
