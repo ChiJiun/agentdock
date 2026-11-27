@@ -119,7 +119,7 @@ Any PR that copies third-party source, adds a direct dependency on one of the mo
 
 ## Upstream source retention
 
-AgentDock retains four GitHub forks under ChiJiun. The tracking branches are scheduled for safe weekly synchronization on Sundays at 03:00 Asia/Taipei under [#53](https://github.com/ChiJiun/agentdock/issues/53). A sync may advance only the mapped upstream tracking branch by fast-forward. Divergence blocks the update and is reported with the source, time and commit IDs. The audit also records changes to LICENSE and NOTICE files.
+AgentDock retains four GitHub forks under ChiJiun. Safe weekly synchronization of the tracking branches (planned for Sundays at 03:00 Asia/Taipei) is tracked in [#53](https://github.com/ChiJiun/agentdock/issues/53); its schedule PR is [#58](https://github.com/ChiJiun/agentdock/pull/58), not merged, and no scheduled run has been verified yet. A sync may advance only the mapped upstream tracking branch by fast-forward. Divergence blocks the update and is reported with the source, time and commit IDs. The audit also records changes to LICENSE and NOTICE files.
 
 The forks are not a mirror or a backup: the owner excluded Git mirrors, git bundles, NAS, other platforms and off-site snapshots, and a fork does not keep upstream Issues, PRs or release assets. A sync never force-pushes and never overwrites AgentDock's own branches.
 

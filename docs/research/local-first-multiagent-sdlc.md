@@ -6,7 +6,7 @@
 
 ## 1. 決策與限制
 
-- **選擇：整合 AgentDock 的可獨立使用 Core Engine**。先以現有 repo 的 Rust orchestration / Tauri 分層實作，對外預留 CLI 與獨立 library API；不用現在另開一個 Agent 平台 repo，也不把邏輯埋在 React UI。
+- **選擇：整合 AgentDock 的可獨立使用 Core Engine**。先在本 repo 以 Rust orchestration / Tauri 分層實作（PR #68，尚未合併），對外預留 CLI 與獨立 library API；不用現在另開一個 Agent 平台 repo，也不把邏輯埋在 React UI。
 - 保留 **Git 為預設 Source Control**，可選 Jujutsu backend；**GitHub/GitLab 受保護分支、CI、審核仍為遠端正式合併權威**。本地 Git Hooks 可以繞過，不能宣稱提供等價的不可繞過 Branch Protection。
 - 目標是**適用於各種 Repo/多 Repo**，不是針對單一錢包、Buildroot 或 Node 專案寫特例。先實作最少的 Project Adapter 契約，再逐步支援各語言。
 - **重用成熟工具優先**：Worktrunk CLI、各語言既有 build cache、Nx 的任務圖模型（不可假設 Nx TS 檔可獨立移植）、正式 Git 操作。只在缺乏可靠外部 API 時實作薄 Rust facade。
@@ -99,7 +99,7 @@ artifactDigests, logRef, cacheMode, invalidationReason?
 
 **來源保存採四個 GitHub Fork，每週安全同步。** Worktrunk、Orca、AgentBridge 與 Orkestra 依 #53 保存。Nx 與 Jujutsu 保留固定研究 Commit 與原始碼位置。同步後的 HEAD 不改變研究基準或正式依賴。
 
-僅在以下條件成立時 fork 單一 upstream：
+上述保存用 fork 之外，僅在以下條件成立時才在 fork 上維護 patch、提交 upstream PR 或移植：
 1. 已證明現有 CLI/SDK 無法支援必要能力，而且 PR 需維護上游核心的改動；
 2. 需要提交 upstream PR 或長期維護已核對 license 的 patch；
 3. 已有固定版本、最小移植範圍、測試、修補同步策略與安全責任人。

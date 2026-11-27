@@ -106,4 +106,4 @@ See [roadmap.md](roadmap.md) for sequencing and concrete tests.
 
 ## Delivery and provenance
 
-[The capability plan](research/agentdock-capability-map.md) tracks Alpha, V1, V2 and Later under [#52](https://github.com/ChiJiun/agentdock/issues/52). Alpha focuses on the Windows self-hosting gate in [#51](https://github.com/ChiJiun/agentdock/issues/51). Source retention uses the [four weekly-synced GitHub forks](sources.md#upstream-source-retention).
+[The capability plan](research/agentdock-capability-map.md) tracks Alpha, V1, V2 and Later under [#52](https://github.com/ChiJiun/agentdock/issues/52). Alpha focuses on the Windows self-hosting gate in [#51](https://github.com/ChiJiun/agentdock/issues/51). Source retention uses the [four GitHub forks](sources.md#upstream-source-retention) (weekly sync planned under [#53](https://github.com/ChiJiun/agentdock/issues/53)).
