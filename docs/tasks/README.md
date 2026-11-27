@@ -192,7 +192,7 @@ Gate numbering used in every packet header. "Proven by" lists the packets whose 
   - Cancel or pause while `preparing` before S01 (`launch_aborts` is only flipped while `starting`): P8-3 `task_flow`.
   - A user approval racing with a session close (S14 against S16/S12/S23), rule 7 re-read: P4-3 adversarial tests.
   - Relaunching the implementation session for T27 / T38 / repair after a restart or a reviewer-triggered close (one `ensure_implementation_session` helper): P8-3b `review_flow`, P8-4 `pr_ci_flow`.
-  - T15 (`awaiting_approval` → `failed`) has no writer in alpha: P4-3 / P8-3 write none.
+  - T15 (`running` → `failed`) has no writer in alpha: P4-3 / P8-3 write none.
   - No graceful session shutdown on app exit (the Job Object ends the processes; recovery marks the sessions `disconnected`): P3-7 and P2-6.
   - `close_disconnected` takes `Arc<Store>` and must run its store work in `spawn_blocking`: P3-5 `session_runtime_mock`.
   - GitHub issue: [ChiJiun/agentdock#83](https://github.com/ChiJiun/agentdock/issues/83)
