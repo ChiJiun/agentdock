@@ -9,14 +9,17 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "lucide-react": "^0.468.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6",
     "@types/node": "^22.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

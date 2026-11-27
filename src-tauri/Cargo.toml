@@ -1,0 +1,23 @@
+[package]
+name = "agentdock-desktop"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "agentdock_desktop"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.6", features = [] }
+
+[dependencies]
+agentdock-core = { path = "../crates/agentdock-core" }
+tauri = { version = "2.12.7", features = [] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
