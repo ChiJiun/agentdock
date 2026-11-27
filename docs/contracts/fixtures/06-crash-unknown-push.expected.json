@@ -1,0 +1,19 @@
+{
+  "fixture": "06-crash-unknown-push.jsonl",
+  "description": "Host crashes after git push started: recovery marks the push outcome_unknown and interrupts the task; on resume the push is reconciled (found applied) instead of re-run; CI fails and a new repair session starts because the adapter cannot reattach.",
+  "final_task_states": {
+    "tsk_01JDQ006000000000000000001": "running"
+  },
+  "final_session_states": {
+    "ses_01JDQ006000000000000000001": "closed",
+    "ses_01JDQ006000000000000000002": "idle"
+  },
+  "attention": [
+    {
+      "kind": "needs_reply",
+      "reason": "agent_turn_ended",
+      "task_id": "tsk_01JDQ006000000000000000001",
+      "session_id": "ses_01JDQ006000000000000000002"
+    }
+  ]
+}

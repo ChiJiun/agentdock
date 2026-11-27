@@ -14,6 +14,8 @@
 
   // state: running | awaiting-approval | awaiting-input | completed | failed | interrupted | queued | cancelled
   // kind:  local | background | remote
+  // enforcement (optional): 'not-enforced' when the agent runs in its own bypass / full-access mode
+  //   (agentMode + modeSource say which mode and who reported it). Absent = permission requests reach AgentDock.
   const sessions = [
     { id: 's1', projectId: 'agentdock', parentId: null, title: 'Implement attention inbox popover', agent: 'Claude Code', model: 'reported by adapter', kind: 'local', state: 'running', viewed: true, unread: 0, pinned: true, updated: 1, branch: 'feat/inbox', worktree: 'wt/feat-inbox', transcript: 'inbox', stream: true, changes: 'inbox' },
     { id: 's1a', projectId: 'agentdock', parentId: 's1', title: 'Explore existing session model', agent: 'Claude Code', kind: 'background', state: 'completed', viewed: false, unread: 2, updated: 4, branch: 'feat/inbox', worktree: 'wt/feat-inbox', transcript: 'child-explore' },
@@ -26,6 +28,7 @@
     { id: 's3', projectId: 'agentdock', parentId: null, title: 'Set up CI for docs lint', agent: 'Claude Code', kind: 'local', state: 'interrupted', viewed: false, unread: 1, updated: 180, branch: 'ci/docs-lint', worktree: 'wt/ci-docs', transcript: 'interrupted' },
 
     { id: 's4', projectId: 'acp-adapter', parentId: null, title: 'Fix flaky worktree cleanup test', agent: 'Codex', model: 'reported by adapter', kind: 'local', state: 'awaiting-approval', viewed: true, unread: 1, pinned: true, updated: 3, branch: 'fix/worktree-flake', worktree: 'wt/fix-flake', transcript: 'approval', changes: 'flake' },
+    { id: 's8', projectId: 'acp-adapter', parentId: null, title: 'Rename fixture files to kebab-case', agent: 'Codex', model: 'reported by adapter', kind: 'local', state: 'running', viewed: true, unread: 0, updated: 6, branch: 'chore/fixture-names', worktree: 'wt/fixture-names', transcript: 'bypass', enforcement: 'not-enforced', agentMode: 'full access', modeSource: 'reported by the adapter' },
     { id: 's5', projectId: 'acp-adapter', parentId: null, title: 'Draft README for adapter capabilities', agent: 'Claude Code', kind: 'local', state: 'awaiting-input', viewed: true, unread: 1, updated: 12, branch: 'docs/readme', worktree: 'wt/docs-readme', transcript: 'question' },
     { id: 's5a', projectId: 'acp-adapter', parentId: 's5', title: 'Collect capability flags from fixtures', agent: 'Claude Code', kind: 'background', state: 'failed', viewed: false, unread: 1, updated: 15, branch: 'docs/readme', worktree: 'wt/docs-readme', transcript: 'child-failed' },
 

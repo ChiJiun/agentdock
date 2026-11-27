@@ -89,7 +89,7 @@
   <rect x="770" y="706" width="136" height="22" rx="11" class="box"/><text x="782" y="721" class="xs">Pause after next file</text>
   <rect x="320" y="740" width="660" height="110" rx="6" class="box" stroke-width="1.5"/>
   <text x="338" y="768" class="m" style="fill:#5f6878">Focus on the failing test first</text><rect x="548" y="755" width="30" height="18" rx="2" class="sunk"/><text x="553" y="768" class="xs">Tab</text>
-  <text x="338" y="836" class="xs">Enter send · Shift+Enter newline · Tab inserts suggestion</text>
+  <text x="338" y="836" class="xs">Enter send · Shift+Enter newline · Tab or → inserts suggestion</text>
   <rect x="826" y="818" width="72" height="24" rx="4" class="acc"/><text x="838" y="834" class="xs acct">↑ Steer</text>
   <rect x="906" y="818" width="60" height="24" rx="4" class="box"/><text x="918" y="834" class="xs">■ Stop</text>
 
