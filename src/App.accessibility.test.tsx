@@ -85,6 +85,17 @@ describe('preview accessibility', () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it('closes the session switcher on backdrop mousedown but not on dialog mousedown', () => {
+    const page = renderApp();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
+    const dialog = page.querySelector<HTMLElement>('.switcher[role="dialog"]')!;
+    act(() => dialog.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+    expect(page.querySelector('.switcher[role="dialog"]')).not.toBeNull();
+    act(() => page.querySelector('.switcher-backdrop')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+    expect(page.querySelector('.switcher[role="dialog"]')).toBeNull();
+    expect(page.querySelector<HTMLElement>('.sidebar')?.inert).toBeFalsy();
+  });
+
   it('closes the session switcher on Escape from a result button', () => {
     const page = renderApp();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })));
