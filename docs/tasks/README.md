@@ -195,7 +195,7 @@ Gate numbering used in every packet header. "Proven by" lists the packets whose 
   - T15 (`awaiting_approval` → `failed`) has no writer in alpha: P4-3 / P8-3 write none.
   - No graceful session shutdown on app exit (the Job Object ends the processes; recovery marks the sessions `disconnected`): P3-7 and P2-6.
   - `close_disconnected` takes `Arc<Store>` and must run its store work in `spawn_blocking`: P3-5 `session_runtime_mock`.
-  - GitHub issue: (number added after it is created)
+  - GitHub issue: [ChiJiun/agentdock#83](https://github.com/ChiJiun/agentdock/issues/83)
 
 ## Open questions for the owner
 
