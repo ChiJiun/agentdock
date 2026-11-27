@@ -1,0 +1,98 @@
+{
+  "fixture": "12-session-edge-cases.jsonl",
+  "description": "Session and attention edges: a rejected reattach interrupts the task with session_unavailable; disabling auto-resume disarms a waiting task whose suspended agent then fails; a running task whose idle agent crashed; a turn cancelled by the output limit; a review session with a non-blocking ACP approval that fails while asking, followed by a refusal; a session closed while starting; a main session archived after a rate-limit stop the user had viewed (never while paused) and unarchived by the system when it asks for permission; a running task whose agent is ready but has no turn yet; a disconnected sub-task archived by hand while the user cancelled the main agent's turn; a running task whose agent is suspended; and a task that went through crash recovery and was then deleted (its history, including the recovery events, is tombstoned; fixtures/predelete/ keeps the stream as it was before deletion).",
+  "final_task_states": {
+    "tsk_01JDQ012000000000000000002": "interrupted",
+    "tsk_01JDQ012000000000000000003": "interrupted",
+    "tsk_01JDQ012000000000000000004": "running",
+    "tsk_01JDQ012000000000000000005": "running",
+    "tsk_01JDQ012000000000000000006": "review",
+    "tsk_01JDQ012000000000000000007": "cancelled",
+    "tsk_01JDQ012000000000000000008": "awaiting_approval",
+    "tsk_01JDQ012000000000000000009": "running",
+    "tsk_01JDQ012000000000000000010": "running",
+    "tsk_01JDQ012000000000000000011": "running"
+  },
+  "final_session_states": {
+    "ses_01JDQ012000000000000000002": "failed",
+    "ses_01JDQ012000000000000000003": "failed",
+    "ses_01JDQ012000000000000000004": "failed",
+    "ses_01JDQ012000000000000000005": "idle",
+    "ses_01JDQ012000000000000000006": "idle",
+    "ses_01JDQ012000000000000000007": "failed",
+    "ses_01JDQ012000000000000000008": "idle",
+    "ses_01JDQ012000000000000000009": "closed",
+    "ses_01JDQ012000000000000000010": "awaiting_permission",
+    "ses_01JDQ012000000000000000011": "idle",
+    "ses_01JDQ012000000000000000012": "idle",
+    "ses_01JDQ012000000000000000013": "disconnected",
+    "ses_01JDQ012000000000000000014": "suspended"
+  },
+  "attention": [
+    {
+      "kind": "needs_review",
+      "reason": "interruption_needs_decision",
+      "task_id": "tsk_01JDQ012000000000000000002"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "interruption_needs_decision",
+      "task_id": "tsk_01JDQ012000000000000000003"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "session_unavailable",
+      "task_id": "tsk_01JDQ012000000000000000004"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "output_limited",
+      "task_id": "tsk_01JDQ012000000000000000005",
+      "session_id": "ses_01JDQ012000000000000000005"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "phase_decision_pending",
+      "task_id": "tsk_01JDQ012000000000000000006"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "agent_turn_ended",
+      "task_id": "tsk_01JDQ012000000000000000006",
+      "session_id": "ses_01JDQ012000000000000000008"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "child_result_unviewed",
+      "task_id": "tsk_01JDQ012000000000000000006",
+      "session_id": "ses_01JDQ012000000000000000007"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ012000000000000000007"
+    },
+    {
+      "kind": "needs_reply",
+      "reason": "approval_pending",
+      "task_id": "tsk_01JDQ012000000000000000008",
+      "session_id": "ses_01JDQ012000000000000000010",
+      "ref_id": "apr_01JDQ012000000000000000004"
+    },
+    {
+      "kind": "background",
+      "reason": "workflow_step",
+      "task_id": "tsk_01JDQ012000000000000000009"
+    },
+    {
+      "kind": "background",
+      "reason": "workflow_step",
+      "task_id": "tsk_01JDQ012000000000000000010"
+    },
+    {
+      "kind": "background",
+      "reason": "workflow_step",
+      "task_id": "tsk_01JDQ012000000000000000011"
+    }
+  ]
+}

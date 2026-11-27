@@ -1,0 +1,23 @@
+{
+  "fixture": "02-approval-denied.jsonl",
+  "description": "ACP permission denied: the tool call never runs, the agent continues, then the user cancels the running task; a second task is cancelled while still queued. Cancelled results stay in 'to review' until viewed (UX section 4).",
+  "final_task_states": {
+    "tsk_01JDQ002000000000000000001": "cancelled",
+    "tsk_01JDQ002000000000000000002": "cancelled"
+  },
+  "final_session_states": {
+    "ses_01JDQ002000000000000000001": "closed"
+  },
+  "attention": [
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ002000000000000000001"
+    },
+    {
+      "kind": "needs_review",
+      "reason": "task_outcome_unviewed",
+      "task_id": "tsk_01JDQ002000000000000000002"
+    }
+  ]
+}
