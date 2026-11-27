@@ -64,7 +64,9 @@ Locale 以 BCP 47 表示；MVP 只支援 `zh-TW`、`en-US`。不得把未支援�
    1. 該層的 `outputs.<stage>`（`inherit` 視為未設定）。
    2. 若是產物類階段（`issue`、`pullRequest`、`commitMessage`、`documentation`）：該層的 `artifactLocale`（`inherit` 視為未設定）。
 2. **第二輪：工作流程語言。** 第一輪都沒有結果時，由近到遠取第一個有設定的 `workflowLocale`。
-3. 都沒有時，預設是 `zh-TW`（Issue #18：中文工作流程預設 `zh-TW`，`en-US` 要明確選取）。
+3. 都沒有時，最後的預設是 `zh-TW`（Issue #18：中文工作流程預設 `zh-TW`，`en-US` 要明確選取）。
+
+上面第 3 點只是解析規則的最後一步，和「產品出廠時內建的預設設定」是兩件事。main 上的前端另外內建一份 Global 預設（`src/i18n/language.ts` 的 `DEFAULT_SETTINGS`：`uiLocale = zh-TW`、`workflowLocale = zh-TW`、`artifactLocale = inherit`、`outputs.commitMessage = en-US`、`outputs.codeComments = preserve-original`），所以使用者什麼都沒設定時，前端解析出的 Commit Message 是 `en-US`，不是 `zh-TW`。Rust 後端要把「解析規則」與「內建預設設定」分開定義；內建預設要不要沿用前端這一份尚未決定（見第 11 節）。
 
 這個順序的用意：**較近一層的 `workflowLocale` 不會蓋過較遠一層對單一階段或產物語言的明確設定。** 例如 Global 設了 `outputs.commitMessage = en-US`，Project 只設 `workflowLocale = zh-TW`，Commit Message 仍是 `en-US`；要改它，必須在較近一層明確設定 `outputs.commitMessage` 或 `artifactLocale`。
 
@@ -223,10 +225,13 @@ Session Sentinel 使用 **Event-driven** 摘要；切換語言、打開通知或
 
 ## 11. 尚未決定、需要與其他工作調和的地方
 
-1. **完全沒有設定時的預設語言：已對齊。** Issue #18 要求中文工作流程預設 `zh-TW`；main 上的前端與參考原型在沒有任何設定時都回 `zh-TW`。Rust 後端沿用同一個預設。
+1. **預設語言：解析規則已對齊，內建預設設定尚未決定。** Issue #18 要求中文工作流程預設 `zh-TW`。解析規則的最後一步在 main 的前端（`resolveLocale`）與參考原型（`effectiveLanguage`）都是 `zh-TW`。但兩者在「使用者沒有任何設定」時的結果並不完全相同：前端會先套用內建的 `DEFAULT_SETTINGS`（Global 的 `outputs.commitMessage = en-US`、`outputs.codeComments = preserve-original`），所以 Commit Message 解析為 `en-US`；參考原型沒有內建預設，`effectiveLanguage({}, 'commitMessage')` 回 `zh-TW`。`examples/language-profiles/zh-TW.json` 的 `outputs.commitMessage = en-US` 對應的是前端那份內建預設。Rust 後端的內建預設要不要沿用前端這一份（Commit Message 預設英文），需要擁有者決定；在決定之前，不能把參考原型對空設定的輸出當成產品預設。
 2. **UX 規格尚未跟上。** [UX 規格](../ux/README.md) 決策 10 仍寫「UI 文案先用英文、zh-TW 在地化作為後續」，並把時程列為待決；但 PR #24 已經把 zh-TW／en-US 切換合併進前端。UX 規格需要更新或由擁有者確認以哪一邊為準（UX 規格另有負責人，本文件不修改它）。
-3. **單一實作來源。** 目前有兩份實作草稿，Rust 後端會是第三份，最後應以 Rust 後端為準。參考原型與前端的解析順序（兩輪）、預設語言、`artifactLocale`、四態能力名稱與能力欄位名（`ownedPromptComposer`、`acceptsLocaleInstructions`、`supportsUserPrompt`）一致，差異如下：
-   - 未支援的值：參考原型在解析時丟出錯誤；前端在讀取儲存資料時靜默捨棄。
+3. **單一實作來源。** 目前有兩份實作草稿，Rust 後端會是第三份，最後應以 Rust 後端為準。參考原型與前端的解析順序（兩輪）、解析規則最後一步的預設（`zh-TW`）、`artifactLocale`、四態能力名稱與能力欄位名（`ownedPromptComposer`、`acceptsLocaleInstructions`、`supportsUserPrompt`）一致，差異如下：
+   - 內建預設設定：前端有 `DEFAULT_SETTINGS`（見上面第 1 點），讀取儲存資料時也會把它併入 Global；參考原型沒有內建預設，只處理呼叫端傳入的各層設定。
+   - 未支援的值：參考原型在解析時丟出錯誤；前端在讀取儲存資料時靜默捨棄。`workflowLocale = inherit` 屬於這一類（參考原型拒絕，前端捨棄）。
+   - 未知的輸出階段：參考原型丟出錯誤；前端的 `resolveLocale` 不檢查（型別上只接受已知階段），執行時傳入未知階段會落到 `workflowLocale`。
+   - `languageCapability` 沒有傳入 adapter 時：參考原型回 `unsupported`；前端會丟出 `TypeError`。
    - `skillContext` 的參數順序與回傳欄位名不同（參考原型 `source`／`mutatesSource`，前端 `original`／`sourceUnchanged`）。
    - UI 語言：參考原型用 `effectiveLanguage(scopes, 'ui')`，前端用獨立的 `resolveUiLocale`。
    - 語言指示範本文字不同。
