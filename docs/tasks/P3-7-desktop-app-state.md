@@ -17,7 +17,7 @@ Goals:
 Non-goals:
 
 - Constructing services (`ApprovalService`, `CheckService`, `WorktreeManager`, ...): each owning packet adds a field to `Ready` and one construction line to `bootstrap` (rule in §5 step 2.5).
-- Gracefully ending all sessions on close (P8-3); this packet only guarantees the store closes cleanly. Child processes end with the app via P3-2's Job Object / process group.
+- Gracefully ending all sessions on app exit: no alpha packet does it. This packet only guarantees the store closes cleanly. Child processes end with the app via P3-2's Job Object / process group, and the next start's recovery (P2-6) marks the sessions `disconnected`.
 - Multiple windows, tray, auto-update.
 
 ## 2. Prerequisites and parallel work

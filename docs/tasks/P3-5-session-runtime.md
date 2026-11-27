@@ -160,7 +160,7 @@ impl SessionRuntime {
     /// User cancel of the current turn: `handler.on_turn_cancel` first (persist), then AcpConnection::cancel
     /// (§5A rows C1, C2; §5 step 8).
     pub async fn cancel(&self) -> Result<(), OrchestratorError>;
-    /// Host-initiated close (P8-3 phase exit step 4, reviewer done, app exit): §5A rows H1–H6. `outcome` is the
+    /// Host-initiated close (P8-3 phase exit step 4, reviewer done; not on app exit, see P3-7): §5A rows H1–H6. `outcome` is the
     /// session `outcome` carried by the closing transition (schema-required; §5A row H8 lists what P8-3 passes).
     /// Ends in `closed`; never writes S08/S12 and never reports through `unexpected_close`.
     /// Err(OrchestratorError::ApprovalPending) if an approval of this session is still pending (the caller must call
@@ -170,7 +170,7 @@ impl SessionRuntime {
     /// Writes `S21 disconnected → closed` (orchestrator; trigger `abandoned`, or `superseded` when `outcome == Superseded`)
     /// carrying `outcome`. `closed` / `failed` → `Ok`, nothing written. Any other state → `Err(OrchestratorError::NotDisconnected)`
     /// (add this variant). Idempotent. §5 step 9.6.
-    pub async fn close_disconnected(store: &agentdock_store::Store, session: &SessionId,
+    pub async fn close_disconnected(store: std::sync::Arc<agentdock_store::Store>, session: &SessionId,
         outcome: agentdock_core::payload::SessionOutcome) -> Result<(), OrchestratorError>;
     /// Becomes Some(reason) after every close the event loop handled while `closing` was false: after it wrote
     /// S08/S12/S19 or S13/S22/S24, and after `handler.on_session_closed` returned for an awaiting_permission session
@@ -320,7 +320,7 @@ Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory,
 | `closed_while_awaiting_permission_calls_handler_once` | `permission-fault --arg exit`, fake handler `Recording` | `on_session_closed` called once with `ProcessExited`; this packet writes **no** S08/S12/S16; `unexpected_close()` becomes `Some(ProcessExited)` only after the handler returned (the fake delays 200 ms and the test compares timestamps) |
 | `closed_after_turn_cancel_still_calls_handler` | `scripted` with prompt `EDIT-PATH: <file>` and `ON-CANCEL: exit`, fake handler `Recording`; `cancel()` | the approval is already resolved when the agent exits; `on_session_closed` is still called once with `ProcessExited` (the session is `awaiting_permission`) and the session ends `disconnected`, not stuck (§5A row C3) |
 | `launch_abort_writes_failed_cancelled` | `hang-init`; flip `abort` after 500 ms | `session.created` then `starting→failed (launch_failed)` with `outcome: cancelled` (actor orchestrator); `launch` returns `Err(Aborted)`; the process is gone (§5A row H7) |
-| `close_disconnected_after_restart` | `exit-mid-turn`, send a prompt and wait until the session is `disconnected` (S12), then drop the runtime object (as after a restart); `close_disconnected(&store, &id, Abandoned)` | `S21 disconnected→closed` with trigger `abandoned`, `outcome: abandoned`, actor orchestrator; a second call → `Ok`, no new event; on an `idle` session → `Err(NotDisconnected)`, nothing written |
+| `close_disconnected_after_restart` | `exit-mid-turn`, send a prompt and wait until the session is `disconnected` (S12), then drop the runtime object (as after a restart); `close_disconnected(store.clone(), &id, Abandoned)` | `S21 disconnected→closed` with trigger `abandoned`, `outcome: abandoned`, actor orchestrator; a second call → `Ok`, no new event; on an `idle` session → `Err(NotDisconnected)`, nothing written |
 | `artifact_put_is_content_addressed` (`agentdock-store` unit test) | write the same content twice | same path, one file; `/` separators |
 
 ## 7. Acceptance commands and expected results

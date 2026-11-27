@@ -186,6 +186,16 @@ Gate numbering used in every packet header. "Proven by" lists the packets whose 
 - "Mark all as read" in the Sentinel inbox.
 - `.gitattributes` for line endings in the repo itself.
 - Check settings screen and policy rule settings screen (alpha uses hand-written JSON in app data).
+- **Cancel / close / recovery races verified during implementation** (tracked in one GitHub issue, see the line below; each packet's "Verified during implementation" paragraph lists them). The normal paths of P4-3 §5A are specified and must match the contract; these cases are confirmed by tests while implementing, and a race is only a blocking finding in a review if it causes a contract violation or two packets contradicting each other:
+  - H0 steps 1–3 are not atomic (a new permission or `operation.started` between the steps; the user's next cancel succeeds): P8-3 `task_flow` and P4-3 adversarial tests.
+  - A permission forwarded by P3-4 but not yet committed by P4-3 meets `cancel()`: P4-3 adversarial test, P3-4 `client_mock`.
+  - Cancel or pause while `preparing` before S01 (`launch_aborts` is only flipped while `starting`): P8-3 `task_flow`.
+  - A user approval racing with a session close (S14 against S16/S12/S23), rule 7 re-read: P4-3 adversarial tests.
+  - Relaunching the implementation session for T27 / T38 / repair after a restart or a reviewer-triggered close (one `ensure_implementation_session` helper): P8-3b `review_flow`, P8-4 `pr_ci_flow`.
+  - T15 (`awaiting_approval` → `failed`) has no writer in alpha: P4-3 / P8-3 write none.
+  - No graceful session shutdown on app exit (the Job Object ends the processes; recovery marks the sessions `disconnected`): P3-7 and P2-6.
+  - `close_disconnected` takes `Arc<Store>` and must run its store work in `spawn_blocking`: P3-5 `session_runtime_mock`.
+  - GitHub issue: (number added after it is created)
 
 ## Open questions for the owner
 

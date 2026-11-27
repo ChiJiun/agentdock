@@ -252,7 +252,7 @@ Order inside `cancel()` (P3-5): `handler.on_turn_cancel` (row C2 steps 1–2) fi
 | H6 | `closed` or `failed` | Nothing (`shutdown` is idempotent). | unchanged |
 | H7 | `starting` (launch in progress: S01 committed, no S02 yet) | No `SessionRuntime` exists yet, so `T` aborts the launch through `launch`'s `abort` receiver. `launch` stops the process and writes `S03 starting → failed (launch_failed)` (S, orchestrator). Fixture 03 events 21–22. Before S01 nothing is written. `S25` is in `transitions.json` but alpha never reaches it. | `cancelled` when the abort comes from a task cancel or pause, otherwise `failed` |
 | H8 | which outcome `T` passes | Task cancelled by the user → `cancelled`. Task paused (`interrupted{user_paused}`) → `abandoned`. Task `failed` (preparation, repair limit, an operation that failed) → `failed`. Task `completed` (T29, T39) → `succeeded`. Task abandoned from `interrupted` (T45) → `abandoned`; task cancelled from `interrupted` (T46) → `cancelled`. A review child session after a parsed verdict (`blocking` or `mergeable`) → `succeeded`; after a missing or unparseable verdict → `failed`. | see left |
-| H9 | resume after a host crash or an agent exit: sessions left `disconnected` | During `prepare`, before the replacement session is launched, `T` calls `shutdown(Superseded)` for each `disconnected` session of the task: H5 with trigger `superseded`. The replacement `session.created` carries `supersedes_session_id` (the validator requires the old session to be `closed` or `failed` first). Sessions closed at a pause are already `closed` (outcome `abandoned`). | `superseded` |
+| H9 | resume (`prepare`): every session of the task that is neither `closed` nor `failed` (typically `disconnected` after a host crash or an agent exit, or an `idle` implementation session still alive after a reviewer's unexpected close) | During `prepare`, before the replacement session is launched, `T` closes each such session with `outcome: superseded`: `shutdown(Superseded)` when a runtime object exists (rows H1–H5; H5 with trigger `superseded` for `disconnected`), otherwise `SessionRuntime::close_disconnected(store, id, Superseded)` (H5). The replacement `session.created` carries `supersedes_session_id` (the validator requires the old session to be `closed` or `failed` first). Sessions closed at a pause are already `closed` (outcome `abandoned`). | `superseded` |
 
 ### Group A — the agent exits or breaks the protocol by itself (`closing` not set; `S` observes `Closed{reason}`)
 
@@ -280,6 +280,14 @@ A close while `awaiting_permission` with the approval already resolved is row C3
 
 - Fixture 03 shape: `approval.resolved{cancelled}` precedes both `T21` and `S15`; `S15` precedes `S06`; `T21` precedes `S06`. **`S15` and `T21` are not ordered**: once the agent has been answered `cancelled` it may end the turn before `T21` commits, and both orders satisfy `approval_not_pending_after`. A test must accept either and reject anything else.
 - Never: an `S14` after a cancel; a second `T14` for one close; `S08`/`S12`/`S13`/`S22` or `unexpected_close` after a host-initiated `shutdown`; more than one `outcome_unknown{killed}` per operation; an `S10` for a request of a cancelled turn; a session left `awaiting_permission` after the connection closed.
+
+### Verified during implementation (known gaps, not specified step by step)
+
+The rows above fix the normal path (events, order, actor, `outcome`) and must match `transitions.json` and the schema. These concurrent cases are not specified step by step; the implementer confirms them with tests (adversarial tests that are not part of the counts in §6 and §7), and the owner tracks them in the GitHub issue linked from README "Not yet covered":
+
+- A permission request that `K` has forwarded but `on_permission` has not committed yet, meeting `cancel()`: P3-4 answers the ticket `cancelled` first, then `on_permission` could still write approval + S10 + T12 for a dead ticket and leave a pending approval (S15 would then be rejected until H0 runs). Expected: `on_permission` checks the ticket before it commits, or writes `approval.resolved{cancelled}` right after.
+- H0 steps 1–3 are not atomic (see P8-3 "Verified during implementation"); rule 7's re-read and one retry covers the user approval racing with a close (S14 against S16/S12/S23).
+- T15 (`awaiting_approval` → `failed`) is listed in H0 step 3 for completeness; no alpha packet writes it.
 
 ## 6. Tests to write first
 
