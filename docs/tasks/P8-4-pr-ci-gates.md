@@ -13,9 +13,10 @@ Goals:
 - **CI polling in `ci`**: every 30 s (backoff to 5 min after consecutive `GhError`s), `ci_for_pr(repo, number, expected_head)`.
   - Each CI check (keyed by `workflow + name`) gets `check.started{origin: ci, name, external_url}` when first seen and `check.finished{state}` when its bucket becomes terminal: `pass` → `passed`, `fail` → `failed`, `cancel` → `cancelled`. `skipping` checks are not recorded (they are neither evidence nor failure). Actor `integration`. A re-run on GitHub after a finished result starts a new `check_id`.
   - `HeadChanged` → stop polling, record nothing, show "The PR head changed outside AgentDock (expected X, found Y)"; the user may send the task back (T38) or cancel.
-  - Verdict `Failure` → repair round (`Round{phase: Ci, failing: failed check names}` with P8-3's `stop_reason`) → T38 `ci_failed` (orchestrator) → `running` with a repair prompt containing failed check names and links; or T42 `repair_limit_reached` → `failed`.
-  - Verdict `Success` → no transition; attention shows `phase_decision_pending`; the user clicks "Accept" → T39 `ci_passed_accepted` (actor `user`; guard `ci_checks_passed`, `no_unreconciled_operations`).
+  - Verdict `Failure` → repair round (`Round{phase: Ci, failing: failed check names}` with P8-3's `stop_reason`) → T38 `ci_failed` (orchestrator) → `running` with a repair prompt containing failed check names and links; or T42 `repair_limit_reached` → `failed`, written through P8-3 `phase_exit(Fail)` (P4-3 §5A row H0), so the live sessions are closed with outcome `failed` (row H8).
+  - Verdict `Success` → no transition; attention shows `phase_decision_pending`; the user clicks "Accept" → T39 `ci_passed_accepted` (actor `user`; guard `ci_checks_passed`, `no_unreconciled_operations`), written through P8-3 `phase_exit(Complete)` (§5A row H0), so the live sessions are closed with outcome `succeeded` (row H8).
   - Verdict `NoChecks` → no transition; show "No CI checks were reported for this PR. The contract needs CI evidence to complete through the PR path" (owner decision pending, README).
+- **T36 `operation_failed`** (`pr` → `failed`, actor `orchestrator`): never automatic (a failed push or PR creation can be retried). Only the user's "Give up" button in `pr`, offered when the latest `git_push` or `pr_create` of the task ended `failed`, writes it through `TaskService::fail_pr` → P8-3 `phase_exit(Fail(Failure{code: "operation_failed", message}))`; the live sessions are closed with outcome `failed`. With any `recorded`, `started` or `outcome_unknown` operation left, the projector rejects it (`no_open_operations`) and nothing is written. P7-2 does not write T36.
 - After T38 the next round needs a new push (and the existing PR is reused by P7-2b's lookup), per `pr_published_this_round`.
 - On restart: `check.finished{outcome_unknown}` for running CI checks is written by recovery (P2-6); after resume into `ci` (T08) polling starts again and records fresh checks.
 
@@ -33,7 +34,7 @@ New:
 - `crates/agentdock-orchestrator/src/tasks/pr_phase.rs` (`publish_gate`, T34)
 - `crates/agentdock-orchestrator/src/tasks/ci_phase.rs` (`CiWatcher`, mapping, T38/T42, user acceptance T39)
 - `crates/agentdock-orchestrator/tests/pr_ci_flow.rs`
-- `src-tauri/src/commands/ci.rs` (`task_accept_ci`, `task_ci_send_back`, `task_pr_status`)
+- `src-tauri/src/commands/ci.rs` (`task_accept_ci`, `task_ci_send_back`, `task_pr_status`, `task_fail_pr`)
 - `src/components/PrPhasePanel.tsx`, `src/components/PrPhasePanel.test.tsx`
 
 Modified: `crates/agentdock-orchestrator/src/tasks/mod.rs` (start/stop the watcher on entering/leaving `ci`), `crates/agentdock-orchestrator/src/checks.rs` (shared `append_check_started/finished` helpers accepting `origin` and actor), `src-tauri/src/commands/mod.rs`, `src-tauri/src/lib.rs`, `src-tauri/build.rs`, `src-tauri/capabilities/default.json`, `src/App.tsx`, `src/i18n/messages.ts`.
@@ -81,6 +82,7 @@ pub enum CiEventPlan { Start { key: String, name: String, url: Option<String> },
 impl TaskService {
     pub async fn accept_ci(&self, task: &TaskId) -> Result<(), TaskError>;            // T39 user
     pub async fn ci_send_back(&self, task: &TaskId, note: &str) -> Result<(), TaskError>; // T38 orchestrator on user command
+    pub async fn fail_pr(&self, task: &TaskId, reason: &str) -> Result<(), TaskError>;    // T36 via P8-3 phase_exit(Fail); user "Give up"
 }
 ```
 
@@ -95,9 +97,10 @@ impl TaskService {
 3. `CiWatcher` runs in a task owned by `TaskService`; cancelled on leaving `ci` (pause/cancel/T38/T39). `poll_once`:
    1. `ci_for_pr(.., expected_head)`; `HeadChanged` → stop and expose the status; `GhError` → increment failures, back off (×2 up to `CI_POLL_MAX`), status `Unavailable`.
    2. `diff_ci_checks` → append events in one transaction (actor `integration`); a check whose bucket went back to pending after finishing (GitHub re-run) → `Start` with a new id.
-   3. Verdict → status as in §1. On `Failure`, compute the round, then T42 or T38 + repair prompt (P8-3 prompt helper) — only once per head (remember the head for which a repair was triggered).
-4. `accept_ci`: T39 by `user` (projector checks `ci_checks_passed`); stop the watcher; task `completed`. The UI then shows the PR link and "Merge on GitHub yourself; AgentDock alpha does not merge".
-5. `PrPhasePanel`: push button (disabled with reasons from P7-2 errors), create-PR form (title/body, base, draft), blockers list from `publish_gate`, CI status (pending/success/failure/no checks/head changed/unavailable), "Accept" (enabled only on `Success`), "Send back". All text as text nodes.
+   3. Verdict → status as in §1. On `Failure`, compute the round, then T42 (through `phase_exit(Fail)`, which stops this watcher first) or T38 + repair prompt (P8-3 prompt helper) — only once per head (remember the head for which a repair was triggered).
+4. `accept_ci`: stop the watcher first, then `phase_exit(Complete)` = §5A row H0 with T39 as the task transition (by `user`; the projector checks `ci_checks_passed`), then `shutdown(Succeeded)` of every live session of the task; task `completed`. The UI then shows the PR link and "Merge on GitHub yourself; AgentDock alpha does not merge".
+4b. `fail_pr`: allowed only in `pr` when the latest `git_push` / `pr_create` operation of the task is `failed`; stop nothing else; `phase_exit(Fail(Failure{code: "operation_failed", message: reason}))` (T36, actor orchestrator).
+5. `PrPhasePanel`: push button (disabled with reasons from P7-2 errors), create-PR form (title/body, base, draft), blockers list from `publish_gate`, CI status (pending/success/failure/no checks/head changed/unavailable), "Accept" (enabled only on `Success`), "Send back", "Give up" (only in `pr` after a failed push or PR creation). All text as text nodes.
 
 ## 6. Tests to write first
 
@@ -126,7 +129,9 @@ impl TaskService {
 | `ci_success_waits_for_user` | all pass → state stays `ci`; `accept_ci` → T39 by `user` → `completed` |
 | `agent_cannot_accept_ci` | the mock agent (P3-3 `scripted`, directive `SAY: CI is green` in the objective) writes it → state stays `ci` (no T39 without the user) |
 | `ci_failure_sends_back_once_per_head` | fail → T38, repair prompt contains failed check names and links; another poll with the same head does not send back twice |
-| `ci_repair_limit` | failures repeated → T42 `failed` |
+| `ci_repair_limit` | failures repeated → T42 `failed`, then the implementation session `idle→closed` with `outcome: failed` (actor orchestrator); no process left |
+| `accept_ci_closes_sessions_succeeded` | all pass, `accept_ci` → T39 (`user`) → `completed`, then the implementation session `idle→closed (session_closed, outcome: succeeded)`; watcher stopped before T39, no check event after it; no process left (§5A rows H0, H8) |
+| `give_up_after_failed_push_writes_t36` | a `git_push` that ended `failed` (bare origin rejects) → `fail_pr` → `T36 pr→failed` (orchestrator), session closed with `outcome: failed`; with a `started` or `outcome_unknown` operation instead → `TaskError::Transition`, nothing written |
 | `new_round_needs_new_push` | after T38 → … → back in `pr`: `publish_gate` without a new push → `NotPushedThisRound` |
 | `head_changed_outside_stops_polling` | fake PR head changes mid-read → status `HeadChanged`, no check events for that poll, watcher stopped |
 | `no_checks_cannot_complete` | `NoChecks` → `accept_ci` returns the projector rejection (`ci_checks_passed`) and the UI message |
@@ -140,7 +145,7 @@ impl TaskService {
 
 ```bash
 cargo test -p agentdock-orchestrator ci_phase::                             # 7 unit tests pass
-cargo test -p agentdock-orchestrator --test pr_ci_flow -- --test-threads=1  # 16 pass
+cargo test -p agentdock-orchestrator --test pr_ci_flow -- --test-threads=1  # 18 pass
 npm test                                                                    # PrPhasePanel tests pass
 ```
 
@@ -173,6 +178,7 @@ Strong model implements and reviews: this is the evidence gate that #51 says mus
 - Sending back on every poll while CI stays red: one repair per head.
 - Keeping the watcher alive after leaving `ci`: it would write check events for a task in `running`.
 - Offering a merge button: alpha has none; the user merges on GitHub.
+- Writing T39 / T42 / T36 straight through the transition helper: the task ends but the session stays `idle` and the agent process lives on. Always `phase_exit` (P8-3 §5 step 8).
 
 ## 12. Reviewer checklist
 
@@ -181,4 +187,5 @@ Strong model implements and reviews: this is the evidence gate that #51 says mus
 - [ ] Is T39 only reachable by the user, and does `NoChecks` stay blocked?
 - [ ] Is a repair triggered at most once per head, with PRL-3 limits?
 - [ ] Is the watcher cancelled on every exit from `ci`?
+- [ ] Do T36, T39 and T42 all go through `phase_exit` (sessions closed with `failed`, `succeeded`, `failed`), and is T36 written only by the user's "Give up" after a failed operation?
 - [ ] Is there any code path that runs `gh pr merge`? There must not be.

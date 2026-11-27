@@ -166,6 +166,12 @@ impl SessionRuntime {
     /// Err(OrchestratorError::ApprovalPending) if an approval of this session is still pending (the caller must call
     /// ApprovalService::cancel_open_for_task first). Idempotent. §5 step 9.
     pub async fn shutdown(&self, outcome: agentdock_core::payload::SessionOutcome) -> Result<(), OrchestratorError>;
+    /// §5A row H5 for a session that has no runtime object (the host restarted and recovery left it `disconnected`).
+    /// Writes `S21 disconnected → closed` (orchestrator; trigger `abandoned`, or `superseded` when `outcome == Superseded`)
+    /// carrying `outcome`. `closed` / `failed` → `Ok`, nothing written. Any other state → `Err(OrchestratorError::NotDisconnected)`
+    /// (add this variant). Idempotent. §5 step 9.6.
+    pub async fn close_disconnected(store: &agentdock_store::Store, session: &SessionId,
+        outcome: agentdock_core::payload::SessionOutcome) -> Result<(), OrchestratorError>;
     /// Becomes Some(reason) after every close the event loop handled while `closing` was false: after it wrote
     /// S08/S12/S19 or S13/S22/S24, and after `handler.on_session_closed` returned for an awaiting_permission session
     /// (S16/S23). Stays None after a host-initiated shutdown. P8-3 applies the "Task effect" of §5A group A.
@@ -229,6 +235,7 @@ impl SessionRuntime {
    3. Set `closing = true` (in memory, before any final-state write and before stopping anything).
    4. Final state, one transaction each, written **before** the process is stopped (`persist_then_act`) except where the row says otherwise: `idle` → S06; `suspended` → S18; `active` after the timeout → S11 then S18; `awaiting_permission` after the timeout → stop the process, `handler.on_session_closed(session_id, CloseReason::ShutDown)` (P4-3 writes S16), then S21; `disconnected` → S21; `closed` / `failed` → nothing. The closing transition carries `outcome` = the argument. Triggers: S06 `session_closed`; S18 `session_closed`, or `superseded` when `outcome == Superseded`; S21 `abandoned`, or `superseded` when `outcome == Superseded`.
    5. `connection.shutdown().await` (P3-4: answers open tickets `cancelled`, ends the connection, reaps the process tree). The resulting `Closed` event is ignored because `closing` is set, so no S08/S12/S13/S22, no `unexpected_close`, and no T14.
+   6. `close_disconnected` (associated function, no process, no connection): read the session state from projections; `disconnected` → write S21 with the trigger and `outcome` of step 4; `closed` / `failed` → `Ok`; any other state → `Err(NotDisconnected)`.
 
 ## 6. Tests to write first
 
@@ -313,6 +320,7 @@ Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory,
 | `closed_while_awaiting_permission_calls_handler_once` | `permission-fault --arg exit`, fake handler `Recording` | `on_session_closed` called once with `ProcessExited`; this packet writes **no** S08/S12/S16; `unexpected_close()` becomes `Some(ProcessExited)` only after the handler returned (the fake delays 200 ms and the test compares timestamps) |
 | `closed_after_turn_cancel_still_calls_handler` | `scripted` with prompt `EDIT-PATH: <file>` and `ON-CANCEL: exit`, fake handler `Recording`; `cancel()` | the approval is already resolved when the agent exits; `on_session_closed` is still called once with `ProcessExited` (the session is `awaiting_permission`) and the session ends `disconnected`, not stuck (§5A row C3) |
 | `launch_abort_writes_failed_cancelled` | `hang-init`; flip `abort` after 500 ms | `session.created` then `starting→failed (launch_failed)` with `outcome: cancelled` (actor orchestrator); `launch` returns `Err(Aborted)`; the process is gone (§5A row H7) |
+| `close_disconnected_after_restart` | `exit-mid-turn`, send a prompt and wait until the session is `disconnected` (S12), then drop the runtime object (as after a restart); `close_disconnected(&store, &id, Abandoned)` | `S21 disconnected→closed` with trigger `abandoned`, `outcome: abandoned`, actor orchestrator; a second call → `Ok`, no new event; on an `idle` session → `Err(NotDisconnected)`, nothing written |
 | `artifact_put_is_content_addressed` (`agentdock-store` unit test) | write the same content twice | same path, one file; `/` separators |
 
 ## 7. Acceptance commands and expected results
@@ -320,7 +328,7 @@ Use the P3-3 mock (find the binary as in P3-4 §6), a store in a temp directory,
 ```bash
 cargo test -p agentdock-core output            # P3-5a: 10 pass
 cargo test -p agentdock-store artifacts        # P3-5b: 1 passes
-cargo test -p agentdock-orchestrator --test session_runtime_mock -- --test-threads=1   # P3-5b: 19 pass
+cargo test -p agentdock-orchestrator --test session_runtime_mock -- --test-threads=1   # P3-5b: 20 pass
 cargo test -p agentdock-orchestrator --lib session_runtime                              # P3-5b: 1 passes (`close_transition_table`: every state × reason of §5A rows A1, A3, C3, C4)
 ```
 
