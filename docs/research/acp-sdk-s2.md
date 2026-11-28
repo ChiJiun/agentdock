@@ -12,8 +12,8 @@ Status: route (a) passes for the items covered here. Date: 2026-11-28. Packet: [
 | `windows` | 0.62.2 (same as `process-wrap`; `cargo tree -d -p agentdock-process` shows one copy) |
 | Toolchain | Rust 1.91.1 (`rust-toolchain.toml`) |
 | Windows (local) | Windows 11 Pro, `ver` = `Microsoft Windows [Version 10.0.26300.9974]` |
-| Windows (CI) | GitHub Actions `windows-latest` (`rust-windows` job); OS version in the job log, see the PR |
-| Linux (CI) | GitHub Actions `ubuntu-latest` (`rust-linux` job); `uname` from the runner image, see the PR |
+| Windows (CI) | GitHub Actions `windows-latest`: Microsoft Windows Server 2025, image `windows-2025-vs2026` version 20261123.321.1 (`rust-windows` job of run [46160726621](https://github.com/ChiJiun/agentdock/actions/runs/46160726621), commit `4e93206`) |
+| Linux (CI) | GitHub Actions `ubuntu-latest`: Ubuntu, image `ubuntu-26.04` version 20261122.9.1 (`rust-linux` job of the same run). No local Linux VM was available, so `uname -a` was not captured; the runner image line is the OS record |
 
 Wrapper stack in `crates/agentdock-process/src/lib.rs` (`build_command`):
 
@@ -25,21 +25,23 @@ Wrapper stack in `crates/agentdock-process/src/lib.rs` (`build_command`):
 | S2 item (ADR-0002) | Test (`tests/process_tree.rs`) | Windows 11 local | `rust-windows` CI | `rust-linux` CI |
 | --- | --- | --- | --- | --- |
 | Start suspended, assign Job, resume | covered by `process-wrap` (`JobObject`); every Windows tree test relies on the grandchild being in the Job | pass (implied) | pass (implied) | n/a |
-| No descendant survives cancel / close | `shutdown_kills_grandchild`, `shutdown_is_idempotent` | pass | see PR | see PR |
-| No descendant survives an agent crash | `agent_crash_still_reaps_grandchild` (kills only the direct child: `taskkill /PID /F` without `/T`, `/bin/kill -9`) | pass | see PR | see PR |
-| Launcher exits, real agent lives on | `graceful_close_still_reaps_leftover_grandchild` | pass | see PR | see PR |
-| Drop without shutdown | `drop_without_shutdown_reaps_tree` | pass | see PR | see PR |
-| **AgentDock itself killed** | `host_killed_reaps_tree` (supervisor host killed with `Child::kill()` = TerminateProcess) | pass | see PR | Windows-only (known Unix gap below) |
-| Orderly shutdown (stdin close, grace, kill) | `graceful_close_when_agent_exits_on_stdin_eof`, `shutdown_kills_grandchild` | pass | see PR | see PR |
-| stderr drained continuously | `stderr_flood_does_not_stall` (10 MiB to stderr, `DONE` within 10 s, tail <= 64 KiB) | pass | see PR | see PR |
-| cwd with spaces and CJK | `cwd_with_space_and_cjk` (`agent dock 測試-…`) | pass | see PR | see PR |
-| `.cmd` argument escaping (BatBadBut) | not tested: `.cmd` / `.bat` / `.ps1` are rejected (`rejects_cmd_shim_case_insensitive`); P3-6 resolves npm shims to `node.exe <script>` | reject: pass | see PR | n/a |
+| No descendant survives cancel / close | `shutdown_kills_grandchild`, `shutdown_is_idempotent` | pass | pass | pass |
+| No descendant survives an agent crash | `agent_crash_still_reaps_grandchild` (kills only the direct child: `taskkill /PID /F` without `/T`, `/bin/kill -9`) | pass | pass | pass |
+| Launcher exits, real agent lives on | `graceful_close_still_reaps_leftover_grandchild` | pass | pass | pass |
+| Drop without shutdown | `drop_without_shutdown_reaps_tree` | pass | pass | pass |
+| **AgentDock itself killed** | `host_killed_reaps_tree` (supervisor host killed with `Child::kill()` = TerminateProcess) | pass | pass | Windows-only (known Unix gap below) |
+| Orderly shutdown (stdin close, grace, kill) | `graceful_close_when_agent_exits_on_stdin_eof`, `shutdown_kills_grandchild` | pass | pass | pass |
+| stderr drained continuously | `stderr_flood_does_not_stall` (10 MiB to stderr, `DONE` within 10 s, tail <= 64 KiB) | pass | pass | pass |
+| cwd with spaces and CJK | `cwd_with_space_and_cjk` (`agent dock 測試-…`) | pass | pass | pass |
+| `.cmd` argument escaping (BatBadBut) | not tested: `.cmd` / `.bat` / `.ps1` are rejected (`rejects_cmd_shim_case_insensitive`); P3-6 resolves npm shims to `node.exe <script>` | reject: pass | pass | n/a |
 | Real agents (`claude-agent-acp`, `codex-acp`): initialize, `session/new`, prompt, cancel, close | **not done here: done by P3-6's opt-in E2E** | — | — | — |
 
 Mutation checks run locally on Windows (reverted afterwards):
 
 - Removing `KillOnDrop` from the wrapper stack makes `host_killed_reaps_tree` fail (spawn-tree and its grandchild still running after 5 s), confirming the packet's warning about `KILL_ON_JOB_CLOSE`.
 - Removing the `start_kill()` after a graceful exit (and in `Drop`) makes `graceful_close_still_reaps_leftover_grandchild` fail.
+
+Totals: Windows 11 local and `rust-windows` CI 11/11 `process_tree` tests passed; `rust-linux` CI 9/9 (the two Windows-only tests are not compiled there). CI ran the tests in parallel (default test threads), local runs used `--test-threads=1` and were repeated three more times without failure. After every local run `tasklist` showed no `agentdock-test-*` process left.
 
 ## Observations about `process-wrap` 10.0.1
 
