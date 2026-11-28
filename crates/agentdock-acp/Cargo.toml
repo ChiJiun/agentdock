@@ -13,9 +13,13 @@ workspace = true
 # ADR-0002 section 3: exact pin; no features. In particular NOT `process` (kills only the direct
 # child on Windows and pulls in async-process/async-io) and NOT `stdio`.
 agent-client-protocol = { version = "=5.6.1", default-features = false }
+agentdock-process = { path = "../agentdock-process" }
 futures = { version = "0.3", default-features = false, features = ["std"] }
+serde_json = "1.0.154"
 thiserror = "2"
-tokio = { version = "1", default-features = false, features = ["io-util"] }
+# P3-4: `sync` (bounded event channel, oneshot, watch), `time` (timeouts), `rt` (spawn),
+# `macros` (`select!`).
+tokio = { version = "1", default-features = false, features = ["io-util", "sync", "time", "rt", "macros"] }
 
 [dev-dependencies]
-tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "rt-multi-thread", "sync", "time"] }
