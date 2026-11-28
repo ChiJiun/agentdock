@@ -18,6 +18,13 @@ const FAST: ShutdownTimeouts = ShutdownTimeouts {
     term_grace: Duration::from_secs(3),
 };
 
+/// For tests that expect a graceful exit: a fresh helper exe can take well over 1.5 s to start
+/// on Windows (Defender scans it on first launch), so the grace is generous here.
+const PATIENT: ShutdownTimeouts = ShutdownTimeouts {
+    stdin_grace: Duration::from_secs(10),
+    term_grace: Duration::from_secs(3),
+};
+
 fn tree_cmd(args: &[&str]) -> AgentCommand {
     AgentCommand {
         program: PathBuf::from(SPAWN_TREE),
@@ -60,6 +67,7 @@ fn process_alive(pid: u32) -> bool {
         .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
         .output()
         .expect("run tasklist");
+    assert!(out.status.success(), "tasklist failed: {:?}", out.status);
     let text = String::from_utf8_lossy(&out.stdout);
     let want = format!("\"{pid}\"");
     // CSV row: "image","pid",...; check the image too so a reused PID is not mistaken for ours.
@@ -227,17 +235,29 @@ async fn drop_without_shutdown_reaps_tree() {
 #[tokio::test]
 async fn host_killed_reaps_tree() {
     use std::io::BufRead;
-    use std::process::{Command, Stdio};
+    use std::process::{Child, Command, Stdio};
 
-    let mut host = Command::new(SUPERVISOR_HOST)
-        .arg(SPAWN_TREE)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let host_pid = host.id();
-    let stdout = host.stdout.take().unwrap();
+    /// Kills the supervisor host if an assertion fails before the test kills it, so a failure
+    /// does not leave the host (and, through it, the agent tree) running.
+    struct HostGuard(Child);
+    impl Drop for HostGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let mut host = HostGuard(
+        Command::new(SUPERVISOR_HOST)
+            .arg(SPAWN_TREE)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let host_pid = host.0.id();
+    let stdout = host.0.stdout.take().unwrap();
     let pids = std::thread::spawn(move || {
         let (mut child, mut me) = (None, None);
         for line in std::io::BufReader::new(stdout).lines() {
@@ -258,16 +278,14 @@ async fn host_killed_reaps_tree() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     if !pids.is_finished() {
-        let _ = host.kill();
-        let _ = host.wait();
         panic!("supervisor host did not print the PIDs");
     }
     let (child, me) = pids.join().unwrap();
     let (child, me) = (child.unwrap(), me.unwrap());
     assert!(process_alive(child) && process_alive(me));
 
-    host.kill().unwrap();
-    host.wait().unwrap();
+    host.0.kill().unwrap();
+    host.0.wait().unwrap();
     assert!(gone_within_5s(host_pid).await);
     assert_gone(&[me, child]).await;
 }
@@ -324,7 +342,7 @@ async fn cwd_with_space_and_cjk() {
 #[tokio::test]
 async fn graceful_close_when_agent_exits_on_stdin_eof() {
     let mut agent = AgentProcess::spawn(&tree_cmd(&["--exit-on-eof"])).unwrap();
-    let kind = agent.shutdown(ShutdownTimeouts::default()).await;
+    let kind = agent.shutdown(PATIENT).await;
     assert_eq!(kind, ExitKind::ClosedGracefully);
     assert_eq!(agent.wait().await.unwrap(), Some(0));
 }
@@ -337,10 +355,7 @@ async fn graceful_close_still_reaps_leftover_grandchild() {
     let (stdin, stdout) = agent.take_stdio().unwrap();
     let (child, me) = read_pids(&mut BufReader::new(stdout).lines()).await;
     drop(stdin);
-    assert_eq!(
-        agent.shutdown(ShutdownTimeouts::default()).await,
-        ExitKind::ClosedGracefully
-    );
+    assert_eq!(agent.shutdown(PATIENT).await, ExitKind::ClosedGracefully);
     assert_gone(&[child, me]).await;
 }
 

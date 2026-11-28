@@ -13,7 +13,7 @@ Status: route (a) passes for the items covered here. Date: 2026-11-28. Packet: [
 | Toolchain | Rust 1.91.1 (`rust-toolchain.toml`) |
 | Windows (local) | Windows 11 Pro, `ver` = `Microsoft Windows [Version 10.0.26300.9974]` |
 | Windows (CI) | GitHub Actions `windows-latest`: Microsoft Windows Server 2025, image `windows-2025-vs2026` version 20261123.321.1 (`rust-windows` job of run [46160726621](https://github.com/ChiJiun/agentdock/actions/runs/46160726621), commit `4e93206`) |
-| Linux (CI) | GitHub Actions `ubuntu-latest`: Ubuntu, image `ubuntu-26.04` version 20261122.9.1 (`rust-linux` job of the same run). No local Linux VM was available, so `uname -a` was not captured; the runner image line is the OS record |
+| Linux (CI) | GitHub Actions `ubuntu-latest`: Ubuntu, image `ubuntu-26.04` version 20261122.9.1, OS `Ubuntu 26.04.1 LTS` on Azure (`rust-linux` job of the same run, "Set up job" log). **`uname -a` is not available**: the `rust-linux` workflow does not print it, the job log has no kernel line, and no local Linux VM was used. Adding a `uname -a` step means changing `.github/workflows/rust.yml`, which is outside this packet's files |
 
 Wrapper stack in `crates/agentdock-process/src/lib.rs` (`build_command`):
 
@@ -51,7 +51,7 @@ Totals: Windows 11 local and `rust-windows` CI 11/11 `process_tree` tests passed
 
 ## Known gaps (alpha)
 
-- **Unix: AgentDock killed by SIGKILL leaves the agent group running.** Fixing it needs `PR_SET_PDEATHSIG` (Linux) or a supervisor process; out of scope for alpha (P3-2 §6).
+- **Unix: any AgentDock exit that does not run `Drop` leaves the agent group running.** Besides SIGKILL this includes `std::process::exit`, Tauri `app.exit()` / `AppHandle::exit` and other paths that end the process without unwinding. On Unix the group is only killed by `shutdown` or by `AgentProcess`'s `Drop`; the kernel does not do it. **Rule for P3-4 / P3-5: before the app exits, explicitly `await` `shutdown` on every `AgentProcess`** (for example from the Tauri exit / window-close handler) instead of relying on `Drop`. Making the forced cases safe needs `PR_SET_PDEATHSIG` (Linux) or a supervisor process; out of scope for alpha (P3-2 §6). On Windows the kernel closes the Job handle on any process exit, so KILL_ON_JOB_CLOSE still applies.
 - SIGTERM before SIGKILL on Unix needs `nix` signals in AgentDock code; alpha kills the group directly after `stdin_grace`.
 - PID reuse: `Drop` calls `killpg` if `shutdown` never completed. If the whole group had already exited long before and the PGID was reused by a new group leader, that group would be signalled. Linux does not reuse a PID while it is still a live PGID, so the window is only after every group member is gone.
 - Nested Job / CPU cap and priority (ADR-0002 line 37) are after alpha.

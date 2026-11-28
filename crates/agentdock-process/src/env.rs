@@ -43,6 +43,17 @@ pub(crate) fn is_valid_env_name(name: &str) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
 }
 
+/// Variables that retarget Git / GitHub (CONVENTIONS §6 invariant 5): never passed, even when
+/// an adapter declares them. Names are already upper-case here (`is_valid_env_name`).
+fn is_retargeting_name(name: &str) -> bool {
+    name.starts_with("GIT_") || name == "GH_HOST" || name == "GH_REPO"
+}
+
+/// A declared auth or extra name: valid syntax and not a Git / GitHub retargeting variable.
+fn is_passable_name(name: &str) -> bool {
+    is_valid_env_name(name) && !is_retargeting_name(name)
+}
+
 /// Environment names are case-insensitive on Windows and exact elsewhere.
 fn same_name(a: &str, b: &str) -> bool {
     if cfg!(windows) {
@@ -60,10 +71,10 @@ pub fn child_env(
     auth_env_names: &[String],
     extra: &[(String, String)],
 ) -> Result<Vec<(String, String)>, ProcessError> {
-    if !auth_env_names.iter().all(|n| is_valid_env_name(n)) {
+    if !auth_env_names.iter().all(|n| is_passable_name(n)) {
         return Err(ProcessError::BadEnvName);
     }
-    if !extra.iter().all(|(n, _)| is_valid_env_name(n)) {
+    if !extra.iter().all(|(n, _)| is_passable_name(n)) {
         return Err(ProcessError::BadEnvName);
     }
     if extra.iter().any(|(_, v)| v.contains('\0')) {
@@ -157,6 +168,34 @@ mod tests {
             child_env(&[], &[], &[pair("NO_COLOR", "a\0b")]),
             Err(ProcessError::BadArgument)
         ));
+    }
+
+    #[test]
+    fn rejects_git_and_github_retargeting_names() {
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GH_HOST",
+            "GH_REPO",
+        ] {
+            assert!(
+                matches!(
+                    child_env(&[], &[name.into()], &[]),
+                    Err(ProcessError::BadEnvName)
+                ),
+                "auth {name}"
+            );
+            assert!(
+                matches!(
+                    child_env(&[], &[], &[pair(name, "x")]),
+                    Err(ProcessError::BadEnvName)
+                ),
+                "extra {name}"
+            );
+        }
+        // Similar names that do not retarget Git / GitHub stay allowed.
+        assert!(child_env(&[], &["GH_TOKEN".into(), "GITHUB_TOKEN".into()], &[]).is_ok());
     }
 
     #[test]
