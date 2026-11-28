@@ -1,0 +1,18 @@
+[package]
+name = "agentdock-mock-agent"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "agentdock-mock-agent"
+path = "src/main.rs"
+
+# Raw NDJSON only: no ACP SDK and no other agentdock crate (P3-3, ADR-0002 S3).
+[dependencies]
+serde_json = "1.0.154"
