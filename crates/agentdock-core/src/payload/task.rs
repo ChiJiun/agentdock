@@ -74,7 +74,7 @@ pub struct TaskStateChangedPayload {
 }
 
 impl PayloadRules for TaskStateChangedPayload {
-    /// Schema `TaskStateChangedPayload.allOf`: 7 clauses (count pinned by `schema_sync::allof_clause_counts_match_the_transcription`).
+    /// Schema `TaskStateChangedPayload.allOf`: 7 clauses (count pinned by `payload_schema_sync::allof_clause_counts_match_the_transcription`).
     fn validate(&self) -> Result<(), &'static str> {
         use TaskState as S;
         // 1. interruption <=> to == interrupted

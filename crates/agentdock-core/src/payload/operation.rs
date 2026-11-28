@@ -121,8 +121,17 @@ impl OperationTarget {
     /// `canonical::idempotency_key(kind, identity)`. The identity holds only strings and
     /// positive integers, so canonicalization cannot fail (no floats, shallow).
     pub fn idempotency_key(&self, kind: OperationKind) -> Sha256Hex {
-        canonical::idempotency_key(&kind_name(kind), &self.identity())
+        self.try_idempotency_key(kind)
             .unwrap_or_else(|_| Sha256Hex::from_digest(&[0; 32]))
+    }
+
+    /// Fail-closed variant used by `validate()`: a canonicalization error is a rule violation,
+    /// never a placeholder key.
+    fn try_idempotency_key(
+        &self,
+        kind: OperationKind,
+    ) -> Result<Sha256Hex, canonical::CanonicalError> {
+        canonical::idempotency_key(&kind_name(kind), &self.identity())
     }
 
     fn check_pr_number(&self) -> Result<(), &'static str> {
@@ -172,8 +181,9 @@ impl PayloadRules for OperationRecordedPayload {
         }
         self.target.check_identity_shape(self.kind)?;
         self.target.check_pr_number()?;
-        if self.idempotency_key != self.target.idempotency_key(self.kind) {
-            return Err(rule::IDEMPOTENCY_KEY);
+        match self.target.try_idempotency_key(self.kind) {
+            Ok(key) if key == self.idempotency_key => {}
+            _ => return Err(rule::IDEMPOTENCY_KEY),
         }
         Ok(())
     }
@@ -291,7 +301,9 @@ mod tests {
     /// unless the table lists it as optional.
     #[test]
     fn identity_shape_matches_schema_clauses() {
-        let schema = super::super::schema_sync::schema();
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/contracts/schema/agentdock.schema.json");
+        let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let clauses = schema["$defs"]["OperationKindRules"]["allOf"]
             .as_array()
             .unwrap();

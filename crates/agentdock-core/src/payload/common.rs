@@ -3,7 +3,7 @@
 //! Field order follows the schema so a reviewer can diff the two side by side.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::PayloadRules;
 use crate::enums::{InterruptionReason, ResumePhase};
@@ -28,6 +28,8 @@ pub mod rule {
         "capability snapshot: features do not match acp_agent_capabilities";
     pub const CAPS_META: &str =
         "capability snapshot: acp_agent_capabilities must be stored without _meta keys";
+    pub const CAPS_OPT_IN: &str =
+        "capability snapshot: unstable_opt_ins entries must match ^[a-z][a-z0-9_]{0,63}$";
     pub const USAGE_UNKNOWN: &str =
         "usage: source unknown requires reporter none and no tokens, context_window or cost";
     pub const USAGE_ESTIMATED: &str = "usage: source locally_estimated requires an estimator, reporter host_estimator and (if present) cost basis estimated";
@@ -279,7 +281,7 @@ pub struct CapabilitySnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_method_ids: Option<Vec<String>>,
     /// The `agentCapabilities` object as received, with every `_meta` key removed. Opaque.
-    pub acp_agent_capabilities: Value,
+    pub acp_agent_capabilities: Map<String, Value>,
     pub features: CapabilityFeatures,
     pub client_advertised: ClientAdvertised,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -291,14 +293,27 @@ impl PayloadRules for CapabilitySnapshot {
         if self.track != CapabilityTrack::V1Stable {
             return Err(rule::CAPS_TRACK);
         }
-        if self.features != derive_features(&self.acp_agent_capabilities) {
+        if self.features != derive_from_map(&self.acp_agent_capabilities) {
             return Err(rule::CAPS_FEATURES);
         }
-        if contains_key(&self.acp_agent_capabilities, "_meta") {
+        if self
+            .acp_agent_capabilities
+            .iter()
+            .any(|(k, v)| k == "_meta" || contains_key(v, "_meta"))
+        {
             return Err(rule::CAPS_META);
+        }
+        if let Some(opt_ins) = &self.unstable_opt_ins {
+            if !opt_ins.iter().all(|name| is_snake_name(name)) {
+                return Err(rule::CAPS_OPT_IN);
+            }
         }
         Ok(())
     }
+}
+
+fn derive_from_map(raw: &Map<String, Value>) -> CapabilityFeatures {
+    derive_features(&Value::Object(raw.clone()))
 }
 
 /// Derives `features` from ACP v1 `agentCapabilities`

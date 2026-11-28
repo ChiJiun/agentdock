@@ -7,13 +7,15 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use super::common::rule as common_rule;
-use super::{approval, decode_body, operation, session, task, BodyError, EventBody};
-use crate::enums::ActorKind;
-use crate::enums::{OperationKind, Repeatability};
-use crate::event::{Actor, EventEnvelope, Redaction};
-use crate::ids::{AuthorityId, Sha256Hex};
-use crate::time::Timestamp;
+use agentdock_core::enums::ActorKind;
+use agentdock_core::enums::{OperationKind, Repeatability};
+use agentdock_core::event::{Actor, EventEnvelope, Redaction};
+use agentdock_core::ids::{AuthorityId, Sha256Hex};
+use agentdock_core::payload::common::rule as common_rule;
+use agentdock_core::payload::{
+    approval, decode_body, operation, session, task, BodyError, EventBody,
+};
+use agentdock_core::time::Timestamp;
 
 /// First non-tombstoned fixture event of `event_type` for which `pred(payload)` holds.
 fn fixture(event_type: &str, pred: impl Fn(&Value) -> bool) -> Value {
@@ -233,8 +235,24 @@ fn quota_key_rejected_anywhere() {
     assert_eq!(outcome(&bad), Err(common_rule::QUOTA_KEY));
     // Also in a payload that has no opaque part.
     let mut approval = fixture("approval.resolved", |_| true);
-    approval["payload"]["policy_rule_id"] = json!("ok");
     assert_eq!(outcome(&approval), Ok(()));
+    approval["payload"]["quota_remaining"] = json!(5);
+    assert_eq!(outcome(&approval), Err(common_rule::QUOTA_KEY));
+}
+
+#[test]
+fn capabilities_must_be_an_object_and_opt_ins_snake_case() {
+    for bad in [json!([]), json!(null), json!("x")] {
+        let mut env = capabilities();
+        env["payload"]["snapshot"]["acp_agent_capabilities"] = bad;
+        let env: EventEnvelope = serde_json::from_value(env).unwrap();
+        assert!(matches!(decode_body(&env), Err(BodyError::Shape { .. })));
+    }
+    let mut env = capabilities();
+    env["payload"]["snapshot"]["unstable_opt_ins"] = json!(["session_fork"]);
+    assert_eq!(outcome(&env), Ok(()));
+    env["payload"]["snapshot"]["unstable_opt_ins"] = json!(["Session Fork"]);
+    assert_eq!(outcome(&env), Err(common_rule::CAPS_OPT_IN));
 }
 
 #[test]
@@ -268,7 +286,7 @@ fn text_and_ref_both_rejected() {
 
 #[test]
 fn quota_name_deny_list_examples() {
-    use super::common::forbidden_quota_key as find;
+    use agentdock_core::payload::common::forbidden_quota_key as find;
     for bad in [
         "remaining",
         "tokens_left",
@@ -314,7 +332,7 @@ fn quota_walk_survives_very_deep_values() {
         v = Value::Object(map);
     }
     assert_eq!(
-        super::common::forbidden_quota_key(&v),
+        agentdock_core::payload::common::forbidden_quota_key(&v),
         Some("balance".to_owned())
     );
     // Dropping a 100k-deep value recurses in serde_json; leak it like the std docs suggest.
@@ -323,7 +341,7 @@ fn quota_walk_survives_very_deep_values() {
 
 #[test]
 fn derive_features_requires_exact_types() {
-    use super::common::derive_features;
+    use agentdock_core::payload::common::derive_features;
     let f = derive_features(&json!({
         "loadSession": "true",
         "sessionCapabilities": {"resume": true, "close": {}, "list": null},
@@ -749,9 +767,9 @@ fn tombstoned_and_unknown_events_decode_as_opaque() {
     let env: EventEnvelope = serde_json::from_value(unknown).unwrap();
     let body = decode_body(&env).unwrap();
     assert!(body.is_opaque());
-    assert_eq!(super::encode_body(&body).1, env.payload);
+    assert_eq!(agentdock_core::payload::encode_body(&body).1, env.payload);
     assert_eq!(
-        super::encode_body(&body).0.as_str(),
+        agentdock_core::payload::encode_body(&body).0.as_str(),
         "future.thing_happened"
     );
 }
@@ -794,12 +812,15 @@ fn new_live_builds_an_envelope_that_decodes_back() {
         id: None,
     });
     assert_eq!(live.seq, 0);
-    assert_eq!(live.provenance, crate::enums::Provenance::Live);
+    assert_eq!(live.provenance, agentdock_core::enums::Provenance::Live);
     assert_eq!(live.body().unwrap(), body);
     assert_ne!(live.id, src_env.id);
     let recovery = new(Actor {
         kind: ActorKind::Recovery,
         id: None,
     });
-    assert_eq!(recovery.provenance, crate::enums::Provenance::Recovery);
+    assert_eq!(
+        recovery.provenance,
+        agentdock_core::enums::Provenance::Recovery
+    );
 }

@@ -32,11 +32,6 @@ pub mod session;
 pub mod system;
 pub mod task;
 
-#[cfg(test)]
-mod adversarial;
-#[cfg(test)]
-mod schema_sync;
-
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{Map, Value};

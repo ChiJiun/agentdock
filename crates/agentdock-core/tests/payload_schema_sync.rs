@@ -9,14 +9,16 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::approval::{AcpOutcomeKind, ResolvedState};
-use super::check::CheckFinishState;
-use super::common::*;
-use super::operation::{AbandonReason, FailureEffect, OutcomeUnknownCause, ReconcileFinding};
-use super::session::*;
-use super::task::TaskDeletedFinalState;
+use agentdock_core::payload::approval::{AcpOutcomeKind, ResolvedState};
+use agentdock_core::payload::check::CheckFinishState;
+use agentdock_core::payload::common::*;
+use agentdock_core::payload::operation::{
+    AbandonReason, FailureEffect, OutcomeUnknownCause, ReconcileFinding,
+};
+use agentdock_core::payload::session::*;
+use agentdock_core::payload::task::TaskDeletedFinalState;
 
-pub(super) fn schema() -> Value {
+fn schema() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/contracts/schema/agentdock.schema.json");
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
