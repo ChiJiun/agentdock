@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/agentdock-core", "src-tauri"]
+members = ["crates/agentdock-acp", "crates/agentdock-core", "src-tauri"]
 
 [workspace.package]
 edition = "2021"
