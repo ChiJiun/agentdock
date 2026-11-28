@@ -75,24 +75,16 @@ fn hostile_input_finishes_within_budget() {
 
 #[test]
 fn deep_json_does_not_overflow_stack() {
-    // Dropping a 10,000-level serde_json::Value recurses inside serde_json itself and overflows the
-    // default 2 MiB test-thread stack in debug builds (also at 2,000 levels with json! nesting).
-    // So the tree is built on a big-stack thread, redact_json runs on this normal test thread
-    // (proving the walker itself is depth-bounded), and the deep tree is leaked, not dropped here.
-    let handle = std::thread::Builder::new()
-        .stack_size(256 * 1024 * 1024)
-        .spawn(|| {
-            let mut v = serde_json::json!("leaf");
-            for _ in 0..10_000 {
-                v = serde_json::Value::Array(vec![v]);
-            }
-            v
-        })
-        .expect("spawn");
-    let v = handle.join().expect("join");
+    // Building the tree is iterative and fine; dropping a 10,000-level serde_json::Value recurses
+    // inside serde_json and overflows the default 2 MiB test-thread stack in debug builds, so the
+    // deep input is leaked instead of dropped. redact_json's own output is only 128 levels deep.
+    let mut v = serde_json::json!("leaf");
+    for _ in 0..10_000 {
+        v = serde_json::Value::Array(vec![v]);
+    }
     let out = r().redact_json(&v);
-    assert!(out.applied.contains(&RedactionRule::Truncated));
     std::mem::forget(v);
+    assert!(out.applied.contains(&RedactionRule::Truncated));
 }
 
 #[test]
@@ -262,4 +254,82 @@ fn redacting_twice_is_stable_for_all_rules() {
     let text = "Authorization: Bearer FAKEFAKEFAKE\nsk-test-FAKEFAKEFAKEFAKEFAKE s3cr3t-value-123 /home/alice/x\n-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----";
     let once = r().redact_text(text).value;
     assert_eq!(r().redact_text(&once).value, once);
+}
+
+// ---- Review round 1 fixes ----
+
+#[test]
+fn redacted_text_never_exceeds_max_chars_including_marker() {
+    for n in [MAX_TEXT_CHARS + 1, 70_000, 1_000_000] {
+        let out = r().redact_text(&"a".repeat(n));
+        assert!(out.applied.contains(&RedactionRule::Truncated));
+        assert!(out.value.chars().count() <= MAX_TEXT_CHARS, "n={n}");
+        assert!(out.value.contains("…[truncated "));
+        let again = r().redact_text(&out.value);
+        assert_eq!(again.value, out.value);
+        assert!(again.applied.is_empty());
+    }
+    let exact = "b".repeat(MAX_TEXT_CHARS);
+    let out = r().redact_text(&exact);
+    assert_eq!(out.value, exact);
+    assert!(out.applied.is_empty());
+}
+
+#[test]
+fn header_written_as_json_or_dict_text_is_redacted() {
+    let out = r().redact_text(r#"{"Authorization":"Basic ZmFrZQ==","x":1}"#);
+    assert!(!out.value.contains("ZmFrZQ"));
+    assert!(out.value.contains("[REDACTED:auth_header]"));
+    let out = r().redact_text("{'Cookie': 'sid=FAKESESSION'}");
+    assert!(!out.value.contains("FAKESESSION"));
+    let out = r().redact_text("cookie=sid=FAKESESSION");
+    assert!(!out.value.contains("FAKESESSION"));
+    assert!(out.applied.contains(&RedactionRule::AuthHeader));
+}
+
+#[test]
+fn header_named_object_keys_have_values_redacted_keys_kept() {
+    let v = serde_json::json!({
+        "headers": {"AUTHORIZATION": "Basic ZmFrZQ==", "set-cookie": "sid=FAKE", "Accept": "x"},
+        "Proxy-Authorization": "Basic ZmFrZQ=="
+    });
+    let out = r().redact_json(&v);
+    assert_eq!(
+        out.value,
+        serde_json::json!({
+            "headers": {
+                "AUTHORIZATION": "[REDACTED:auth_header]",
+                "set-cookie": "[REDACTED:auth_header]",
+                "Accept": "x"
+            },
+            "Proxy-Authorization": "[REDACTED:auth_header]"
+        })
+    );
+    assert!(out.applied.contains(&RedactionRule::AuthHeader));
+}
+
+#[test]
+fn known_secret_overlapping_other_rules_is_fully_removed() {
+    let out = r().redact_text("Authorization: Bearer s3cr3t-value-123");
+    assert!(!out.value.contains("value-123"));
+    let out = r().redact_text("note sk-test-FAKEFAKEFAKEFAKEFAKE-s3cr3t-value-123 end");
+    assert!(!out.value.contains("value-123"));
+}
+
+#[test]
+fn pgp_private_key_block_is_removed() {
+    let t =
+        "a\n-----BEGIN PGP PRIVATE KEY BLOCK-----\nFAKE\n-----END PGP PRIVATE KEY BLOCK-----\nb";
+    assert_eq!(r().redact_text(t).value, "a\n[REDACTED:private_key]\nb");
+}
+
+#[test]
+fn json_escaped_windows_home_and_unix_boundaries() {
+    let out = r().redact_text(r"opened C:\\Users\\alice\\repo");
+    assert_eq!(out.value, r"opened ~\\repo");
+    let out = r().redact_text("/mnt/home/alice/x and /home/alice/y");
+    assert_eq!(out.value, "/mnt/home/alice/x and ~/y");
+    let out = r().redact_text("/home/alice /home/alice /home/alice");
+    assert_eq!(out.value, "~ ~ ~");
+    assert_eq!(r().redact_text("\"/home/alice/z\"").value, "\"~/z\"");
 }

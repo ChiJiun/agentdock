@@ -88,10 +88,10 @@ fn compile(pattern: &str) -> Regex {
 
 static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| Patterns {
     private_key: compile(
-        r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|\z)",
     ),
     auth_header: compile(
-        r"(?im)(\b(?:proxy-authorization|authorization|set-cookie|cookie)[ \t]*:[ \t]*)[^\r\n]+",
+        r#"(?im)(\b(?:proxy-authorization|authorization|set-cookie|cookie)["']?[ \t]*[:=][ \t]*["']?)[^\r\n]+"#,
     ),
     bearer: compile(r"(?i)(\bBearer[ \t]+)[A-Za-z0-9._~+/=-]{8,}"),
     github_token: compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}"),
@@ -109,7 +109,10 @@ pub struct Redactor {
     known_re: Option<Regex>,
     /// Used only if the combined known-secret regex could not be built (fail closed).
     known_secrets: Vec<String>,
-    home_re: Option<Regex>,
+    /// Windows-form home directories (case-insensitive; the drive letter anchors the left side).
+    home_win: Option<Regex>,
+    /// Unix-form home directories (group `head` is the required left boundary).
+    home_unix: Option<Regex>,
 }
 
 impl std::fmt::Debug for Redactor {
@@ -117,7 +120,10 @@ impl std::fmt::Debug for Redactor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Redactor")
             .field("known_secrets", &self.known_secrets.len())
-            .field("home_dirs", &self.home_re.is_some())
+            .field(
+                "home_dirs",
+                &(self.home_win.is_some() || self.home_unix.is_some()),
+            )
             .finish()
     }
 }
@@ -147,10 +153,12 @@ impl Redactor {
             RegexBuilder::new(&alt).size_limit(64 << 20).build().ok()
         };
 
+        let (home_win, home_unix) = build_home_regexes(home_dirs);
         Self {
             known_re,
             known_secrets: secrets,
-            home_re: build_home_regex(home_dirs),
+            home_win,
+            home_unix,
         }
     }
 
@@ -163,7 +171,10 @@ impl Redactor {
         let mut text = input.to_owned();
         let p = &*PATTERNS;
 
-        // Multi-line private keys first so later rules do not see their body.
+        // Known secrets first, on the original text, so no other rule's marker can split one and
+        // leave its tail visible.
+        self.apply_known(&mut text, &mut applied);
+        // Multi-line private keys next so later rules do not see their body.
         apply(
             &p.private_key,
             &mut text,
@@ -185,7 +196,6 @@ impl Redactor {
             RedactionRule::AuthHeader,
             &mut applied,
         );
-        self.apply_known(&mut text, &mut applied);
         apply(
             &p.github_token,
             &mut text,
@@ -200,7 +210,7 @@ impl Redactor {
             RedactionRule::ApiKey,
             &mut applied,
         );
-        if let Some(home) = &self.home_re {
+        if let Some(home) = &self.home_win {
             apply(
                 home,
                 &mut text,
@@ -209,8 +219,21 @@ impl Redactor {
                 &mut applied,
             );
         }
+        if let Some(home) = &self.home_unix {
+            // The match consumes the character after the path, so two paths separated by one
+            // character leave the second one unmatched in the first pass; a second pass gets it.
+            for _ in 0..2 {
+                apply(
+                    home,
+                    &mut text,
+                    "${head}~${tail}",
+                    RedactionRule::HomePath,
+                    &mut applied,
+                );
+            }
+        }
 
-        let (value, cut) = bound_text(&text, MAX_TEXT_CHARS);
+        let (value, cut) = bound_text_within(&text, MAX_TEXT_CHARS);
         if cut {
             applied.insert(RedactionRule::Truncated);
         }
@@ -250,7 +273,17 @@ impl Redactor {
             ),
             Value::Object(map) => Value::Object(
                 map.iter()
-                    .map(|(k, v)| (k.clone(), self.walk(v, depth + 1, applied)))
+                    .map(|(k, v)| {
+                        if is_auth_header_name(k) && v.is_string() {
+                            // Header-shaped object: the key says the value is a credential.
+                            applied.insert(RedactionRule::AuthHeader);
+                            return (
+                                k.clone(),
+                                Value::String("[REDACTED:auth_header]".to_owned()),
+                            );
+                        }
+                        (k.clone(), self.walk(v, depth + 1, applied))
+                    })
                     .collect(),
             ),
             other => other.clone(),
@@ -290,10 +323,24 @@ fn apply(
     }
 }
 
-/// One alternative per home directory. A match must end at a path separator, end of text or any
-/// other non-name character, so `/home/alice2` is not treated as `/home/alice`.
-fn build_home_regex(home_dirs: &[PathBuf]) -> Option<Regex> {
-    let mut alts: Vec<String> = Vec::new();
+fn is_auth_header_name(key: &str) -> bool {
+    [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+    ]
+    .iter()
+    .any(|h| key.trim().eq_ignore_ascii_case(h))
+}
+
+/// Builds the (Windows-form, Unix-form) home directory regexes. A match must end at a path
+/// separator, end of text or any other non-name character, so `/home/alice2` is not treated as
+/// `/home/alice`. Unix paths also need a left boundary so `/mnt/home/alice` is left alone.
+/// Windows separators match one or more `\` or `/`, which covers JSON-escaped `C:\\Users\\alice`.
+fn build_home_regexes(home_dirs: &[PathBuf]) -> (Option<Regex>, Option<Regex>) {
+    let mut win: Vec<String> = Vec::new();
+    let mut unix: Vec<String> = Vec::new();
     for dir in home_dirs {
         let raw = dir.to_string_lossy();
         let trimmed = raw.trim_end_matches(['\\', '/']);
@@ -306,22 +353,40 @@ fn build_home_regex(home_dirs: &[PathBuf]) -> Option<Regex> {
                 .split(['\\', '/'])
                 .map(regex::escape)
                 .collect::<Vec<_>>()
-                .join(r"[\\/]");
-            alts.push(format!("(?i:{body})"));
+                .join(r"[\\/]+");
+            win.push(format!("(?i:{body})"));
         } else {
-            alts.push(regex::escape(trimmed));
+            unix.push(regex::escape(trimmed));
         }
     }
-    if alts.is_empty() {
-        return None;
+    let build = |alts: &mut Vec<String>, head: &str| {
+        if alts.is_empty() {
+            return None;
+        }
+        alts.sort();
+        alts.dedup();
+        let pattern = format!("{head}(?:{})(?P<tail>$|[^A-Za-z0-9_-])", alts.join("|"));
+        RegexBuilder::new(&pattern)
+            .size_limit(64 << 20)
+            .build()
+            .ok()
+    };
+    (
+        build(&mut win, ""),
+        build(&mut unix, r"(?P<head>^|[^A-Za-z0-9_./~-])"),
+    )
+}
+
+/// Like [`bound_text`], but the whole result including the marker stays within `max_chars`
+/// (the contract's `RedactedText.maxLength` covers the marker too).
+fn bound_text_within(input: &str, max_chars: usize) -> (String, bool) {
+    let total = input.chars().count();
+    if total <= max_chars {
+        return (input.to_owned(), false);
     }
-    alts.sort();
-    alts.dedup();
-    let pattern = format!("(?:{})(?P<tail>$|[^A-Za-z0-9_-])", alts.join("|"));
-    RegexBuilder::new(&pattern)
-        .size_limit(64 << 20)
-        .build()
-        .ok()
+    // `digits(total)` is an upper bound for the digits of the removed count.
+    let marker_len = "…[truncated  chars]".chars().count() + total.to_string().len();
+    bound_text(input, max_chars.saturating_sub(marker_len))
 }
 
 /// Truncates to `max_chars` characters (not bytes) and appends `…[truncated N chars]`, where N is
