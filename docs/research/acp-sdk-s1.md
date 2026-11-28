@@ -7,7 +7,7 @@ Status: record of measurements for packet [P3-1](../tasks/P3-1-acp-line-framing.
 | Date measured | 2026-11-28 |
 | SDK version pinned | `agent-client-protocol =5.6.1`, `default-features = false`, no features |
 | Rust toolchain | `rustc 1.91.1 (ed61e7d7e 2025-11-07)`, `cargo 1.91.1`, host `x86_64-pc-windows-msvc` (Windows 11) |
-| Commit measured | branch `claude/p3-1-acp-line-framing-8a1b10` on top of `main` `5bb4342` |
+| Commit measured | `89db1bec929073cdbf07b924e2b23a0f54e0402e` (on top of `main` `5bb4342`) |
 
 ## 1. Version choice and sources
 
@@ -61,7 +61,7 @@ No GPL, AGPL, LGPL or MPL expression appears in the normal-dependency tree on th
 
 ### `cargo deny check`
 
-See the PR description for the result of `cargo deny check` (licenses, bans, advisories, sources). This document records only the metadata-based license table above, which is not a substitute for it.
+**Not run locally**: `cargo-deny` is not installed on the measuring machine (`cargo deny` is not a known cargo subcommand there), so `cargo deny check` was not executed locally. The result comes from the CI `cargo-deny` job (`EmbarkStudios/cargo-deny-action`, `--all-features`) on PR #87 at head `89db1bec929073cdbf07b924e2b23a0f54e0402e` (run 46144793100, job 140978335842): `advisories ok, bans ok, licenses ok, sources ok`. Only `multiple-versions` warnings (duplicate crate versions, e.g. `toml`, `windows-sys`, `winnow`; `bans.multiple-versions = "warn"` in `deny.toml`) were printed. The metadata-based license table above is not a substitute for that job.
 
 ## 3. Conclusion for ADR-0002 S1
 
