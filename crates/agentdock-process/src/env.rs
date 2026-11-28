@@ -46,7 +46,11 @@ pub(crate) fn is_valid_env_name(name: &str) -> bool {
 /// Variables that retarget Git / GitHub (CONVENTIONS §6 invariant 5): never passed, even when
 /// an adapter declares them. Names are already upper-case here (`is_valid_env_name`).
 fn is_retargeting_name(name: &str) -> bool {
-    name.starts_with("GIT_") || name == "GH_HOST" || name == "GH_REPO"
+    name.starts_with("GIT_")
+        || matches!(
+            name,
+            "GH_HOST" | "GH_REPO" | "GH_CONFIG_DIR" | "GH_ENTERPRISE_HOST"
+        )
 }
 
 /// A declared auth or extra name: valid syntax and not a Git / GitHub retargeting variable.
@@ -178,6 +182,8 @@ mod tests {
             "GIT_INDEX_FILE",
             "GH_HOST",
             "GH_REPO",
+            "GH_CONFIG_DIR",
+            "GH_ENTERPRISE_HOST",
         ] {
             assert!(
                 matches!(

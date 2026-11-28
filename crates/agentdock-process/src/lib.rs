@@ -34,7 +34,7 @@ pub use stderr_tail::STDERR_TAIL_CAP;
 /// Maximum characters per argument.
 pub const MAX_ARG_CHARS: usize = 4096;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentCommand {
     /// Absolute; on Windows must not end in `.cmd` / `.bat` / `.ps1` (case-insensitive).
     pub program: PathBuf,
@@ -46,6 +46,20 @@ pub struct AgentCommand {
     pub auth_env_names: Vec<String>,
     /// Non-secret pairs, e.g. `NO_COLOR=1`.
     pub extra_env: Vec<(String, String)>,
+}
+
+/// Prints only the program's file name, the argument count and environment variable *names*:
+/// arguments, `cwd` and `extra_env` values may carry user paths or tokens.
+impl std::fmt::Debug for AgentCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let extra_names: Vec<&str> = self.extra_env.iter().map(|(n, _)| n.as_str()).collect();
+        f.debug_struct("AgentCommand")
+            .field("program", &self.program.file_name().unwrap_or_default())
+            .field("args_len", &self.args.len())
+            .field("auth_env_names", &self.auth_env_names)
+            .field("extra_env_names", &extra_names)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -376,6 +390,29 @@ mod tests {
         assert_eq!(shell_shim_ext("node.exe"), None);
         assert_eq!(shell_shim_ext("cmd"), None);
         assert_eq!(shell_shim_ext("x.cmdx"), None);
+    }
+
+    #[test]
+    fn debug_hides_arguments_paths_and_values() {
+        let c = AgentCommand {
+            program: PathBuf::from("/secret-dir/agent-bin"),
+            args: vec!["--token=sk-ant-FAKE".into()],
+            cwd: PathBuf::from("/home/someone/project"),
+            auth_env_names: vec!["ANTHROPIC_API_KEY".into()],
+            extra_env: vec![("NO_COLOR".into(), "value-should-not-print".into())],
+        };
+        let s = format!("{c:?}");
+        assert!(
+            s.contains("agent-bin") && s.contains("ANTHROPIC_API_KEY") && s.contains("NO_COLOR")
+        );
+        for hidden in [
+            "secret-dir",
+            "sk-ant-FAKE",
+            "someone",
+            "value-should-not-print",
+        ] {
+            assert!(!s.contains(hidden), "{hidden} leaked in {s}");
+        }
     }
 
     #[test]

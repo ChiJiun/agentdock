@@ -316,6 +316,14 @@ async fn cwd_with_space_and_cjk() {
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("agent dock 測試-{}-{nanos}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
+    /// Removes the temp dir even when an assertion below fails.
+    struct DirGuard(PathBuf);
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let guard = DirGuard(dir.clone());
 
     let mut cmd = tree_cmd(&["--print-cwd"]);
     cmd.cwd = dir.clone();
@@ -335,7 +343,8 @@ async fn cwd_with_space_and_cjk() {
 
     let printed = std::fs::canonicalize(PathBuf::from(line.trim_end())).unwrap();
     let expected = std::fs::canonicalize(&dir).unwrap();
-    std::fs::remove_dir(&dir).unwrap();
+    drop(guard);
+    assert!(!dir.exists(), "temp dir not removed");
     assert_eq!(printed, expected);
 }
 
