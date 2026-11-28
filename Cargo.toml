@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/agentdock-core", "src-tauri"]
+members = ["crates/agentdock-core", "crates/agentdock-mock-agent", "src-tauri"]
 
 [workspace.package]
 edition = "2021"
