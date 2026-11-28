@@ -1,6 +1,7 @@
 //! `EventEnvelope` (ADR-0003 section 4, `docs/contracts/events.md` "Envelope").
 //!
-//! The payload stays a `serde_json::Value`; typed payloads and per-type payload rules are P2-2.
+//! The payload stays a `serde_json::Value`; [`EventEnvelope::body`] gives the typed view (P2-2,
+//! `crate::payload`).
 //! Reads tolerate unknown fields and unknown event types. `validate()` checks only the
 //! envelope-level rules of the "Envelope" table, and is a separate step from deserialization so a
 //! reader can still load (and report on) an event that violates a rule.
@@ -10,6 +11,7 @@ use serde_json::Value;
 
 use crate::enums::{ActorKind, EventType, Provenance};
 use crate::ids::{AuthorityId, EventId, ProjectId, SessionId, TaskId};
+use crate::payload::{decode_body, encode_body, BodyError, EventBody};
 use crate::time::Timestamp;
 use crate::SCHEMA_VERSION;
 
@@ -62,7 +64,7 @@ pub struct EventEnvelope {
     pub redaction: Redaction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tombstone: Option<Tombstone>,
-    /// A JSON object; the typed view is added in P2-2.
+    /// A JSON object; the typed view is [`EventEnvelope::body`].
     pub payload: Value,
 }
 
@@ -89,6 +91,57 @@ pub enum EnvelopeError {
 }
 
 impl EventEnvelope {
+    /// A new, live (or recovery) event ready for the store to append.
+    ///
+    /// `seq` is 0 (invalid on purpose) until the store assigns `head + 1` on append (P2-4); `id` is
+    /// fresh; both timestamps are parameters so tests are deterministic. Provenance follows the
+    /// actor: `recovery` for the recovery actor, `live` otherwise (`acp_replay` is only written by
+    /// the session-load path, which builds its envelopes itself). `body` is not validated here:
+    /// the store validates envelope and body on append, and rejects [`EventBody::Opaque`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_live(
+        authority: AuthorityId,
+        project: Option<ProjectId>,
+        task: Option<TaskId>,
+        session: Option<SessionId>,
+        actor: Actor,
+        body: &EventBody,
+        redaction: Redaction,
+        occurred_at: Timestamp,
+        recorded_at: Timestamp,
+    ) -> EventEnvelope {
+        let (event_type, payload) = encode_body(body);
+        let provenance = if actor.kind == ActorKind::Recovery {
+            Provenance::Recovery
+        } else {
+            Provenance::Live
+        };
+        EventEnvelope {
+            schema_version: SCHEMA_VERSION,
+            id: EventId::generate(),
+            authority_id: authority,
+            seq: 0,
+            occurred_at,
+            recorded_at,
+            project_id: project,
+            task_id: task,
+            session_id: session,
+            event_type,
+            actor,
+            provenance,
+            causation_id: None,
+            correlation_id: None,
+            redaction,
+            tombstone: None,
+            payload,
+        }
+    }
+
+    /// The typed payload (see [`decode_body`]).
+    pub fn body(&self) -> Result<EventBody, BodyError> {
+        decode_body(self)
+    }
+
     /// Envelope-level rules from `docs/contracts/events.md` "Envelope" table only. Per-type
     /// payload rules, the `acp_replay` type restriction and the state machines are checked by
     /// later packets. Rules are checked in the order of [`EnvelopeError`]'s variants.
