@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use agentdock_core::enums::*;
+use agentdock_core::payload::{SessionStateChangedPayload, TaskStateChangedPayload};
 use agentdock_core::transitions::*;
 use agentdock_core::{ApprovalId, Timestamp};
 
@@ -41,10 +42,49 @@ fn return_state_of(state: TaskState) -> Option<ApprovalReturnState> {
     }
 }
 
-/// A payload that satisfies the schema rules for `(from, to)` and facts that satisfy every
+/// A `task.state_changed` payload with only `from`, `to` and `trigger` set.
+fn task_payload(from: TaskState, to: TaskState, trigger: TaskTrigger) -> TaskStateChangedPayload {
+    TaskStateChangedPayload {
+        from,
+        to,
+        trigger,
+        resume_phase: None,
+        return_state: None,
+        approval_id: None,
+        interruption: None,
+        failure: None,
+        checkpoint_id: None,
+    }
+}
+
+/// A `session.state_changed` payload with only `from`, `to` and `trigger` set.
+fn session_payload(
+    from: SessionState,
+    to: SessionState,
+    trigger: SessionTrigger,
+) -> SessionStateChangedPayload {
+    SessionStateChangedPayload {
+        from,
+        to,
+        trigger,
+        turn_id: None,
+        stop_reason: None,
+        external_session_id: None,
+        launch_method: None,
+        approval_id: None,
+        outcome: None,
+        error: None,
+    }
+}
+
+/// A payload that agrees with the request and satisfies the schema rules for `(from, to)` and facts that satisfy every
 /// condition, so only `(from, to, actor, trigger)` decide the result.
-fn permissive_for(from: Option<TaskState>, to: TaskState) -> (Option<TaskPayloadView>, TaskFacts) {
-    let mut payload = TaskPayloadView::default();
+fn permissive_for(
+    from: Option<TaskState>,
+    to: TaskState,
+    trigger: TaskTrigger,
+) -> (Option<TaskStateChangedPayload>, TaskFacts) {
+    let mut payload = task_payload(from.unwrap_or(TaskState::Queued), to, trigger);
     let mut facts = TaskFacts {
         current_interruption: Some(InterruptionFacts {
             phase: ResumePhase::Ci,
@@ -94,7 +134,7 @@ fn task_req<'a>(
     to: TaskState,
     actor: ActorKind,
     trigger: TaskTrigger,
-    payload: Option<&'a TaskPayloadView>,
+    payload: Option<&'a TaskStateChangedPayload>,
 ) -> TaskTransitionRequest<'a> {
     TaskTransitionRequest {
         from,
@@ -134,7 +174,7 @@ fn every_task_triple_matches_transitions_json() {
                     {
                         listed = false;
                     }
-                    let (payload, facts) = permissive_for(*from, to);
+                    let (payload, facts) = permissive_for(*from, to, trigger);
                     let req = task_req(*from, to, actor, trigger, payload.as_ref());
                     let got = check_task_transition(table, &req, &facts);
                     assert_eq!(
@@ -156,13 +196,18 @@ fn every_task_triple_matches_transitions_json() {
     );
 }
 
-fn session_permissive(from: Option<SessionState>) -> (Option<SessionPayloadView>, SessionFacts) {
+fn session_permissive(
+    from: Option<SessionState>,
+    to: SessionState,
+    trigger: SessionTrigger,
+) -> (Option<SessionStateChangedPayload>, SessionFacts) {
     let both = LaunchCapabilities {
         load_session: true,
         resume_session: true,
     };
-    let payload = from.map(|_| SessionPayloadView {
+    let payload = from.map(|f| SessionStateChangedPayload {
         approval_id: Some(apr(1)),
+        ..session_payload(f, to, trigger)
     });
     let facts = SessionFacts {
         snapshot_for_this_launch: Some(both),
@@ -191,7 +236,7 @@ fn every_session_triple_matches_transitions_json() {
                             && r.actors.contains(&actor)
                             && r.triggers.iter().any(|t| t == trigger.as_str())
                     });
-                    let (payload, facts) = session_permissive(*from);
+                    let (payload, facts) = session_permissive(*from, to, trigger);
                     let req = SessionTransitionRequest {
                         from: *from,
                         to,
@@ -225,7 +270,7 @@ fn creation_is_only_the_creation_rule() {
     let table = try_table().unwrap();
     // `from: None` to anything but `queued` / `starting` is illegal, and so is `queued` with
     // another actor or trigger.
-    let (payload, facts) = permissive_for(None, TaskState::Running);
+    let (payload, facts) = permissive_for(None, TaskState::Running, TaskTrigger::TaskCreated);
     let req = task_req(
         None,
         TaskState::Running,
@@ -247,7 +292,7 @@ fn terminal_states_have_no_exit() {
         for &to in TaskState::ALL {
             for &actor in ActorKind::ALL {
                 for &trigger in TaskTrigger::ALL {
-                    let (payload, facts) = permissive_for(Some(*from), to);
+                    let (payload, facts) = permissive_for(Some(*from), to, trigger);
                     let req = task_req(Some(*from), to, actor, trigger, payload.as_ref());
                     assert!(
                         matches!(
@@ -274,9 +319,9 @@ mod transitions_conditions {
         to: TaskState,
         actor: ActorKind,
         trigger: TaskTrigger,
-        tweak: impl FnOnce(&mut TaskPayloadView, &mut TaskFacts),
+        tweak: impl FnOnce(&mut TaskStateChangedPayload, &mut TaskFacts),
     ) -> TaskResult {
-        let (payload, mut facts) = permissive_for(Some(from), to);
+        let (payload, mut facts) = permissive_for(Some(from), to, trigger);
         let mut payload = payload.unwrap();
         tweak(&mut payload, &mut facts);
         let req = task_req(Some(from), to, actor, trigger, Some(&payload));
@@ -667,7 +712,7 @@ mod transitions_conditions {
         launch_method: Option<LaunchMethod>,
         tweak: impl FnOnce(&mut SessionFacts),
     ) -> Result<String, TransitionError> {
-        let (payload, mut facts) = session_permissive(Some(from));
+        let (payload, mut facts) = session_permissive(Some(from), to, trigger);
         tweak(&mut facts);
         let req = SessionTransitionRequest {
             from: Some(from),
@@ -823,6 +868,191 @@ mod transitions_conditions {
     }
 }
 
+mod transitions_payload {
+    use super::*;
+    use agentdock_core::payload::common::{CapabilityFeatures, Interruption};
+
+    fn task_check(
+        req: &TaskTransitionRequest<'_>,
+        facts: &TaskFacts,
+    ) -> Result<String, TransitionError> {
+        check_task_transition(try_table().unwrap(), req, facts).map(|r| r.id.clone())
+    }
+
+    /// T13 (`running -> verifying`) has no condition, so only the payload layer can stop it.
+    #[test]
+    fn non_creation_transition_without_payload_is_rejected() {
+        let req = task_req(
+            Some(TaskState::Running),
+            TaskState::Verifying,
+            ActorKind::Orchestrator,
+            TaskTrigger::ImplementationDone,
+            None,
+        );
+        assert_eq!(
+            task_check(&req, &TaskFacts::default()),
+            Err(TransitionError::MissingPayload("task"))
+        );
+        let req = SessionTransitionRequest {
+            from: Some(SessionState::Active),
+            to: SessionState::Idle,
+            actor: ActorKind::Adapter,
+            trigger: SessionTrigger::TurnEnded,
+            payload: None,
+            launch_method: None,
+        };
+        assert_eq!(
+            check_session_transition(try_table().unwrap(), &req, &SessionFacts::default())
+                .map(|r| r.id.clone()),
+            Err(TransitionError::MissingPayload("session"))
+        );
+    }
+
+    #[test]
+    fn creation_must_not_carry_a_state_changed_payload() {
+        let p = task_payload(
+            TaskState::Queued,
+            TaskState::Queued,
+            TaskTrigger::TaskCreated,
+        );
+        let req = task_req(
+            None,
+            TaskState::Queued,
+            ActorKind::User,
+            TaskTrigger::TaskCreated,
+            Some(&p),
+        );
+        assert_eq!(
+            task_check(&req, &TaskFacts::default()),
+            Err(TransitionError::PayloadMismatch { field: "from" })
+        );
+        let ok = task_req(
+            None,
+            TaskState::Queued,
+            ActorKind::User,
+            TaskTrigger::TaskCreated,
+            None,
+        );
+        assert_eq!(task_check(&ok, &TaskFacts::default()).unwrap(), "T01");
+    }
+
+    #[test]
+    fn payload_from_to_trigger_must_match_the_request() {
+        let (from, to, trigger) = (
+            TaskState::Running,
+            TaskState::Verifying,
+            TaskTrigger::ImplementationDone,
+        );
+        let check = |p: &TaskStateChangedPayload| {
+            let req = task_req(Some(from), to, ActorKind::Orchestrator, trigger, Some(p));
+            task_check(&req, &TaskFacts::default())
+        };
+        assert_eq!(check(&task_payload(from, to, trigger)).unwrap(), "T13");
+        for (p, field) in [
+            (task_payload(TaskState::Review, to, trigger), "from"),
+            (task_payload(from, TaskState::Review, trigger), "to"),
+            (task_payload(from, to, TaskTrigger::UserCancel), "trigger"),
+        ] {
+            assert_eq!(check(&p), Err(TransitionError::PayloadMismatch { field }));
+        }
+    }
+
+    #[test]
+    fn session_payload_must_match_the_request() {
+        let (from, to, trigger) = (
+            SessionState::Active,
+            SessionState::Idle,
+            SessionTrigger::TurnEnded,
+        );
+        let check = |p: &SessionStateChangedPayload, lm: Option<LaunchMethod>| {
+            let req = SessionTransitionRequest {
+                from: Some(from),
+                to,
+                actor: ActorKind::Adapter,
+                trigger,
+                payload: Some(p),
+                launch_method: lm,
+            };
+            check_session_transition(try_table().unwrap(), &req, &SessionFacts::default())
+                .map(|r| r.id.clone())
+        };
+        assert_eq!(
+            check(&session_payload(from, to, trigger), None).unwrap(),
+            "S09"
+        );
+        for (p, field) in [
+            (session_payload(SessionState::Idle, to, trigger), "from"),
+            (session_payload(from, SessionState::Closed, trigger), "to"),
+            (session_payload(from, to, SessionTrigger::Launch), "trigger"),
+        ] {
+            assert_eq!(
+                check(&p, None),
+                Err(TransitionError::PayloadMismatch { field })
+            );
+        }
+        let mut p = session_payload(from, to, trigger);
+        p.launch_method = Some(LaunchMethod::Load);
+        assert_eq!(
+            check(&p, Some(LaunchMethod::Resume)),
+            Err(TransitionError::PayloadMismatch {
+                field: "launch_method"
+            })
+        );
+        assert!(check(&p, Some(LaunchMethod::Load)).is_ok());
+    }
+
+    #[test]
+    fn facts_convert_from_payload_types() {
+        let interruption: Interruption = serde_json::from_value(serde_json::json!({
+            "reason": "quota_exhausted",
+            "phase": "review",
+            "auto_resume_armed": true,
+            "retry_hint": {"source": "provider_reported", "not_before": "2026-11-28T13:00:00.000Z"}
+        }))
+        .unwrap();
+        assert_eq!(
+            InterruptionFacts::from(&interruption),
+            InterruptionFacts {
+                phase: ResumePhase::Review,
+                auto_resume_armed: true,
+                not_before: Some(ts("2026-11-28T13:00:00.000Z")),
+            }
+        );
+        let no_hint: Interruption = serde_json::from_value(serde_json::json!({
+            "reason": "host_crashed", "phase": "pr", "auto_resume_armed": false
+        }))
+        .unwrap();
+        assert_eq!(InterruptionFacts::from(&no_hint).not_before, None);
+
+        let mut features = serde_json::json!({});
+        for k in [
+            "load_session",
+            "resume_session",
+            "close_session",
+            "list_sessions",
+            "delete_session",
+            "additional_directories",
+            "system_prompt",
+            "prompt_image",
+            "prompt_audio",
+            "prompt_embedded_context",
+            "mcp_http",
+            "mcp_sse",
+            "logout",
+        ] {
+            features[k] = serde_json::json!(k == "resume_session");
+        }
+        let features: CapabilityFeatures = serde_json::from_value(features).unwrap();
+        assert_eq!(
+            LaunchCapabilities::from(&features),
+            LaunchCapabilities {
+                load_session: false,
+                resume_session: true
+            }
+        );
+    }
+}
+
 mod transitions_property {
     use super::*;
     use proptest::prelude::*;
@@ -951,7 +1181,7 @@ mod transitions_property {
                 });
             }
 
-            let mut payload = TaskPayloadView::default();
+            let mut payload = task_payload(self.state, to, trigger);
             if self.state == TaskState::Preparing {
                 payload.resume_phase = phase_of(to);
             }

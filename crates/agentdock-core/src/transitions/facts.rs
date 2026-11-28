@@ -4,9 +4,10 @@
 //! structs and say so in the PR.
 //!
 //! `InterruptionFacts` and `LaunchCapabilities` are the slices of the P2-2 `Interruption` and
-//! `CapabilityFeatures` payload types that the conditions read. They are deliberately local so
-//! this module does not depend on P2-2; the store converts when it builds the facts.
+//! `CapabilityFeatures` payload types that the conditions read; `From` converts from the payload
+//! types, so the store builds facts straight from the persisted events.
 
+use crate::payload::common::{CapabilityFeatures, Interruption};
 use crate::{ApprovalId, ApprovalReturnState, ResumePhase, Timestamp};
 
 /// What the guards need from the `Interruption` of the task's current interruption.
@@ -20,12 +21,31 @@ pub struct InterruptionFacts {
     pub not_before: Option<Timestamp>,
 }
 
+impl From<&Interruption> for InterruptionFacts {
+    fn from(i: &Interruption) -> Self {
+        InterruptionFacts {
+            phase: i.phase,
+            auto_resume_armed: i.auto_resume_armed,
+            not_before: i.retry_hint.as_ref().and_then(|h| h.not_before),
+        }
+    }
+}
+
 /// The two ACP session-restore methods a capability snapshot can advertise
 /// (`features.load_session`, `features.resume_session`). Absent means `false`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LaunchCapabilities {
     pub load_session: bool,
     pub resume_session: bool,
+}
+
+impl From<&CapabilityFeatures> for LaunchCapabilities {
+    fn from(f: &CapabilityFeatures) -> Self {
+        LaunchCapabilities {
+            load_session: f.load_session,
+            resume_session: f.resume_session,
+        }
+    }
 }
 
 /// Local or CI checks since the task last entered the phase (`verifying` or `ci`).

@@ -4,10 +4,10 @@
 //! never copied into Rust. The checks are pure: no I/O, no clock (time is `now`), and every fact
 //! comes from the store through [`TaskFacts`] / [`SessionFacts`].
 //!
-//! P2-2 deviation: the typed `TaskStateChangedPayload` / `SessionStateChangedPayload` are not
-//! merged yet, so requests carry [`TaskPayloadView`] / [`SessionPayloadView`], the few payload
-//! fields the conditions read. Once P2-2 lands, add `From<&TaskStateChangedPayload>` for them
-//! (or switch the request field type); the checks themselves do not change.
+//! Requests carry the typed `task.state_changed` / `session.state_changed` payloads from P2-2.
+//! The checks do not re-run the payload's schema rules (`PayloadRules::validate`): that is the
+//! decode layer's job. They do require that a transition other than creation carries a payload
+//! and that the payload agrees with the request (`from`, `to`, `trigger`, `launch_method`).
 
 pub mod conditions;
 pub mod facts;
@@ -21,9 +21,9 @@ use serde::Deserialize;
 pub use conditions::Condition;
 pub use facts::{ChecksSincePhase, InterruptionFacts, LaunchCapabilities, SessionFacts, TaskFacts};
 
+use crate::payload::{SessionStateChangedPayload, TaskStateChangedPayload};
 use crate::{
-    ActorKind, ApprovalId, ApprovalReturnState, LaunchMethod, ResumePhase, SessionState,
-    SessionTrigger, TaskState, TaskTrigger, Timestamp,
+    ActorKind, LaunchMethod, SessionState, SessionTrigger, TaskState, TaskTrigger, Timestamp,
 };
 
 const TRANSITIONS_JSON: &str = include_str!("../../../../docs/contracts/transitions.json");
@@ -195,28 +195,14 @@ pub fn try_table() -> Result<&'static TransitionTable, &'static TableError> {
     TABLE.get_or_init(|| parse_table(TRANSITIONS_JSON)).as_ref()
 }
 
-/// The `task.state_changed` payload fields the conditions read (see the module docs).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TaskPayloadView {
-    pub resume_phase: Option<ResumePhase>,
-    pub return_state: Option<ApprovalReturnState>,
-    pub approval_id: Option<ApprovalId>,
-}
-
-/// The `session.state_changed` payload fields the conditions read.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SessionPayloadView {
-    pub approval_id: Option<ApprovalId>,
-}
-
 pub struct TaskTransitionRequest<'a> {
     /// `None` for `task.created`.
     pub from: Option<TaskState>,
     pub to: TaskState,
     pub actor: ActorKind,
     pub trigger: TaskTrigger,
-    /// `None` only for `task.created`.
-    pub payload: Option<&'a TaskPayloadView>,
+    /// `None` only for `task.created`; required for every other transition.
+    pub payload: Option<&'a TaskStateChangedPayload>,
     pub now: Timestamp,
 }
 
@@ -226,13 +212,18 @@ pub struct SessionTransitionRequest<'a> {
     pub to: SessionState,
     pub actor: ActorKind,
     pub trigger: SessionTrigger,
-    pub payload: Option<&'a SessionPayloadView>,
+    /// `None` only for `session.created`; required for every other transition.
+    pub payload: Option<&'a SessionStateChangedPayload>,
     /// From the payload or `session.created`.
     pub launch_method: Option<LaunchMethod>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TransitionError {
+    #[error("{0} transition needs a state_changed payload")]
+    MissingPayload(&'static str),
+    #[error("payload {field} differs from the request")]
+    PayloadMismatch { field: &'static str },
     #[error("illegal transition {from:?} -> {to:?}")]
     Illegal { from: Option<String>, to: String },
     #[error("{rule}: actor {actor:?} not allowed")]
@@ -245,6 +236,55 @@ pub enum TransitionError {
         condition: Condition,
         detail: &'static str,
     },
+}
+
+fn mismatch(field: &'static str) -> TransitionError {
+    TransitionError::PayloadMismatch { field }
+}
+
+/// Creation carries no `state_changed` payload; every other transition must, and it must say the
+/// same `from`, `to` and `trigger` as the request.
+fn cross_check_task(req: &TaskTransitionRequest<'_>) -> Result<(), TransitionError> {
+    match (req.from, req.payload) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(mismatch("from")),
+        (Some(_), None) => Err(TransitionError::MissingPayload("task")),
+        (Some(from), Some(p)) => {
+            if p.from != from {
+                Err(mismatch("from"))
+            } else if p.to != req.to {
+                Err(mismatch("to"))
+            } else if p.trigger != req.trigger {
+                Err(mismatch("trigger"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+fn cross_check_session(req: &SessionTransitionRequest<'_>) -> Result<(), TransitionError> {
+    match (req.from, req.payload) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(mismatch("from")),
+        (Some(_), None) => Err(TransitionError::MissingPayload("session")),
+        (Some(from), Some(p)) => {
+            if p.from != from {
+                Err(mismatch("from"))
+            } else if p.to != req.to {
+                Err(mismatch("to"))
+            } else if p.trigger != req.trigger {
+                Err(mismatch("trigger"))
+            } else if p.launch_method.is_some()
+                && req.launch_method.is_some()
+                && p.launch_method != req.launch_method
+            {
+                Err(mismatch("launch_method"))
+            } else {
+                Ok(())
+            }
+        }
+    }
 }
 
 fn find_rule<'t>(
@@ -288,6 +328,7 @@ pub fn check_task_transition<'t>(
     req: &TaskTransitionRequest<'_>,
     facts: &TaskFacts,
 ) -> Result<&'t TransitionRule, TransitionError> {
+    cross_check_task(req)?;
     let rule = find_rule(
         &table.task,
         req.from.map(TaskState::as_str),
@@ -312,6 +353,7 @@ pub fn check_session_transition<'t>(
     req: &SessionTransitionRequest<'_>,
     facts: &SessionFacts,
 ) -> Result<&'t TransitionRule, TransitionError> {
+    cross_check_session(req)?;
     let rule = find_rule(
         &table.session,
         req.from.map(SessionState::as_str),
