@@ -5,6 +5,7 @@ pub mod canonical;
 pub mod enums;
 pub mod event;
 pub mod ids;
+pub mod payload;
 pub mod time;
 
 pub use crate::time::{Timestamp, TimestampError};
@@ -17,6 +18,7 @@ pub use ids::{
     AdapterId, ApprovalId, AuthorityId, CheckId, CheckpointId, EventId, GitSha, IdError,
     OperationId, ProjectId, SessionId, Sha256Hex, SummaryId, TaskId, TurnId, UsageId,
 };
+pub use payload::{decode_body, encode_body, BodyError, EventBody, PayloadRules};
 
 /// AgentDock contract schema version this build writes (ADR-0003: EventEnvelope.schema_version).
 pub const SCHEMA_VERSION: u32 = 1;
