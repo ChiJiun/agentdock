@@ -6,6 +6,7 @@ pub mod enums;
 pub mod event;
 pub mod ids;
 pub mod time;
+pub mod transitions;
 
 pub use crate::time::{Timestamp, TimestampError};
 pub use canonical::{

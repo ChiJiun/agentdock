@@ -217,6 +217,116 @@ contract_enum!(CheckState {
 });
 contract_enum!(CheckOrigin { Local, Ci });
 
+/// Adds `as_str`, the wire name (identical to the serde name; a unit test checks that).
+macro_rules! wire_names {
+    ($($name:ident { $($variant:ident => $wire:literal),+ $(,)? })+) => {$(
+        impl $name {
+            /// The `snake_case` wire name used in the contracts.
+            pub fn as_str(self) -> &'static str {
+                match self { $($name::$variant => $wire),+ }
+            }
+        }
+    )+};
+}
+
+wire_names! {
+    TaskState {
+        Queued => "queued",
+        Preparing => "preparing",
+        Running => "running",
+        AwaitingApproval => "awaiting_approval",
+        Verifying => "verifying",
+        Review => "review",
+        Pr => "pr",
+        Ci => "ci",
+        Completed => "completed",
+        Interrupted => "interrupted",
+        Failed => "failed",
+        Cancelled => "cancelled",
+    }
+    SessionState {
+        Starting => "starting",
+        Idle => "idle",
+        Active => "active",
+        AwaitingPermission => "awaiting_permission",
+        Suspended => "suspended",
+        Disconnected => "disconnected",
+        Closed => "closed",
+        Failed => "failed",
+    }
+    ActorKind {
+        User => "user",
+        Orchestrator => "orchestrator",
+        Policy => "policy",
+        Adapter => "adapter",
+        Integration => "integration",
+        Recovery => "recovery",
+    }
+    TaskTrigger {
+        TaskCreated => "task_created",
+        Scheduled => "scheduled",
+        UserCancel => "user_cancel",
+        SessionReady => "session_ready",
+        ResumePhaseRestored => "resume_phase_restored",
+        Interruption => "interruption",
+        PreparationFailed => "preparation_failed",
+        ApprovalRequested => "approval_requested",
+        ImplementationDone => "implementation_done",
+        UnrecoverableError => "unrecoverable_error",
+        ApprovalResolved => "approval_resolved",
+        ChecksFailed => "checks_failed",
+        ChecksPassed => "checks_passed",
+        RepairLimitReached => "repair_limit_reached",
+        ReviewBlockingFindings => "review_blocking_findings",
+        ReviewPassed => "review_passed",
+        AcceptedWithoutPr => "accepted_without_pr",
+        PrPublished => "pr_published",
+        OperationFailed => "operation_failed",
+        CiFailed => "ci_failed",
+        CiPassedAccepted => "ci_passed_accepted",
+        ResumeRequested => "resume_requested",
+        ScheduledResume => "scheduled_resume",
+        Abandoned => "abandoned",
+        RetryRequested => "retry_requested",
+    }
+    SessionTrigger {
+        Launch => "launch",
+        SessionReady => "session_ready",
+        LaunchFailed => "launch_failed",
+        AttachRejected => "attach_rejected",
+        ProcessExited => "process_exited",
+        PromptSubmitted => "prompt_submitted",
+        SessionClosed => "session_closed",
+        TaskInterrupted => "task_interrupted",
+        TurnEnded => "turn_ended",
+        PermissionRequested => "permission_requested",
+        PermissionResolved => "permission_resolved",
+        ProtocolError => "protocol_error",
+        ContinuePrompt => "continue_prompt",
+        Superseded => "superseded",
+        ReattachAttempt => "reattach_attempt",
+        Abandoned => "abandoned",
+        HostRecovery => "host_recovery",
+    }
+    ResumePhase {
+        Running => "running",
+        Verifying => "verifying",
+        Review => "review",
+        Pr => "pr",
+        Ci => "ci",
+    }
+    ApprovalReturnState {
+        Running => "running",
+        Pr => "pr",
+        Ci => "ci",
+    }
+    LaunchMethod {
+        New => "new",
+        Load => "load",
+        Resume => "resume",
+    }
+}
+
 impl TaskState {
     /// Terminal in the state-machine sense (ADR-0003 section 2): nothing leaves these states.
     /// `Failed` and `Interrupted` can still be retried or resumed, so they are not terminal.
@@ -550,6 +660,23 @@ mod tests {
         let mut sorted = ResumePhase::ALL.to_vec();
         sorted.sort();
         assert_eq!(sorted, ResumePhase::ALL);
+    }
+
+    #[test]
+    fn as_str_matches_serde_name() {
+        fn check<T: Serialize + Copy>(all: &[T], name: impl Fn(T) -> &'static str) {
+            for v in all {
+                assert_eq!(serde_json::to_value(v).unwrap(), name(*v));
+            }
+        }
+        check(TaskState::ALL, TaskState::as_str);
+        check(SessionState::ALL, SessionState::as_str);
+        check(ActorKind::ALL, ActorKind::as_str);
+        check(TaskTrigger::ALL, TaskTrigger::as_str);
+        check(SessionTrigger::ALL, SessionTrigger::as_str);
+        check(ResumePhase::ALL, ResumePhase::as_str);
+        check(ApprovalReturnState::ALL, ApprovalReturnState::as_str);
+        check(LaunchMethod::ALL, LaunchMethod::as_str);
     }
 
     #[test]
