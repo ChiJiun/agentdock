@@ -1,0 +1,29 @@
+[package]
+name = "agentdock-store"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+# Child process for the hard-kill tests (P2-4); not a product binary.
+name = "agentdock-store-append-loop"
+path = "src/bin/agentdock-store-append-loop.rs"
+test = false
+
+[dependencies]
+agentdock-core = { path = "../agentdock-core" }
+# `bundled` compiles the SQLite C sources (one SQLite version on every platform); `backup` gives
+# the online backup API used before migrations and for corrupt files.
+rusqlite = { version = "0.43.0", default-features = false, features = ["bundled", "backup"] }
+serde = "1.0.229"
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
