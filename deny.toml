@@ -26,6 +26,25 @@ allow = [
   "Zlib",
 ]
 
+# Per-crate exceptions, NOT a global MPL-2.0 allow. Owner approved on 2026-11-28 ("only open an
+# exception for these crates"). All of them are indirect dependencies of Tauri 2 (for example
+# tauri-utils -> dom_query -> cssparser, and dirs -> option-ext), are used unmodified from
+# crates.io, and AgentDock must not
+# modify their source files (MPL-2.0 is file-level copyleft). Any other crate that needs MPL-2.0
+# or another non-listed license is NOT covered: stop and ask the owner.
+exceptions = [
+  # Tauri 2 indirect dependency; do not modify its source files; owner approved 2026-11-28.
+  { allow = ["MPL-2.0"], crate = "cssparser" },
+  # Tauri 2 indirect dependency; do not modify its source files; owner approved 2026-11-28.
+  { allow = ["MPL-2.0"], crate = "cssparser-macros" },
+  # Tauri 2 indirect dependency; do not modify its source files; owner approved 2026-11-28.
+  { allow = ["MPL-2.0"], crate = "selectors" },
+  # Tauri 2 indirect dependency; do not modify its source files; owner approved 2026-11-28.
+  { allow = ["MPL-2.0"], crate = "dtoa-short" },
+  # Tauri 2 indirect dependency; do not modify its source files; owner approved 2026-11-28.
+  { allow = ["MPL-2.0"], crate = "option-ext" },
+]
+
 [licenses.private]
 ignore = true # workspace crates are publish = false / UNLICENSED
 

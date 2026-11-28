@@ -5,7 +5,7 @@
   "type": "module",
   "description": "AgentDock UI foundation – no agent runtime connected yet",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host 127.0.0.1 --strictPort",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
