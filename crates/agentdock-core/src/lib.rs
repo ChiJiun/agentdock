@@ -1,6 +1,23 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod canonical;
+pub mod enums;
+pub mod event;
+pub mod ids;
+pub mod time;
+
+pub use crate::time::{Timestamp, TimestampError};
+pub use canonical::{
+    acp_permission_fingerprint, canonical_json, canonical_sha256, idempotency_key, CanonicalError,
+};
+pub use enums::*;
+pub use event::{Actor, EnvelopeError, EventEnvelope, Redaction, Tombstone};
+pub use ids::{
+    AdapterId, ApprovalId, AuthorityId, CheckId, CheckpointId, EventId, GitSha, IdError,
+    OperationId, ProjectId, SessionId, Sha256Hex, SummaryId, TaskId, TurnId, UsageId,
+};
+
 /// AgentDock contract schema version this build writes (ADR-0003: EventEnvelope.schema_version).
 pub const SCHEMA_VERSION: u32 = 1;
 
