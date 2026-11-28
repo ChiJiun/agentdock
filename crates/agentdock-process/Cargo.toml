@@ -1,0 +1,36 @@
+[package]
+name = "agentdock-process"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ADR-0002 requires an exact pin for process-wrap (spike S2 route a).
+process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop", "process-group", "creation-flags"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["process", "io-util", "rt", "time", "sync"] }
+
+[target.'cfg(windows)'.dependencies]
+# Must equal the `windows` version process-wrap 10.0.1 uses (CreationFlags takes its type).
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+# `#[tokio::test]` only.
+tokio = { version = "1.54.1", features = ["process", "io-util", "rt", "time", "sync", "macros"] }
+
+[[bin]]
+name = "agentdock-test-spawn-tree"
+path = "src/bin/agentdock-test-spawn-tree.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "agentdock-test-supervisor-host"
+path = "src/bin/agentdock-test-supervisor-host.rs"
+test = false
+doc = false
