@@ -163,16 +163,18 @@ fn every_task_triple_matches_transitions_json() {
                             && r.actors.contains(&actor)
                             && r.triggers.iter().any(|t| t == trigger.as_str())
                     });
-                    // Table rows say who may resume (T44), but the orchestrator additionally
-                    // needs the `scheduled_resume` trigger (condition
-                    // orchestrator_only_if_auto_resume_armed_and_due), which the table's
-                    // actor x trigger cross product cannot express.
-                    if *from == Some(TaskState::Interrupted)
-                        && to == TaskState::Queued
-                        && actor == ActorKind::Orchestrator
-                        && trigger != TaskTrigger::ScheduledResume
-                    {
-                        listed = false;
+                    // T44: the condition orchestrator_only_if_auto_resume_armed_and_due pins the
+                    // trigger per actor (user: resume_requested, orchestrator: scheduled_resume),
+                    // which the table's actor x trigger cross product cannot express.
+                    if *from == Some(TaskState::Interrupted) && to == TaskState::Queued {
+                        let wanted = match actor {
+                            ActorKind::User => Some(TaskTrigger::ResumeRequested),
+                            ActorKind::Orchestrator => Some(TaskTrigger::ScheduledResume),
+                            _ => None,
+                        };
+                        if wanted.is_some_and(|w| w != trigger) {
+                            listed = false;
+                        }
                     }
                     let (payload, facts) = permissive_for(*from, to, trigger);
                     let req = task_req(*from, to, actor, trigger, payload.as_ref());
@@ -263,6 +265,58 @@ fn every_session_triple_matches_transitions_json() {
         25,
         "every session transition must be reachable"
     );
+}
+
+/// The JSON keys the loader knows. Unknown keys are not rejected (`deny_unknown_fields` would
+/// make every additive contract change fail the build, CONVENTIONS section 7), so this test
+/// flags a new key until somebody decides whether the loader must act on it.
+#[test]
+fn transitions_json_shape_is_known() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/contracts/transitions.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let allowed = [
+        "id",
+        "from",
+        "to",
+        "actors",
+        "triggers",
+        "durability",
+        "conditions",
+        "event",
+    ];
+    for graph in ["task", "session"] {
+        let g = &json[graph];
+        let rules = g["transitions"].as_array().unwrap();
+        for r in rules {
+            for key in r.as_object().unwrap().keys() {
+                assert!(allowed.contains(&key.as_str()), "{graph}: new key {key:?}");
+            }
+        }
+        let creation: Vec<_> = rules.iter().filter(|r| r["from"].is_null()).collect();
+        assert_eq!(creation.len(), 1, "{graph}: exactly one creation rule");
+        assert_eq!(g["initial"], creation[0]["to"], "{graph}: initial");
+        // Terminal states have no outgoing rule.
+        for t in g["terminal"].as_array().unwrap() {
+            assert!(
+                rules.iter().all(|r| r["from"] != *t),
+                "{graph}: terminal {t} has an exit"
+            );
+        }
+    }
+    let task_terminal: BTreeSet<&str> = json["task"]["terminal"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let code_terminal: BTreeSet<&str> = TaskState::ALL
+        .iter()
+        .filter(|s| s.is_terminal())
+        .map(|s| s.as_str())
+        .collect();
+    assert_eq!(task_terminal, code_terminal);
 }
 
 #[test]
@@ -392,6 +446,18 @@ mod transitions_conditions {
                     not_before: Some(ts("2026-11-28T12:01:00.000Z")),
                 });
             },
+        );
+        failed("T44", Condition::OrchestratorOnlyIfAutoResumeArmedAndDue, r);
+    }
+
+    #[test]
+    fn user_cannot_use_scheduled_resume() {
+        let r = run(
+            S::Interrupted,
+            S::Queued,
+            A::User,
+            T::ScheduledResume,
+            |_, _| {},
         );
         failed("T44", Condition::OrchestratorOnlyIfAutoResumeArmedAndDue, r);
     }
@@ -797,30 +863,50 @@ mod transitions_conditions {
     }
 
     #[test]
-    fn new_launch_needs_no_snapshot_but_resume_does() {
-        let new = session_run(
-            SessionState::Starting,
-            SessionState::Idle,
-            SessionTrigger::SessionReady,
-            ActorKind::Adapter,
-            Some(LaunchMethod::New),
-            |f| f.snapshot_for_this_launch = None,
-        );
-        assert_eq!(new.unwrap(), "S02");
-        let resume = session_run(
-            SessionState::Starting,
-            SessionState::Idle,
-            SessionTrigger::SessionReady,
-            ActorKind::Adapter,
-            Some(LaunchMethod::Resume),
-            |f| {
-                f.snapshot_for_this_launch = Some(LaunchCapabilities {
-                    load_session: true,
-                    resume_session: false,
-                })
-            },
-        );
-        assert!(resume.is_err());
+    fn every_launch_method_needs_a_snapshot_for_this_launch() {
+        for method in [LaunchMethod::New, LaunchMethod::Load, LaunchMethod::Resume] {
+            let r = session_run(
+                SessionState::Starting,
+                SessionState::Idle,
+                SessionTrigger::SessionReady,
+                ActorKind::Adapter,
+                Some(method),
+                |f| f.snapshot_for_this_launch = None,
+            );
+            assert!(
+                matches!(
+                    r,
+                    Err(TransitionError::Condition {
+                        condition: Condition::LaunchMethodAdvertised,
+                        ..
+                    })
+                ),
+                "{method:?}: {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_with_snapshot_checks_the_matching_feature() {
+        let run_with = |method, caps| {
+            session_run(
+                SessionState::Starting,
+                SessionState::Idle,
+                SessionTrigger::SessionReady,
+                ActorKind::Adapter,
+                Some(method),
+                |f| f.snapshot_for_this_launch = Some(caps),
+            )
+        };
+        let none = LaunchCapabilities::default();
+        let load_only = LaunchCapabilities {
+            load_session: true,
+            resume_session: false,
+        };
+        assert_eq!(run_with(LaunchMethod::New, none).unwrap(), "S02");
+        assert_eq!(run_with(LaunchMethod::Load, load_only).unwrap(), "S02");
+        assert!(run_with(LaunchMethod::Resume, load_only).is_err());
+        assert!(run_with(LaunchMethod::Load, none).is_err());
     }
 
     #[test]
@@ -1239,6 +1325,9 @@ mod transitions_property {
                 self.facts.current_interruption = None;
             }
             if from == TaskState::Failed && to == TaskState::Queued {
+                // Retry restarts from running (ADR-0003 section 2).
+                self.verified = false;
+                self.reviewed = false;
                 self.facts.recorded_resume_phase = None;
             }
             if from == TaskState::Preparing {

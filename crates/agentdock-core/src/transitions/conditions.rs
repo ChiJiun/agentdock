@@ -245,7 +245,10 @@ pub(crate) fn check_task_condition(
             "no push and PR in this round",
         ),
         Condition::OrchestratorOnlyIfAutoResumeArmedAndDue => match req.actor {
-            ActorKind::User => Ok(()),
+            ActorKind::User => ensure(
+                req.trigger == TaskTrigger::ResumeRequested,
+                "user resume must use resume_requested",
+            ),
             ActorKind::Orchestrator => {
                 ensure(
                     req.trigger == TaskTrigger::ScheduledResume,
@@ -302,9 +305,7 @@ pub(crate) fn check_session_condition(
         ),
         Condition::LaunchMethodAdvertised => {
             let method = req.launch_method.ok_or("launch_method is missing")?;
-            if method == LaunchMethod::New {
-                return Ok(());
-            }
+            // A snapshot for this launch is required for every method, `new` included.
             let caps = facts
                 .snapshot_for_this_launch
                 .as_ref()
