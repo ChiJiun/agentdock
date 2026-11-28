@@ -5,6 +5,7 @@ pub mod canonical;
 pub mod enums;
 pub mod event;
 pub mod ids;
+pub mod redact;
 pub mod time;
 
 pub use crate::time::{Timestamp, TimestampError};

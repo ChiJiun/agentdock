@@ -16,3 +16,4 @@ thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["parsing", "macros"] }
 ulid = "3.0.0"
 sha2 = "0.11.1"
+regex = "1.13.2"
